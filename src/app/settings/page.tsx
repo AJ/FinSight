@@ -385,8 +385,9 @@ export default function SettingsPage() {
             </Button>
 
             <p className="text-xs text-muted-foreground">
-              All data is stored locally in your browser. Clearing removes
-              transactions, budgets, and chat history.
+              All data is stored locally in your browser&apos;s localStorage (unencrypted).
+              Clearing removes transactions, budgets, and chat history.
+              For your privacy, clear data before using on shared computers.
             </p>
           </CardContent>
         </Card>

@@ -25,7 +25,7 @@ import {
 } from "lucide-react";
 
 // Map icon names to Lucide components
-const iconMap: Record<string, LucideIcon> = {
+export const iconMap: Record<string, LucideIcon> = {
   ShoppingCart,
   Utensils,
   Car,

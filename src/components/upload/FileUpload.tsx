@@ -15,11 +15,27 @@ interface FileUploadProps {
 const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50 MB
 const VALID_EXTENSIONS = ['.csv', '.pdf', '.xls', '.xlsx'];
 
+// MIME type validation to prevent extension spoofing
+const ALLOWED_MIME_TYPES: Record<string, string[]> = {
+  '.csv': ['text/csv', 'application/vnd.ms-excel', 'text/plain'],
+  '.pdf': ['application/pdf'],
+  '.xls': ['application/vnd.ms-excel', 'application/msexcel'],
+  '.xlsx': ['application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'],
+};
+
 function validateAndSelectFile(file: File, onFileSelect: (file: File) => void): boolean {
   const fileExtension = file.name.toLowerCase().substring(file.name.lastIndexOf('.'));
 
   if (!VALID_EXTENSIONS.includes(fileExtension)) {
     alert('Please upload a valid file (CSV, PDF, XLS, or XLSX)');
+    return false;
+  }
+
+  // Validate MIME type to prevent extension spoofing
+  const allowedMimes = ALLOWED_MIME_TYPES[fileExtension];
+  // Some browsers may return empty string for type, so we allow that
+  if (file.type && allowedMimes && !allowedMimes.includes(file.type)) {
+    alert('File content does not match its extension. Please upload a valid file.');
     return false;
   }
 

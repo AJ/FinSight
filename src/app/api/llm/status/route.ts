@@ -2,10 +2,21 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getServerClient } from '@/lib/llm/index';
 import { LLMProvider } from '@/lib/llm/types';
 import { validateOllamaUrl } from '@/lib/store/settingsStore';
+import { checkRateLimit, getClientIdentifier, LLM_RATE_LIMIT } from '@/lib/middleware/rateLimit';
 
 export const dynamic = 'force-dynamic';
 
 export async function GET(request: NextRequest) {
+  // Rate limiting
+  const clientId = getClientIdentifier(request);
+  const rateLimit = checkRateLimit(clientId, LLM_RATE_LIMIT);
+  if (!rateLimit.success) {
+    return NextResponse.json(
+      { connected: false, error: 'Too many requests', models: [], selectedModel: null },
+      { status: 429 }
+    );
+  }
+
   const urlParam =
     request.nextUrl.searchParams.get('url') || 'http://localhost:11434';
   const provider = (request.nextUrl.searchParams.get('provider') || 'ollama') as LLMProvider;

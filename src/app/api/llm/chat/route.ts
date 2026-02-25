@@ -1,8 +1,20 @@
 import { getServerClient } from '@/lib/llm/index';
 import { LLMProvider } from '@/lib/llm/types';
 import { validateOllamaUrl } from '@/lib/store/settingsStore';
+import { checkRateLimit, getClientIdentifier, LLM_RATE_LIMIT } from '@/lib/middleware/rateLimit';
+import { debugError } from '@/lib/utils/debug';
 
 export async function POST(request: Request) {
+  // Rate limiting
+  const clientId = getClientIdentifier(request);
+  const rateLimit = checkRateLimit(clientId, LLM_RATE_LIMIT);
+  if (!rateLimit.success) {
+    return new Response(
+      JSON.stringify({ error: 'Too many requests. Please try again later.' }),
+      { status: 429, headers: { 'Content-Type': 'application/json' } }
+    );
+  }
+
   try {
     const { message, context, history, model, ollamaUrl, provider } = await request.json();
     const urlParam = (ollamaUrl as string) || 'http://localhost:11434';
@@ -112,7 +124,7 @@ Guidelines:
       },
     });
   } catch (error) {
-    console.error('[LLM Chat]', error);
+    debugError('[LLM Chat]', error);
     return new Response(
       JSON.stringify({
         error: error instanceof Error ? error.message : 'Chat failed',

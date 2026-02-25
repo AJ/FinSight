@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getServerClient } from "@/lib/llm/index";
 import { LLMProvider } from "@/lib/llm/types";
+import { validateOllamaUrl } from "@/lib/store/settingsStore";
+import { checkRateLimit, getClientIdentifier, STRICT_RATE_LIMIT } from "@/lib/middleware/rateLimit";
+import { debugLog, debugSensitive, debugError } from "@/lib/utils/debug";
 import {
   buildCategorizationPrompt,
   parseCategorizationResponse,
@@ -25,14 +28,30 @@ interface CategorizationResult {
 export async function POST(request: NextRequest) {
   const startTime = Date.now();
 
+  // Rate limiting
+  const clientId = getClientIdentifier(request);
+  const rateLimit = checkRateLimit(clientId, STRICT_RATE_LIMIT);
+  if (!rateLimit.success) {
+    return NextResponse.json(
+      { error: "Too many requests. Please try again later." },
+      {
+        status: 429,
+        headers: {
+          "X-RateLimit-Limit": String(rateLimit.limit),
+          "X-RateLimit-Remaining": String(rateLimit.remaining),
+          "X-RateLimit-Reset": String(rateLimit.resetTime),
+        }
+      }
+    );
+  }
+
   try {
     const { transactions, provider, baseUrl, model } = await request.json();
 
-    console.log(`[Categorize] Request received:`, {
+    debugLog(`[Categorize] Request received:`, {
       transactionCount: transactions?.length || 0,
       provider,
       model,
-      baseUrl,
     });
 
     if (!Array.isArray(transactions) || transactions.length === 0) {
@@ -43,7 +62,17 @@ export async function POST(request: NextRequest) {
     }
 
     const llmProvider = (provider as LLMProvider) || "ollama";
-    const llmUrl = (baseUrl as string) || "http://localhost:11434";
+    const urlParam = (baseUrl as string) || "http://localhost:11434";
+
+    // Validate URL to prevent SSRF
+    const validation = validateOllamaUrl(urlParam);
+    if (!validation.valid) {
+      return NextResponse.json(
+        { error: validation.error || "Invalid URL" },
+        { status: 400 }
+      );
+    }
+    const llmUrl = validation.sanitized;
 
     const client = getServerClient(llmProvider);
 
@@ -52,10 +81,10 @@ export async function POST(request: NextRequest) {
     if (!selectedModel) {
       const models = await client.listModels(llmUrl);
       selectedModel = models[0];
-      console.log(`[Categorize] Auto-selected model: ${selectedModel}`);
+      debugLog(`[Categorize] Auto-selected model: ${selectedModel}`);
     }
     if (!selectedModel) {
-      console.error(`[Categorize] No model available at ${llmUrl}`);
+      debugError(`[Categorize] No model available`);
       return NextResponse.json(
         { error: "No AI model available" },
         { status: 500 }
@@ -70,36 +99,25 @@ export async function POST(request: NextRequest) {
       batches.push(transactions.slice(i, i + BATCH_SIZE));
     }
 
-    console.log(`[Categorize] Processing ${transactions.length} transactions in ${batches.length} batch(es)`);
+    debugLog(`[Categorize] Processing ${transactions.length} transactions in ${batches.length} batch(es)`);
 
     for (let i = 0; i < batches.length; i++) {
       const batch = batches[i];
       const batchStart = Date.now();
-      console.log(`[Categorize] Batch ${i + 1}/${batches.length}: ${batch.length} transactions`);
+      debugLog(`[Categorize] Batch ${i + 1}/${batches.length}: ${batch.length} transactions`);
 
       const prompt = buildCategorizationPrompt(batch);
-      console.log(`[Categorize] Batch ${i + 1} Prompt (${prompt.length} chars):`);
-      console.log("---PROMPT START---");
-      console.log(prompt);
-      console.log("---PROMPT END---");
+      debugSensitive(`Categorize Batch ${i + 1} Prompt`, prompt);
 
       try {
-        // Use model's default temperature
         const response = await client.generate(llmUrl, selectedModel, prompt);
         const batchDuration = Date.now() - batchStart;
 
-        console.log(`[Categorize] Batch ${i + 1} Response (${batchDuration}ms, ${response.length} chars):`);
-        console.log("---RESPONSE START---");
-        console.log(response);
-        console.log("---RESPONSE END---");
+        debugLog(`[Categorize] Batch ${i + 1} completed in ${batchDuration}ms`);
+        debugSensitive(`Categorize Batch ${i + 1} Response`, response);
 
         const batchResults = parseCategorizationResponse(response);
-        console.log(`[Categorize] Batch ${i + 1} parsed ${batchResults.length} results`);
-
-        // Log any parsing issues
-        if (batchResults.length !== batch.length) {
-          console.warn(`[Categorize] Batch ${i + 1} mismatch: expected ${batch.length}, got ${batchResults.length}`);
-        }
+        debugLog(`[Categorize] Batch ${i + 1} parsed ${batchResults.length} results`);
 
         // Match results to transactions
         for (const txn of batch) {
@@ -109,7 +127,7 @@ export async function POST(request: NextRequest) {
           } else {
             // Fallback
             const fallbackCat = categorizeByKeywords(txn as TransactionInput);
-            console.log(`[Categorize] Fallback for ${txn.id}: ${fallbackCat}`);
+            debugLog(`[Categorize] Fallback for ${txn.id}: ${fallbackCat}`);
             results.push({
               id: txn.id,
               category: fallbackCat,
@@ -118,7 +136,7 @@ export async function POST(request: NextRequest) {
           }
         }
       } catch (err) {
-        console.error(`[Categorize] Batch ${i + 1} failed:`, err);
+        debugError(`[Categorize] Batch ${i + 1} failed:`, err);
         // Fallback for entire batch
         for (const txn of batch) {
           results.push({
@@ -131,18 +149,19 @@ export async function POST(request: NextRequest) {
     }
 
     const totalDuration = Date.now() - startTime;
-    console.log(`[Categorize] Completed: ${results.length} results in ${totalDuration}ms`);
+    debugLog(`[Categorize] Completed: ${results.length} results in ${totalDuration}ms`);
 
-    // Log summary by category
-    const categoryCounts: Record<string, number> = {};
-    for (const r of results) {
-      categoryCounts[r.category] = (categoryCounts[r.category] || 0) + 1;
-    }
-    console.log(`[Categorize] Category breakdown:`, categoryCounts);
-
-    return NextResponse.json({ results });
+    return NextResponse.json(
+      { results },
+      {
+        headers: {
+          "X-RateLimit-Limit": String(rateLimit.limit),
+          "X-RateLimit-Remaining": String(rateLimit.remaining),
+        }
+      }
+    );
   } catch (error) {
-    console.error("[Categorize] Error:", error);
+    debugError("[Categorize] Error:", error);
     return NextResponse.json(
       { error: error instanceof Error ? error.message : "Categorization failed" },
       { status: 500 }

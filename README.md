@@ -292,6 +292,21 @@ http://<machine-ip>:1234
 2. Go to **Settings → Developer**
 3. Enable **CORS** toggle
 
+### Debug Logging
+
+By default, the app only logs debug information in development mode. To enable verbose logging (including LLM prompts and responses) in production:
+
+```bash
+DEBUG_LOGGING=true npm run dev
+```
+
+This is useful for:
+- Debugging LLM parsing issues
+- Inspecting prompts sent to the model
+- Troubleshooting connection problems
+
+**Warning:** Debug logging may expose sensitive financial data in logs. Only enable in trusted environments.
+
 ---
 
 ## Tech Stack
@@ -310,6 +325,9 @@ http://<machine-ip>:1234
 
 **Q: Does my data leave my computer?**
 No. PDF parsing happens in your browser. The LLM runs on your machine via Ollama or LM Studio. Nothing is sent to any cloud service.
+
+**Q: How is my data stored?**
+All data is stored locally in your browser's localStorage (unencrypted). This data never leaves your machine. On shared computers, use the "Clear All Data" button in Settings before leaving.
 
 **Q: Do I need an internet connection?**
 Only to install dependencies and download models. After that, everything works offline.

@@ -1,5 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getServerClient } from '@/lib/llm/index';
+import { validateOllamaUrl } from '@/lib/store/settingsStore';
+import { checkRateLimit, getClientIdentifier, STRICT_RATE_LIMIT } from '@/lib/middleware/rateLimit';
+import { debugLog, debugSensitive, debugError } from '@/lib/utils/debug';
 import { TransactionAnalytics } from '@/lib/insights/types';
 import { Currency } from '@/types';
 
@@ -13,17 +16,32 @@ interface InsightResponse {
 }
 
 export async function POST(request: NextRequest) {
-  console.log('[Insights API] ========== REQUEST RECEIVED ==========');
+  // Rate limiting
+  const clientId = getClientIdentifier(request);
+  const rateLimit = checkRateLimit(clientId, STRICT_RATE_LIMIT);
+  if (!rateLimit.success) {
+    return NextResponse.json(
+      { error: 'Too many requests. Please try again later.' },
+      {
+        status: 429,
+        headers: {
+          'X-RateLimit-Limit': String(rateLimit.limit),
+          'X-RateLimit-Remaining': String(rateLimit.remaining),
+          'X-RateLimit-Reset': String(rateLimit.resetTime),
+        },
+      }
+    );
+  }
 
   try {
     const body = await request.json();
     const { analytics, provider, baseUrl, model, currency } = body;
 
-    console.log('[Insights API] Provider:', provider);
-    console.log('[Insights API] Model:', model);
-    console.log('[Insights API] Base URL:', baseUrl);
-    console.log('[Insights API] Currency:', currency);
-    console.log('[Insights API] Analytics:', JSON.stringify(analytics, null, 2));
+    debugLog('[Insights] Request received:', {
+      provider,
+      model,
+      transactionCount: analytics?.totalTransactions,
+    });
 
     if (!model) {
       return NextResponse.json(
@@ -32,42 +50,50 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // Validate URL to prevent SSRF
+    const defaultUrl = 'http://localhost:11434';
+    const urlParam = baseUrl || defaultUrl;
+    const validation = validateOllamaUrl(urlParam);
+    if (!validation.valid) {
+      return NextResponse.json(
+        { error: validation.error || 'Invalid URL' },
+        { status: 400 }
+      );
+    }
+    const safeUrl = validation.sanitized;
+
     // Build the prompt
     const prompt = buildPrompt(analytics, currency);
-
-    console.log('[Insights API] ========== PROMPT ==========');
-    console.log(prompt);
-    console.log('[Insights API] ==============================');
+    debugSensitive('Insights Prompt', prompt);
 
     // Get the server-side client
     const client = getServerClient(provider);
 
-    console.log('[Insights API] Calling LLM...');
+    debugLog('[Insights] Calling LLM...');
 
     // Generate insights
-    const response = await client.generate(baseUrl, model, prompt, {
+    const response = await client.generate(safeUrl, model, prompt, {
       temperature: 0.3,
     });
 
-    console.log('[Insights API] ========== LLM RESPONSE ==========');
-    console.log('[Insights API] Response length:', response.length);
-    console.log('[Insights API] Full response:');
-    console.log(response);
-    console.log('[Insights API] ====================================');
+    debugLog(`[Insights] Response received (${response.length} chars)`);
+    debugSensitive('Insights Response', response);
 
     // Parse the response
     const insights = parseInsightsJSON(response);
+    debugLog(`[Insights] Parsed ${insights.length} insights`);
 
-    console.log('[Insights API] Parsed insights count:', insights.length);
-    console.log('[Insights API] Parsed insights:', JSON.stringify(insights, null, 2));
-    console.log('[Insights API] ========== REQUEST COMPLETE ==========');
-
-    return NextResponse.json({ insights });
+    return NextResponse.json(
+      { insights },
+      {
+        headers: {
+          'X-RateLimit-Limit': String(rateLimit.limit),
+          'X-RateLimit-Remaining': String(rateLimit.remaining),
+        },
+      }
+    );
   } catch (error) {
-    console.error('[Insights API] ========== ERROR ==========');
-    console.error('[Insights API] Error:', error);
-    console.error('[Insights API] ====================================');
-
+    debugError('[Insights] Error:', error);
     return NextResponse.json(
       { error: error instanceof Error ? error.message : 'Failed to generate insights' },
       { status: 500 }
@@ -147,8 +173,7 @@ No markdown. Only JSON.`;
   const netBalance = income - expenses;
   const savingsRate = income > 0 ? ((netBalance / income) * 100).toFixed(1) : '0';
 
-  console.log('[Insights API] Latest month:', latestMonth);
-  console.log('[Insights API] Income:', income, 'Expenses:', expenses);
+  debugLog('[Insights] Latest month:', latestMonth, 'Income:', income, 'Expenses:', expenses);
 
   return `${systemPrompt}
 
@@ -213,7 +238,7 @@ function parseInsightsJSON(response: string): InsightResponse[] {
     }
   }
 
-  console.error('[Insights API] Failed to parse response');
+  debugError('[Insights] Failed to parse response');
   return [];
 }
 

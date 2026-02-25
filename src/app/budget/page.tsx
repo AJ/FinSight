@@ -16,6 +16,7 @@ import { formatCurrency } from '@/lib/currencyFormatter';
 import { format, addMonths, startOfMonth } from 'date-fns';
 import { v4 as uuidv4 } from 'uuid';
 import { Budget } from '@/types';
+import { getCategoryDisplay, iconMap } from '@/components/transactions/CategoryBadge';
 
 export default function BudgetPage() {
   const transactions = useTransactionStore((state) => state.transactions);
@@ -217,12 +218,13 @@ export default function BudgetPage() {
                 const projected = Math.round(forecasts[category.id] || 0);
                 const budgeted = budgetAllocations[category.id] || 0;
                 const maxBudget = totalIncome;
+                const IconComponent = iconMap[category.icon || ""] || getCategoryDisplay(category.id).icon;
 
                 return (
                   <div key={category.id} className="space-y-3">
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-2">
-                        <span className="text-2xl">{category.icon}</span>
+                        <IconComponent className="w-5 h-5" style={{ color: category.color }} />
                         <div>
                           <p className="font-medium">{category.name}</p>
                           <p className="text-xs text-muted-foreground">

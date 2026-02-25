@@ -2,7 +2,8 @@ import { NextResponse } from "next/server";
 import { getServerClient } from "@/lib/llm/index";
 import { LLMProvider } from "@/lib/llm/types";
 import { validateOllamaUrl } from "@/lib/store/settingsStore";
-import { debugLog, debugWarn } from "@/lib/utils/debug";
+import { checkRateLimit, getClientIdentifier, STRICT_RATE_LIMIT } from "@/lib/middleware/rateLimit";
+import { debugLog, debugWarn, debugError } from "@/lib/utils/debug";
 
 /* ============================================================
    LLM PARSE ENDPOINT
@@ -38,6 +39,16 @@ BANK STATEMENT TEXT:
 `;
 
 export async function POST(request: Request) {
+  // Rate limiting
+  const clientId = getClientIdentifier(request);
+  const rateLimit = checkRateLimit(clientId, STRICT_RATE_LIMIT);
+  if (!rateLimit.success) {
+    return NextResponse.json(
+      { error: "Too many requests. Please try again later." },
+      { status: 429 }
+    );
+  }
+
   try {
     const { text, model, ollamaUrl, provider } = await request.json();
     const urlParam = (ollamaUrl as string) || "http://localhost:11434";
@@ -98,7 +109,7 @@ export async function POST(request: Request) {
           temperature: 0.05, // Near-deterministic for parsing
         });
       } catch (err) {
-        console.error(`[LLM Parse] Chunk ${i + 1} failed:`, err);
+        debugError(`[LLM Parse] Chunk ${i + 1} failed:`, err);
         continue; // Skip failed chunk, try the rest
       }
 
@@ -153,7 +164,7 @@ export async function POST(request: Request) {
       model: selectedModel,
     });
   } catch (error) {
-    console.error("[LLM Parse]", error);
+    debugError("[LLM Parse]", error);
     return NextResponse.json(
       { error: error instanceof Error ? error.message : "LLM parsing failed" },
       { status: 500 },
