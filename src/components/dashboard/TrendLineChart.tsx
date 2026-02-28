@@ -95,11 +95,11 @@ export function TrendLineChart({ transactions }: TrendLineChartProps) {
         });
 
         const income = periodTransactions
-          .filter((t) => t.type === "income")
+          .filter((t) => t.category?.isIncome)
           .reduce((sum, t) => sum + Math.abs(t.amount), 0);
 
         const expenses = periodTransactions
-          .filter((t) => t.type === "expense")
+          .filter((t) => t.category?.isExpense)
           .reduce((sum, t) => sum + Math.abs(t.amount), 0);
 
         incomeByPeriod.push(income);
@@ -137,11 +137,11 @@ export function TrendLineChart({ transactions }: TrendLineChartProps) {
         });
 
         const income = monthTransactions
-          .filter((t) => t.type === "income")
+          .filter((t) => t.category?.isIncome)
           .reduce((sum, t) => sum + Math.abs(t.amount), 0);
 
         const expenses = monthTransactions
-          .filter((t) => t.type === "expense")
+          .filter((t) => t.category?.isExpense)
           .reduce((sum, t) => sum + Math.abs(t.amount), 0);
 
         incomeByPeriod.push(income);

@@ -96,7 +96,7 @@ export function groupTransactionsByMerchant(transactions: Transaction[]): Mercha
   const groups = new Map<string, MerchantGroup>();
 
   // Only consider expenses for recurring payments
-  const expenses = transactions.filter(t => t.type === 'expense');
+  const expenses = transactions.filter(t => t.isExpense);
 
   for (const txn of expenses) {
     const merchantName = txn.merchant || txn.description;
@@ -421,7 +421,7 @@ export function detectRecurringPayments(
     }
 
     // Get category from transactions
-    const category = groupTxns[0].category || 'uncategorized';
+    const category = groupTxns[0].category?.id || 'uncategorized';
 
     const recurringPayment: RecurringPayment = {
       id: uuidv4(),

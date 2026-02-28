@@ -1,4 +1,4 @@
-import { Transaction } from "@/types";
+import { Transaction, TransactionType, SourceType } from "@/types";
 
 /**
  * Dimensional Analysis Utilities
@@ -24,8 +24,8 @@ export interface GroupedSpending {
 }
 
 export interface AnalysisFilters {
-  sourceType?: "bank" | "credit_card";
-  type?: "income" | "expense" | "transfer";
+  sourceType?: SourceType;
+  type?: TransactionType;
   cardIssuer?: string;
   cardLastFour?: string;
   dateFrom?: Date;
@@ -60,13 +60,13 @@ const CHART_COLORS = [
 export function getGroupKey(txn: Transaction, dimension: GroupingDimension): string {
   switch (dimension) {
     case "category":
-      return txn.category || "uncategorized";
+      return txn.category?.id || "uncategorized";
 
     case "card":
-      if (txn.sourceType === "credit_card" && txn.cardIssuer) {
+      if (txn.sourceType === SourceType.CreditCard && txn.cardIssuer) {
         return `${txn.cardIssuer}-****${txn.cardLastFour}`;
       }
-      return "bank";
+      return SourceType.Bank;
 
     case "amountRange":
       const abs = Math.abs(txn.amount);
@@ -168,7 +168,7 @@ export function groupTransactions(
 
   // Only include expenses for spending analysis
   const expenses = filtered.filter(
-    (t) => t.type === "expense" || t.sourceType === "credit_card"
+    (t) => t.isExpense || t.sourceType === SourceType.CreditCard
   );
 
   const groups = new Map<string, { amount: number; count: number }>();

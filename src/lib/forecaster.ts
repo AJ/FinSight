@@ -11,8 +11,8 @@ export function forecastCategorySpending(
 
   const relevantTransactions = transactions.filter((t) => {
     return (
-      t.category === categoryId &&
-      t.type === 'expense' &&
+      t.category.id === categoryId &&
+      t.isExpense &&
       isWithinInterval(t.date, { start: startDate, end: now })
     );
   });
@@ -51,7 +51,7 @@ export function calculateAverageMonthlyIncome(
 
   const incomeTransactions = transactions.filter((t) => {
     return (
-      t.type === 'income' &&
+      t.isIncome &&
       isWithinInterval(t.date, { start: startDate, end: now })
     );
   });

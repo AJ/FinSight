@@ -126,7 +126,7 @@ export async function POST(request: NextRequest) {
             results.push(result);
           } else {
             // Fallback
-            const fallbackCat = categorizeByKeywords(txn as TransactionInput);
+            const fallbackCat = categorizeByKeywords(txn);
             debugLog(`[Categorize] Fallback for ${txn.id}: ${fallbackCat}`);
             results.push({
               id: txn.id,

@@ -302,7 +302,7 @@ export const useCreditCardStore = create<CreditCardStore>()(
           const categoryBreakdown: Record<string, number> = {};
 
           for (const txn of cardTxns) {
-            const cat = txn.category || 'uncategorized';
+            const cat = txn.category?.id || 'uncategorized';
             categoryBreakdown[cat] = (categoryBreakdown[cat] || 0) + Math.abs(txn.amount);
           }
 

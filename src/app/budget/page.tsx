@@ -31,9 +31,7 @@ export default function BudgetPage() {
 
   // Calculate forecasts
   const forecasts = useMemo(() => {
-    const expenseCategories = categories.filter(
-      (c) => c.type === 'expense' || c.type === 'both'
-    );
+    const expenseCategories = categories.filter((c) => c.isExpense);
     const categoryIds = expenseCategories.map((c) => c.id);
     return forecastAllCategories(transactions, categoryIds);
   }, [transactions, categories]);
@@ -110,9 +108,7 @@ export default function BudgetPage() {
     alert('Budget saved successfully!');
   };
 
-  const expenseCategories = categories.filter(
-    (c) => c.type === 'expense' || c.type === 'both'
-  );
+  const expenseCategories = categories.filter((c) => c.isExpense);
 
   return (
     <div className="flex-1 overflow-y-auto">

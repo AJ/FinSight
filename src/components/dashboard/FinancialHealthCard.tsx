@@ -59,20 +59,20 @@ export function FinancialHealthCard() {
 
     // Calculate income and expenses for recent month
     const recentIncome = recentTxns
-      .filter((t) => t.type === 'income')
+      .filter((t) => t.isIncome)
       .reduce((sum, t) => sum + t.amount, 0);
 
     const recentExpenses = recentTxns
-      .filter((t) => t.type === 'expense')
+      .filter((t) => t.isExpense)
       .reduce((sum, t) => sum + Math.abs(t.amount), 0);
 
     // Calculate income and expenses for previous month
     const prevIncome = prevTxns
-      .filter((t) => t.type === 'income')
+      .filter((t) => t.isIncome)
       .reduce((sum, t) => sum + t.amount, 0);
 
     const prevExpenses = prevTxns
-      .filter((t) => t.type === 'expense')
+      .filter((t) => t.isExpense)
       .reduce((sum, t) => sum + Math.abs(t.amount), 0);
 
     const recentSavings = recentIncome - recentExpenses;

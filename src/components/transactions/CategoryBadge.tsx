@@ -94,7 +94,7 @@ export function CategoryBadge({
           className="gap-1 font-normal text-amber-600 border-amber-300 bg-amber-50"
         >
           <AlertCircle className="w-3 h-3" />
-          review
+          Review
         </Badge>
       )}
 
@@ -103,7 +103,7 @@ export function CategoryBadge({
           variant="outline"
           className="gap-1 font-normal text-red-600 border-red-300 bg-red-50"
         >
-          low confidence
+          Low Confidence
         </Badge>
       )}
     </div>

@@ -1,4 +1,4 @@
-import { Transaction, ParsedStatement, Currency } from "@/types";
+import { ParsedStatement, Currency, TransactionType, Transaction, Category } from "@/types";
 import { v4 as uuidv4 } from "uuid";
 import { extractDateFromText } from "./dateParser";
 import { detectCurrencyFromText } from "./currencyDetector";
@@ -28,16 +28,17 @@ export function isPasswordError(error: unknown): boolean {
   // pdfjs-dist PasswordException has name 'PasswordException'
   if (err.name === "PasswordException") return true;
 
-  // Check for password-related message
-  if (
-    typeof err.message === "string" &&
-    err.message.toLowerCase().includes("password")
-  ) {
-    return true;
-  }
-
   // pdfjs-dist error codes: 1 = NEED_PASSWORD, 2 = INCORRECT_PASSWORD
   if (err.code === 1 || err.code === 2) return true;
+
+  // Check for specific pdfjs password-related messages only
+  if (typeof err.message === "string") {
+    const msg = err.message.toLowerCase();
+    // Only match actual password errors from pdfjs, not generic messages
+    if (msg.includes("no password given") || msg.includes("incorrect password")) {
+      return true;
+    }
+  }
 
   return false;
 }
@@ -158,6 +159,8 @@ function classifyHeaderItem(text: string): ColType | null {
 
 function parseAmount(s: string): number | null {
   let cleaned = s.replace(/[₹$€£¥₺₽₩₪₦₱₫৳฿\s]/g, "").trim();
+  // Remove trailing cr/cr. for numeric parsing (we detect it separately for type)
+  cleaned = cleaned.replace(/cr\.?$/i, "").trim();
   if (!cleaned || cleaned === "-" || cleaned === "--") return null;
 
   const isNeg =
@@ -189,6 +192,14 @@ function parseAmount(s: string): number | null {
   return isNeg ? -num : num;
 }
 
+/**
+ * Detect if amount string has "cr" suffix (indicates credit transaction).
+ * Returns true if "cr" or "cr." is found at the end of the string.
+ */
+function hasCreditSuffix(s: string): boolean {
+  return /\bcr\.?\s*$/i.test(s.trim());
+}
+
 function isNumericItem(text: string): boolean {
   const cleaned = text.replace(/[₹$€£¥₺₽₩₪₦₱₫৳฿\s,.()\-]/g, "");
   return /^\d+$/.test(cleaned) && cleaned.length > 0;
@@ -202,11 +213,18 @@ export async function parsePDF(
 ): Promise<PDFParseResult> {
   try {
     const pdfjsLib = await import("pdfjs-dist");
+
+    // DEBUG: Log pdfjs library info
+    console.log('[pdfParser] pdfjsLib version:', pdfjsLib.version);
+    console.log('[pdfParser] pdfjsLib.getDocument:', typeof pdfjsLib.getDocument);
+    console.log('[pdfParser] pdfjsLib keys:', Object.keys(pdfjsLib).slice(0, 20).join(', '));
+
     pdfjsLib.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.mjs";
 
     const arrayBuffer = await file.arrayBuffer();
 
     // Build document options with optional password
+    console.log('[pdfParser] Received password parameter:', password ? `"${password}" (${password.length} chars)` : '(undefined/empty)');
     const docOptions: { data: ArrayBuffer; password?: string } = {
       data: arrayBuffer,
     };
@@ -399,6 +417,7 @@ function columnBasedParse(lines: PdfLine[]): Transaction[] {
     debit: number | null;
     credit: number | null;
     amount: number | null;
+    amountIsCredit: boolean;
     balance: number | null;
     typeIndicator: string;
     lineText: string;
@@ -408,16 +427,16 @@ function columnBasedParse(lines: PdfLine[]): Transaction[] {
     if (!currentTxn) return;
 
     let finalAmount: number | null = null;
-    let type: "income" | "expense" = "expense";
+    let type: TransactionType = TransactionType.Debit;
 
     if (hasDebit && hasCredit) {
       // Separate debit/credit columns — most reliable
       if (currentTxn.debit !== null && currentTxn.debit > 0) {
-        finalAmount = -currentTxn.debit;
-        type = "expense";
+        finalAmount = currentTxn.debit;
+        type = TransactionType.Debit;
       } else if (currentTxn.credit !== null && currentTxn.credit > 0) {
         finalAmount = currentTxn.credit;
-        type = "income";
+        type = TransactionType.Credit;
       }
     } else if (hasAmount && currentTxn.amount !== null) {
       if (hasType) {
@@ -427,28 +446,32 @@ function columnBasedParse(lines: PdfLine[]): Transaction[] {
           ti.includes("debit") ||
           ti.includes("withdrawal")
         ) {
-          finalAmount = -Math.abs(currentTxn.amount);
-          type = "expense";
+          finalAmount = Math.abs(currentTxn.amount);
+          type = TransactionType.Debit;
         } else if (
           ti.includes("cr") ||
           ti.includes("credit") ||
           ti.includes("deposit")
         ) {
           finalAmount = Math.abs(currentTxn.amount);
-          type = "income";
+          type = TransactionType.Credit;
         } else {
-          finalAmount = currentTxn.amount;
-          type = currentTxn.amount >= 0 ? "income" : "expense";
+          finalAmount = Math.abs(currentTxn.amount);
+          type = currentTxn.amount >= 0 ? TransactionType.Credit : TransactionType.Debit;
         }
       } else {
-        // Single amount column, no type column — use sign
-        finalAmount = currentTxn.amount;
-        type = currentTxn.amount >= 0 ? "income" : "expense";
+        // Single amount column, no type column — check for "cr" suffix or fall back to sign
+        finalAmount = Math.abs(currentTxn.amount);
+        if (currentTxn.amountIsCredit) {
+          type = TransactionType.Credit;
+        } else {
+          type = currentTxn.amount >= 0 ? TransactionType.Credit : TransactionType.Debit;
+        }
       }
     } else if (hasDebit && currentTxn.debit !== null && currentTxn.debit > 0) {
       // Only debit column exists
-      finalAmount = -currentTxn.debit;
-      type = "expense";
+      finalAmount = currentTxn.debit;
+      type = TransactionType.Debit;
     } else if (
       hasCredit &&
       currentTxn.credit !== null &&
@@ -456,7 +479,7 @@ function columnBasedParse(lines: PdfLine[]): Transaction[] {
     ) {
       // Only credit column exists
       finalAmount = currentTxn.credit;
-      type = "income";
+      type = TransactionType.Credit;
     }
 
     if (finalAmount === null || finalAmount === 0) return;
@@ -465,20 +488,21 @@ function columnBasedParse(lines: PdfLine[]): Transaction[] {
       currentTxn.descParts.join(" ").replace(/\s+/g, " ").trim() ||
       "Transaction";
 
-    const key = `${currentTxn.date.toISOString().slice(0, 10)}|${Math.abs(finalAmount).toFixed(2)}|${description.substring(0, 30)}`;
+    const key = `${currentTxn.date.toISOString().slice(0, 10)}|${finalAmount.toFixed(2)}|${description.substring(0, 30)}`;
     if (seen.has(key)) return;
     seen.add(key);
 
-    transactions.push({
-      id: uuidv4(),
-      date: currentTxn.date,
+    transactions.push(new Transaction(
+      uuidv4(),
+      currentTxn.date,
       description,
-      amount: finalAmount,
-      category: "other",
+      finalAmount,
       type,
-      balance: currentTxn.balance ?? undefined,
-      originalText: currentTxn.lineText.substring(0, 200),
-    });
+      Category.fromId("other")!,
+      currentTxn.balance ?? undefined,
+      undefined, // merchant
+      currentTxn.lineText.substring(0, 200),
+    ));
   };
 
   // Process each line after the header
@@ -510,6 +534,7 @@ function columnBasedParse(lines: PdfLine[]): Transaction[] {
         debit: null,
         credit: null,
         amount: null,
+        amountIsCredit: false,
         balance: null,
         typeIndicator: "",
         lineText,
@@ -535,6 +560,7 @@ function columnBasedParse(lines: PdfLine[]): Transaction[] {
                 break;
               case "amount":
                 currentTxn.amount = amt;
+                currentTxn.amountIsCredit = hasCreditSuffix(item.text);
                 break;
               case "balance":
                 currentTxn.balance = amt;
@@ -580,6 +606,7 @@ function columnBasedParse(lines: PdfLine[]): Transaction[] {
                 break;
               case "amount":
                 currentTxn.amount = amt;
+                currentTxn.amountIsCredit = hasCreditSuffix(item.text);
                 break;
               case "balance":
                 currentTxn.balance = amt;
@@ -686,7 +713,7 @@ function textBasedParse(lines: PdfLine[]): Transaction[] {
 
         if (prevBalance !== null) {
           const diff = balance - prevBalance;
-          const type: "income" | "expense" = diff >= 0 ? "income" : "expense";
+          const type: TransactionType = diff >= 0 ? TransactionType.Credit : TransactionType.Debit;
           const txnAmount = Math.abs(diff);
 
           // Use matching non-balance amount if available
@@ -708,16 +735,17 @@ function textBasedParse(lines: PdfLine[]): Transaction[] {
           const key = `${entry.date.toISOString().slice(0, 10)}|${finalAmount.toFixed(2)}|${description.substring(0, 30)}`;
           if (!seen.has(key)) {
             seen.add(key);
-            transactions.push({
-              id: uuidv4(),
-              date: entry.date,
+            transactions.push(new Transaction(
+              uuidv4(),
+              entry.date,
               description,
-              amount: type === "expense" ? -finalAmount : finalAmount,
-              category: "other",
+              finalAmount,
               type,
+              Category.fromId("other")!,
               balance,
-              originalText: entry.text.substring(0, 200),
-            });
+              undefined, // merchant
+              entry.text.substring(0, 200),
+            ));
           }
         }
 
@@ -737,12 +765,14 @@ function textBasedParse(lines: PdfLine[]): Transaction[] {
     const debitPatterns =
       /\b(DEBIT|DR|DEBITED|WITHDRAW|WITHDRAWAL|PAID|PAYMENT|PURCHASE|SPENT|EXPENSE|SENT)\b/i;
 
-    const hasCredit = creditPatterns.test(entry.text);
+    // Check for "cr" suffix on amounts (e.g., "50.00 cr")
+    const hasCrSuffix = hasCreditSuffix(entry.text);
+    const hasCredit = hasCrSuffix || creditPatterns.test(entry.text);
     const hasDebit = debitPatterns.test(entry.text);
 
-    let type: "income" | "expense" = "expense";
-    if (hasCredit && !hasDebit) type = "income";
-    else if (hasDebit) type = "expense";
+    let type: TransactionType = TransactionType.Debit;
+    if (hasCredit && !hasDebit) type = TransactionType.Credit;
+    else if (hasDebit) type = TransactionType.Debit;
 
     // Select the transaction amount (not the balance)
     let amount: number;
@@ -769,16 +799,17 @@ function textBasedParse(lines: PdfLine[]): Transaction[] {
     if (seen.has(key)) continue;
     seen.add(key);
 
-    transactions.push({
-      id: uuidv4(),
-      date: entry.date,
+    transactions.push(new Transaction(
+      uuidv4(),
+      entry.date,
       description,
-      amount: type === "expense" ? -amount : amount,
-      category: "other",
+      amount,
       type,
+      Category.fromId("other")!,
       balance,
-      originalText: entry.text.substring(0, 200),
-    });
+      undefined, // merchant
+      entry.text.substring(0, 200),
+    ));
   }
 
   return transactions;
@@ -841,19 +872,37 @@ function validateWithBalance(transactions: Transaction[]): Transaction[] {
     const balanceDiff = curr.balance - prev.balance;
     if (Math.abs(balanceDiff) < 0.01) continue;
 
-    const expectedType: "income" | "expense" =
-      balanceDiff >= 0 ? "income" : "expense";
+    const expectedType: TransactionType =
+      balanceDiff >= 0 ? TransactionType.Credit : TransactionType.Debit;
 
     // Correct type if balance disagrees
     if (curr.type !== expectedType) {
-      result[i] = {
-        ...curr,
-        type: expectedType,
-        amount:
-          expectedType === "expense"
-            ? -Math.abs(curr.amount)
-            : Math.abs(curr.amount),
-      };
+      result[i] = new Transaction(
+        curr.id,
+        curr.date,
+        curr.description,
+        Math.abs(curr.amount),
+        expectedType,
+        curr.category,
+        curr.balance,
+        curr.merchant,
+        curr.originalText,
+        curr.budgetMonth,
+        curr.categoryConfidence,
+        curr.needsReview,
+        curr.categorizedBy,
+        curr.sourceType,
+        curr.statementId,
+        curr.cardIssuer,
+        curr.cardLastFour,
+        curr.cardHolder,
+        curr.currency,
+        curr.originalAmount,
+        curr.isAnomaly,
+        curr.anomalyTypes,
+        curr.anomalyDetails,
+        curr.anomalyDismissed,
+      );
       corrected++;
     }
 
@@ -864,10 +913,32 @@ function validateWithBalance(transactions: Transaction[]): Transaction[] {
       trueTxnAmount * 0.01 + 0.02
     ) {
       if (trueTxnAmount > 0.01) {
-        result[i] = {
-          ...result[i],
-          amount: result[i].type === "expense" ? -trueTxnAmount : trueTxnAmount,
-        };
+        result[i] = new Transaction(
+          result[i].id,
+          result[i].date,
+          result[i].description,
+          trueTxnAmount,
+          result[i].type,
+          result[i].category,
+          result[i].balance,
+          result[i].merchant,
+          result[i].originalText,
+          result[i].budgetMonth,
+          result[i].categoryConfidence,
+          result[i].needsReview,
+          result[i].categorizedBy,
+          result[i].sourceType,
+          result[i].statementId,
+          result[i].cardIssuer,
+          result[i].cardLastFour,
+          result[i].cardHolder,
+          result[i].currency,
+          result[i].originalAmount,
+          result[i].isAnomaly,
+          result[i].anomalyTypes,
+          result[i].anomalyDetails,
+          result[i].anomalyDismissed,
+        );
         corrected++;
       }
     }

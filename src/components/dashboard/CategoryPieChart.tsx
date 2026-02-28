@@ -4,7 +4,7 @@ import { useMemo } from 'react';
 import { Pie } from 'react-chartjs-2';
 import { Chart as ChartJS, ArcElement, Tooltip, Legend, TooltipItem } from 'chart.js';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Transaction, Category } from '@/types';
+import { Transaction, Category, CategoryType } from '@/types';
 import { useSettingsStore } from '@/lib/store/settingsStore';
 import { formatCurrency } from '@/lib/currencyFormatter';
 import { DEFAULT_CATEGORIES } from '@/lib/categorization/categories';
@@ -26,14 +26,15 @@ function getCategoryInfo(categoryId: string, userCategories: Category[]): Catego
   const defaultCat = DEFAULT_CATEGORIES.find((c) => c.id === categoryId);
   if (defaultCat) return defaultCat;
 
-  // Fallback
-  return {
-    id: categoryId,
-    name: categoryId.charAt(0).toUpperCase() + categoryId.slice(1),
-    color: '#6b7280',
-    keywords: [],
-    type: 'both',
-  };
+  // Fallback - create a proper Category instance
+  return new Category(
+    categoryId,
+    categoryId.charAt(0).toUpperCase() + categoryId.slice(1),
+    CategoryType.Excluded,
+    [],           // keywords
+    undefined,    // icon
+    '#6b7280',    // color
+  );
 }
 
 export function CategoryPieChart({ transactions, categories }: CategoryPieChartProps) {
@@ -46,7 +47,8 @@ export function CategoryPieChart({ transactions, categories }: CategoryPieChartP
     // This gives a complete picture of where money flows
     transactions.forEach((t) => {
       const amount = Math.abs(t.amount);
-      byCategory[t.category] = (byCategory[t.category] || 0) + amount;
+      const categoryId = t.category?.id || 'uncategorized';
+      byCategory[categoryId] = (byCategory[categoryId] || 0) + amount;
     });
 
     console.log('[CategoryPieChart] By category:', byCategory);

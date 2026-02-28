@@ -1,5 +1,5 @@
 import Papa from "papaparse";
-import { Transaction, ParsedStatement, Currency } from "@/types";
+import { Transaction, ParsedStatement, Currency, TransactionType, Category } from "@/types";
 import { v4 as uuidv4 } from "uuid";
 import { parseDate, detectDateOrder } from "./dateParser";
 import { detectCurrencyFromText } from "./currencyDetector";
@@ -295,17 +295,17 @@ function parseRow(
 
     // --- Amount ---
     let amount: number | null = null;
-    let type: "income" | "expense" = "expense";
+    let type: TransactionType = TransactionType.Debit;
 
     if (mapping.debitCol && mapping.creditCol) {
       const debit = cleanAmount(row[mapping.debitCol]);
       const credit = cleanAmount(row[mapping.creditCol]);
       if (debit !== null && debit !== 0) {
-        amount = -Math.abs(debit);
-        type = "expense";
+        amount = Math.abs(debit);
+        type = TransactionType.Debit;
       } else if (credit !== null && credit !== 0) {
         amount = Math.abs(credit);
-        type = "income";
+        type = TransactionType.Credit;
       } else {
         return null;
       }
@@ -321,8 +321,8 @@ function parseRow(
           rawType.includes("withdrawal") ||
           rawType.includes("expense")
         ) {
-          amount = -Math.abs(amount);
-          type = "expense";
+          amount = Math.abs(amount);
+          type = TransactionType.Debit;
         } else if (
           rawType.includes("credit") ||
           rawType.includes("cr") ||
@@ -330,23 +330,23 @@ function parseRow(
           rawType.includes("income")
         ) {
           amount = Math.abs(amount);
-          type = "income";
+          type = TransactionType.Credit;
         } else {
-          type = amount >= 0 ? "income" : "expense";
+          type = amount >= 0 ? TransactionType.Credit : TransactionType.Debit;
         }
       } else {
-        type = amount >= 0 ? "income" : "expense";
+        type = amount >= 0 ? TransactionType.Credit : TransactionType.Debit;
       }
     } else if (mapping.debitCol) {
       const debit = cleanAmount(row[mapping.debitCol]);
       if (debit === null || debit === 0) return null;
-      amount = -Math.abs(debit);
-      type = "expense";
+      amount = Math.abs(debit);
+      type = TransactionType.Debit;
     } else if (mapping.creditCol) {
       const credit = cleanAmount(row[mapping.creditCol]);
       if (credit === null || credit === 0) return null;
       amount = Math.abs(credit);
-      type = "income";
+      type = TransactionType.Credit;
     } else {
       return null;
     }
@@ -358,16 +358,17 @@ function parseRow(
       if (bal !== null) balance = bal;
     }
 
-    return {
-      id: uuidv4(),
+    return new Transaction(
+      uuidv4(),
       date,
       description,
       amount,
-      category: "other",
       type,
+      Category.fromId("other")!,
       balance,
-      originalText: JSON.stringify(row),
-    };
+      undefined, // merchant
+      JSON.stringify(row),
+    );
   } catch {
     return null;
   }

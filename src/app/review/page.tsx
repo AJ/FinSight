@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useMemo } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -22,7 +22,7 @@ import {
 } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
 import { ArrowLeft, CheckCircle, Edit2, Trash2, Download } from "lucide-react";
-import { Transaction } from "@/types";
+import { Transaction, TransactionType, Category } from "@/types";
 import { useTransactionStore } from "@/lib/store/transactionStore";
 import { useSettingsStore } from "@/lib/store/settingsStore";
 import { formatCurrency } from "@/lib/currencyFormatter";
@@ -38,11 +38,35 @@ function loadPendingTransactions(): Transaction[] {
   if (!stored) return [];
   try {
     const parsed = JSON.parse(stored);
-    // Convert date strings back to Date objects
-    return parsed.map((t: Transaction & { date: string }) => ({
-      ...t,
-      date: new Date(t.date),
-    }));
+    // Reconstruct Transaction instances from JSON
+    return parsed.map((t: { date: string; category: string; [key: string]: unknown }) => {
+      return new Transaction(
+        t.id as string,
+        new Date(t.date),
+        t.description as string,
+        t.amount as number,
+        t.type as TransactionType,
+        Category.fromId(t.category) ?? Category.fromId(Category.DEFAULT_ID)!,
+        t.balance as number | undefined,
+        t.merchant as string | undefined,
+        t.originalText as string | undefined,
+        t.budgetMonth as string | undefined,
+        t.categoryConfidence as number | undefined,
+        t.needsReview as boolean | undefined,
+        t.categorizedBy as undefined,
+        t.sourceType as undefined,
+        t.statementId as string | undefined,
+        t.cardIssuer as string | undefined,
+        t.cardLastFour as string | undefined,
+        t.cardHolder as string | undefined,
+        t.currency as string | undefined,
+        t.originalAmount as number | undefined,
+        t.isAnomaly as boolean | undefined,
+        t.anomalyTypes as undefined,
+        t.anomalyDetails as undefined,
+        t.anomalyDismissed as boolean | undefined,
+      );
+    });
   } catch {
     return [];
   }
@@ -50,64 +74,27 @@ function loadPendingTransactions(): Transaction[] {
 
 export default function ReviewPage() {
   const router = useRouter();
-  const [pendingTransactions, setPendingTransactions] = useState<Transaction[]>(loadPendingTransactions);
+  // null = not loaded yet, empty array = loaded but no transactions
+  // Use lazy initialization to read from sessionStorage once on mount
+  const [pendingTransactions, setPendingTransactions] = useState<Transaction[] | null>(() => loadPendingTransactions());
   const [editingId, setEditingId] = useState<string | null>(null);
   const addTransactions = useTransactionStore((state) => state.addTransactions);
-  const clearAll = useTransactionStore((state) => state.clearAll);
   const startBackgroundCategorization = useTransactionStore((state) => state.startBackgroundCategorization);
+  const runAnomalyDetection = useTransactionStore((state) => state.runAnomalyDetection);
   const currency = useSettingsStore((state) => state.currency);
 
-  // Track if we've checked for redirect (avoids flash)
-  const hasNoTransactions = useMemo(() => pendingTransactions.length === 0, [pendingTransactions.length]);
-
-  // Redirect if no transactions (navigation is a side effect, OK in useEffect)
+  // Redirect if no transactions after loading (navigation is a side effect, OK in useEffect)
   useEffect(() => {
-    if (hasNoTransactions) {
-      // Small delay to avoid flash on initial load
+    if (pendingTransactions !== null && pendingTransactions.length === 0) {
       const timer = setTimeout(() => {
         router.push("/");
       }, 100);
       return () => clearTimeout(timer);
     }
-  }, [hasNoTransactions, router]);
+  }, [pendingTransactions, router]);
 
-  const handleEditField = (
-    id: string,
-    field: keyof Transaction,
-    value: string | number | Date | undefined,
-  ) => {
-    setPendingTransactions((prev) =>
-      prev.map((t) => (t.id === id ? { ...t, [field]: value } : t)),
-    );
-  };
-
-  const handleDeleteTransaction = (id: string) => {
-    setPendingTransactions((prev) => prev.filter((t) => t.id !== id));
-  };
-
-  const handleConfirmImport = () => {
-    if (pendingTransactions.length === 0) {
-      alert("No transactions to import!");
-      return;
-    }
-
-    // Clear old data before importing new transactions
-    clearAll();
-    addTransactions(pendingTransactions);
-    sessionStorage.removeItem("pendingTransactions");
-
-    // Start background categorization (5 second delay)
-    startBackgroundCategorization();
-
-    router.push("/dashboard");
-  };
-
-  const handleCancel = () => {
-    sessionStorage.removeItem("pendingTransactions");
-    router.push("/");
-  };
-
-  if (pendingTransactions.length === 0) {
+  // Show loading state while fetching from sessionStorage
+  if (pendingTransactions === null) {
     return (
       <div className="min-h-screen flex items-center justify-center">
         <div className="text-center">
@@ -116,6 +103,74 @@ export default function ReviewPage() {
       </div>
     );
   }
+
+  const handleEditField = (
+    id: string,
+    field: keyof Transaction,
+    value: string | number | Date | TransactionType | undefined,
+  ) => {
+    setPendingTransactions((prev) => {
+      if (!prev) return prev;
+      return prev.map((t) => {
+        if (t.id !== id) return t;
+        // Create new Transaction with updated field
+        return new Transaction(
+          field === 'id' ? (value as string) : t.id,
+          field === 'date' ? (value as Date) : t.date,
+          field === 'description' ? (value as string) : t.description,
+          field === 'amount' ? (value as number) : t.amount,
+          field === 'type' ? (value as TransactionType) : t.type,
+          field === 'category' ? (Category.fromId(value as string) || t.category) : t.category,
+          field === 'balance' ? (value as number | undefined) : t.balance,
+          field === 'merchant' ? (value as string | undefined) : t.merchant,
+          field === 'originalText' ? (value as string | undefined) : t.originalText,
+          field === 'budgetMonth' ? (value as string | undefined) : t.budgetMonth,
+          field === 'categoryConfidence' ? (value as number | undefined) : t.categoryConfidence,
+          field === 'needsReview' ? (value as boolean | undefined) : t.needsReview,
+          t.categorizedBy,
+          t.sourceType,
+          t.statementId,
+          t.cardIssuer,
+          t.cardLastFour,
+          t.cardHolder,
+          t.currency,
+          t.originalAmount,
+          t.isAnomaly,
+          t.anomalyTypes,
+          t.anomalyDetails,
+          t.anomalyDismissed,
+        );
+      });
+    });
+  };
+
+  const handleDeleteTransaction = (id: string) => {
+    setPendingTransactions((prev) => prev?.filter((t) => t.id !== id) ?? prev);
+  };
+
+  const handleConfirmImport = () => {
+    if (pendingTransactions.length === 0) {
+      alert("No transactions to import!");
+      return;
+    }
+
+    // Append new transactions to existing ones
+    addTransactions(pendingTransactions);
+    sessionStorage.removeItem("pendingTransactions");
+
+    // Start background categorization (5 second delay)
+    startBackgroundCategorization();
+
+    // Run anomaly detection on all transactions
+    runAnomalyDetection();
+
+    router.push("/dashboard");
+  };
+
+  const handleCancel = () => {
+    sessionStorage.removeItem("pendingTransactions");
+    router.push("/");
+  };
 
   return (
     <div className="min-h-screen bg-background">
@@ -170,13 +225,13 @@ export default function ReviewPage() {
       </div>
 
       {/* Transactions Table */}
-      <div className="container mx-auto px-4 pb-8">
-        <div className="rounded-lg border">
+      <div className="w-[95%] mx-auto pb-8">
+        <div className="rounded-lg border px-5">
           <Table>
             <TableHeader>
               <TableRow>
                 <TableHead className="w-[120px]">Date</TableHead>
-                <TableHead>Description</TableHead>
+                <TableHead className="max-w-[60%]">Description</TableHead>
                 <TableHead className="w-[150px]">Amount</TableHead>
                 <TableHead className="w-[120px]">Type</TableHead>
                 <TableHead className="w-[130px]">Balance</TableHead>
@@ -186,7 +241,7 @@ export default function ReviewPage() {
             </TableHeader>
             <TableBody>
               {pendingTransactions.map((transaction) => {
-                const categoryDisplay = getCategoryDisplay(transaction.category);
+                const categoryDisplay = getCategoryDisplay(transaction.category.id);
                 const isEditing = editingId === transaction.id;
 
                 return (
@@ -209,7 +264,7 @@ export default function ReviewPage() {
                     </TableCell>
 
                     {/* Description */}
-                    <TableCell>
+                    <TableCell className="max-w-[400px]">
                       {isEditing ? (
                         <Input
                           value={transaction.description}
@@ -223,12 +278,12 @@ export default function ReviewPage() {
                           className="w-full"
                         />
                       ) : (
-                        <div>
-                          <div className="font-medium">
+                        <div className="break-words">
+                          <div className="font-medium line-clamp-2">
                             {transaction.merchant || transaction.description}
                           </div>
                           {transaction.merchant && (
-                            <div className="text-xs text-muted-foreground">
+                            <div className="text-xs text-muted-foreground line-clamp-2">
                               {transaction.description}
                             </div>
                           )}
@@ -244,14 +299,10 @@ export default function ReviewPage() {
                           value={Math.abs(transaction.amount)}
                           onChange={(e) => {
                             const absValue = parseFloat(e.target.value);
-                            const signedValue =
-                              transaction.type === "expense"
-                                ? -Math.abs(absValue)
-                                : Math.abs(absValue);
                             handleEditField(
                               transaction.id,
                               "amount",
-                              signedValue,
+                              absValue,
                             );
                           }}
                           className="w-full"
@@ -259,7 +310,7 @@ export default function ReviewPage() {
                       ) : (
                         <span
                           className={`font-mono font-semibold ${
-                            transaction.type === "income"
+                            transaction.isIncome
                               ? "text-success"
                               : "text-destructive"
                           }`}
@@ -274,36 +325,27 @@ export default function ReviewPage() {
                       {isEditing ? (
                         <Select
                           value={transaction.type}
-                          onValueChange={(value: "income" | "expense") => {
-                            handleEditField(transaction.id, "type", value);
-                            // Adjust amount sign
-                            const absAmount = Math.abs(transaction.amount);
-                            const newAmount =
-                              value === "expense" ? -absAmount : absAmount;
-                            handleEditField(
-                              transaction.id,
-                              "amount",
-                              newAmount,
-                            );
+                          onValueChange={(value: string) => {
+                            handleEditField(transaction.id, "type", value === "credit" ? TransactionType.Credit : TransactionType.Debit);
                           }}
                         >
                           <SelectTrigger className="w-full">
                             <SelectValue />
                           </SelectTrigger>
                           <SelectContent>
-                            <SelectItem value="income">Income</SelectItem>
-                            <SelectItem value="expense">Expense</SelectItem>
+                            <SelectItem value="credit">Credit</SelectItem>
+                            <SelectItem value="debit">Debit</SelectItem>
                           </SelectContent>
                         </Select>
                       ) : (
                         <Badge
                           variant={
-                            transaction.type === "income"
+                            transaction.isIncome
                               ? "default"
                               : "secondary"
                           }
                         >
-                          {transaction.type === "income" ? "Credit" : "Debit"}
+                          {transaction.isCredit ? "Credit" : "Debit"}
                         </Badge>
                       )}
                     </TableCell>
@@ -319,7 +361,7 @@ export default function ReviewPage() {
                     {/* Category */}
                     <TableCell>
                       <Select
-                        value={transaction.category}
+                        value={transaction.category.id}
                         onValueChange={(value) =>
                           handleEditField(transaction.id, "category", value)
                         }
@@ -337,9 +379,7 @@ export default function ReviewPage() {
                         </SelectTrigger>
                         <SelectContent>
                           {DEFAULT_CATEGORIES.filter(
-                            (c) =>
-                              c.type === transaction.type ||
-                              c.type === "both",
+                            (c) => !c.isExcluded,
                           ).map((cat) => {
                             const display = getCategoryDisplay(cat.id);
                             const IconComponent = display.icon;

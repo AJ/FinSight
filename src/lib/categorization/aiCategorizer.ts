@@ -58,8 +58,8 @@ export async function categorizeTransactions(
     return [];
   }
 
-  // Filter out transfers - they don't need categorization
-  const categorizableTransactions = transactions.filter(t => t.type !== 'transfer');
+  // Filter out excluded categories (transfers, investments) - they don't need categorization
+  const categorizableTransactions = transactions.filter(t => !t.isExcluded);
 
   if (categorizableTransactions.length === 0) {
     return [];
@@ -84,7 +84,7 @@ export async function categorizeTransactions(
       id: t.id,
       description: t.description,
       amount: t.amount,
-      type: t.type as 'income' | 'expense', // Safe because we filtered out transfers
+      type: t.isIncome ? 'income' as const : 'expense' as const,
     }));
 
     const prompt = buildCategorizationPrompt(batchData);
@@ -142,18 +142,18 @@ export async function categorizeTransactions(
 /**
  * Fallback keyword-based categorization.
  */
-export function categorizeByKeywords(transaction: Transaction): string {
+export function categorizeByKeywords(transaction: { description: string; isExcluded?: boolean; category?: { type: string } }): string {
   const description = transaction.description.toLowerCase();
 
-  // Transfers don't have expense semantics - skip categorization
-  if (transaction.type === "transfer") {
+  // Excluded categories (transfers, investments) don't need expense categorization
+  if (transaction.isExcluded) {
     return "transfer";
   }
 
   // Find matching category by keywords
   for (const category of DEFAULT_CATEGORIES) {
-    // Skip if type doesn't match
-    if (category.type !== "both" && category.type !== transaction.type) {
+    // Skip excluded categories
+    if (category.isExcluded) {
       continue;
     }
 
@@ -164,10 +164,7 @@ export function categorizeByKeywords(transaction: Transaction): string {
     }
   }
 
-  // Default based on type
-  if (transaction.type === "income") {
-    return "income";
-  }
+  // Default to other
   return "other";
 }
 
@@ -180,6 +177,8 @@ export function applyCategorizationResults(
   results: CategorizationResult[]
 ): Transaction[] {
   const resultsMap = new Map(results.map((r) => [r.id, r]));
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { Transaction: TxnClass, Category, CategorizedBy } = require("@/types");
 
   return transactions.map((txn) => {
     const result = resultsMap.get(txn.id);
@@ -190,13 +189,32 @@ export function applyCategorizationResults(
     // Determine if needs review based on confidence
     const needsReview = result.confidence < 0.85;
 
-    return {
-      ...txn,
-      category: result.category,
-      categoryConfidence: result.confidence,
+    return new TxnClass(
+      txn.id,
+      txn.date,
+      txn.description,
+      txn.amount,
+      txn.type,
+      Category.fromId(result.category) || txn.category,
+      txn.balance,
+      txn.merchant,
+      txn.originalText,
+      txn.budgetMonth,
+      result.confidence,
       needsReview,
-      categorizedBy: result.confidence >= 0.3 ? "ai" : "keyword",
-    } as Transaction;
+      result.confidence >= 0.3 ? CategorizedBy.AI : CategorizedBy.Keyword,
+      txn.sourceType,
+      txn.statementId,
+      txn.cardIssuer,
+      txn.cardLastFour,
+      txn.cardHolder,
+      txn.currency,
+      txn.originalAmount,
+      txn.isAnomaly,
+      txn.anomalyTypes,
+      txn.anomalyDetails,
+      txn.anomalyDismissed,
+    );
   });
 }
 

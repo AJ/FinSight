@@ -55,7 +55,7 @@ export function PeriodComparisonView() {
 
       // Get CC transactions for each period
       const ccTransactions = transactions.filter(
-        (t) => t.sourceType === "credit_card" && t.type === "expense"
+        (t) => t.sourceType === "credit_card" && t.isExpense
       );
 
       const filterByPeriod = (txns: typeof transactions, start: Date, end: Date) => {
@@ -74,7 +74,7 @@ export function PeriodComparisonView() {
         let total = 0;
 
         for (const txn of txns) {
-          const cat = txn.category || "uncategorized";
+          const cat = txn.category?.id || "uncategorized";
           const amount = Math.abs(txn.amount);
           byCategory.set(cat, (byCategory.get(cat) || 0) + amount);
           total += amount;

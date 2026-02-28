@@ -78,28 +78,48 @@ TRANSACTIONS TO EXTRACT:
 For each transaction, extract:
 - date: Transaction date in YYYY-MM-DD format
 - description: Merchant name or transaction description
-- amount: Amount in INR (positive for charges, negative for credits/refunds)
-- currency: Original currency if international (e.g., "USD", "EUR"), omit if INR
-- originalAmount: Amount in original currency if international, omit if INR
-- transactionType: One of "purchase", "payment", "refund", "interest", "fee"
+- amount: Amount in the card's native currency (e.g., INR for Indian cards)
+- currency: Original currency if international (e.g., "USD", "EUR"), omit if domestic
+- originalAmount: Amount in original currency if international, omit if domestic
+- transactionType: One of "purchase", "payment", "refund", "cashback", "interest", "fee"
+  - Use "cashback" for any cash back, cashback, cash_back, or CB entries (credits to the card)
 - cardHolder: Name of addon card holder if this is an addon card transaction
 
-IMPORTANT RULES:
-1. Extract EVERY transaction - do not skip any
-2. For addon/supplementary cards:
-   - Look for section headers like "ADD-ON CARD TRANSACTIONS", "SUPPLEMENTARY CARD", or card holder names
-   - Attribute transactions in those sections to the named card holder
-   - Primary card transactions should have cardHolder omitted or set to primary holder name
-3. International transactions typically show:
-   - Original amount and currency (e.g., "$99.00 USD")
-   - INR equivalent
-   - Extract both
-4. Common transaction types:
-   - purchase: Regular purchases, shopping, dining, etc.
-   - payment: Payments made to the card
-   - refund: Refunds, reversals, cashback credits
-   - interest: Interest charges
-   - fee: Annual fees, late fees, foreign transaction fees
+CRITICAL RULES - WHAT IS A TRANSACTION:
+A transaction MUST have ALL THREE of these characteristics:
+1. A specific DATE (not a date range, not "expiring in", not a due date)
+2. A MERCHANT NAME or specific payee (not generic bank text)
+3. A specific AMOUNT (a number, not "points", not percentages)
+
+DO NOT EXTRACT AS TRANSACTIONS:
+- Legal disclaimers, terms & conditions, fine print
+- Bank contact information, addresses, phone numbers
+- Summary sections (reward points, cashback summaries, GST summaries)
+- Header text, column headers, section titles
+- Marketing text, offers, promotional content
+- Interest calculation explanations
+- Insurance information
+- Payment instructions
+- Text about "points expiring", "bonus points", "cash back"
+- GST/invoice numbers and tax breakdowns
+- Any text without a clear DATE + MERCHANT + AMOUNT combination
+
+EXAMPLES OF NON-TRANSACTIONS (DO NOT EXTRACT):
+❌ "Terms & Conditions apply, visit www.offers..." - No merchant/amount
+❌ "BANK WILL REPORT YOU AS DEFAULTER..." - Legal disclaimer
+❌ "Reward Points Summary" - Summary section, not individual transaction
+❌ "GSTIN : 33AAACH2702H2Z6 HSN Code : 997113" - Tax info
+❌ "Points expiring in next 30 days" - No specific transaction
+
+EXAMPLES OF REAL TRANSACTIONS (EXTRACT THESE):
+✅ "15/01/24  AMAZON INDIA CYBER SI  2,500.00" - Has date, merchant, amount
+✅ "20/01/24  SWIGGY INSTAMART  850.00" - Has date, merchant, amount
+✅ "25/01/24  PAYMENT RECEIVED - THANK YOU  -15,000.00" - Has date, merchant, amount
+
+FOR ADDON/SUPPLEMENTARY CARDS:
+- Look for section headers like "ADD-ON CARD TRANSACTIONS", "SUPPLEMENTARY CARD", or card holder names
+- Attribute transactions in those sections to the named card holder
+- Primary card transactions should have cardHolder omitted
 
 OUTPUT FORMAT:
 Return ONLY valid JSON with this structure:

@@ -24,11 +24,11 @@ export function TrueBalanceWidget() {
     // Calculate bank balance from non-CC transactions
     // Include income/expense but exclude transfers (CC payments)
     const bankIncome = transactions
-      .filter((t) => t.sourceType !== "credit_card" && t.type === "income")
+      .filter((t) => t.sourceType !== "credit_card" && t.isIncome)
       .reduce((sum, t) => sum + t.amount, 0);
 
     const bankExpenses = transactions
-      .filter((t) => t.sourceType !== "credit_card" && t.type === "expense")
+      .filter((t) => t.sourceType !== "credit_card" && t.isExpense)
       .reduce((sum, t) => sum + Math.abs(t.amount), 0);
 
     const bankBalance = bankIncome - bankExpenses;

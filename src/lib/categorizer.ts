@@ -1,16 +1,23 @@
-import { Category } from "@/types";
+import { Category, CategoryType, TransactionType } from "@/models";
 
 export function categorizeTransaction(
   description: string,
   amount: number,
   categories: Category[],
+  transactionType?: TransactionType,
 ): string {
   const lowerDesc = description.toLowerCase();
-  const type: "income" | "expense" = amount >= 0 ? "income" : "expense";
 
-  // Try to match with category keywords
+  // Determine which category types to search based on transaction type
+  // credit = likely income (but could be refund to expense category)
+  // debit = likely expense
+  const preferredCategoryType: CategoryType =
+    transactionType === TransactionType.Credit ? CategoryType.Income : CategoryType.Expense;
+
+  // First, try to match with preferred category type
   for (const category of categories) {
-    if (category.type !== type && category.type !== "both") continue;
+    if (category.type !== preferredCategoryType && category.type !== CategoryType.Excluded)
+      continue;
 
     for (const keyword of category.keywords) {
       if (lowerDesc.includes(keyword.toLowerCase())) {
@@ -19,14 +26,27 @@ export function categorizeTransaction(
     }
   }
 
-  // Default categorization based on type
-  if (type === "income") {
-    const incomeCategory = categories.find((c) => c.type === "income");
-    return incomeCategory?.id || "other";
+  // If no match, try the other category type (e.g., refunds in expense categories)
+  const otherCategoryType = preferredCategoryType === CategoryType.Income ? CategoryType.Expense : CategoryType.Income;
+  for (const category of categories) {
+    if (category.type !== otherCategoryType && category.type !== CategoryType.Excluded)
+      continue;
+
+    for (const keyword of category.keywords) {
+      if (lowerDesc.includes(keyword.toLowerCase())) {
+        return category.id;
+      }
+    }
   }
 
-  const otherCategory = categories.find((c) => c.id === "other");
-  return otherCategory?.id || "other";
+  // Default categorization based on transaction type
+  if (preferredCategoryType === CategoryType.Income) {
+    const incomeCategory = categories.find((c) => c.type === CategoryType.Income);
+    return incomeCategory?.id || Category.DEFAULT_ID;
+  }
+
+  const defaultCategory = categories.find((c) => c.id === Category.DEFAULT_ID);
+  return defaultCategory?.id || Category.DEFAULT_ID;
 }
 
 /**

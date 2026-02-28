@@ -1,26 +1,33 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { FileUpload } from "./FileUpload";
 import { PasswordDialog } from "./PasswordDialog";
 import { parseCSV } from "@/lib/parsers/csvParser";
-import {
-  parsePDF,
-  isPasswordError,
-} from "@/lib/parsers/pdfParser";
 import { parseXLS } from "@/lib/parsers/xlsParser";
-import { checkLLMStatus, buildChatContext } from "@/lib/parsers/llmParser";
-import { normalizeMerchantName } from "@/lib/categorizer";
+import {
+  checkLLMStatus,
+  buildChatContext,
+  parseWithLLMExtended,
+  isPasswordError,
+} from "@/lib/parsers/llmParser";
+import { normalizeMerchantName, categorizeTransaction } from "@/lib/categorizer";
+import { DEFAULT_CATEGORIES } from "@/lib/categorization/categories";
 import { useSettingsStore } from "@/lib/store/settingsStore";
 import { useChatStore } from "@/lib/store/chatStore";
-import { LLMStatus, ParsedStatement, Currency } from "@/types";
+import { useCreditCardStore } from "@/lib/store/creditCardStore";
+import { LLMStatus, ParsedStatement, Currency, Transaction, Category } from "@/types";
 import { useRouter } from "next/navigation";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { CheckCircle2, XCircle } from "lucide-react";
+import { CheckCircle2, XCircle, Loader2 } from "lucide-react";
 
 const MAX_PASSWORD_ATTEMPTS = 3;
 
-export function FileProcessor() {
+interface FileProcessorProps {
+  onSuccess?: () => void;
+}
+
+export function FileProcessor({ onSuccess }: FileProcessorProps) {
   const [isProcessing, setIsProcessing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
@@ -29,16 +36,16 @@ export function FileProcessor() {
 
   // Password dialog state
   const [passwordDialogOpen, setPasswordDialogOpen] = useState(false);
-  const [pendingFile, setPendingFile] = useState<File | null>(null);
   const [passwordError, setPasswordError] = useState<string | null>(null);
   const [passwordAttempts, setPasswordAttempts] = useState(0);
-  const [isPasswordProcessing, setIsPasswordProcessing] = useState(false);
+  const [pendingFile, setPendingFile] = useState<File | null>(null);
 
   const setCurrency = useSettingsStore((state) => state.setCurrency);
   const currency = useSettingsStore((state) => state.currency);
   const llmModel = useSettingsStore((state) => state.llmModel);
   const setContext = useChatStore((state) => state.setContext);
   const setModel = useChatStore((state) => state.setModel);
+  const addCCStatement = useCreditCardStore((state) => state.addStatement);
   const router = useRouter();
 
   // Check LLM status on mount
@@ -47,7 +54,7 @@ export function FileProcessor() {
   }, []);
 
   // Common processing logic for parsed statements
-  const processParsedStatement = (
+  const processParsedStatement = useCallback((
     parsed: ParsedStatement,
     detectedCurrency: Currency | null,
     fileName: string,
@@ -63,12 +70,36 @@ export function FileProcessor() {
       setCurrency(detectedCurrency);
     }
 
-    // Assign simple categories: credit or debit
-    const categorized = parsed.transactions.map((txn) => ({
-      ...txn,
-      category: txn.type === "income" ? "credit" : "debit",
-      merchant: normalizeMerchantName(txn.description),
-    }));
+    // Categorize transactions using keyword matching
+    const categorized = parsed.transactions.map((txn) => {
+      const category = categorizeTransaction(txn.description, txn.amount, DEFAULT_CATEGORIES);
+      return new Transaction(
+        txn.id,
+        txn.date,
+        txn.description,
+        txn.amount,
+        txn.type,
+        Category.fromId(category) ?? Category.fromId(Category.DEFAULT_ID)!,
+        txn.balance,
+        normalizeMerchantName(txn.description), // merchant
+        txn.originalText,
+        txn.budgetMonth,
+        txn.categoryConfidence,
+        txn.needsReview,
+        txn.categorizedBy,
+        txn.sourceType,
+        txn.statementId,
+        txn.cardIssuer,
+        txn.cardLastFour,
+        txn.cardHolder,
+        txn.currency,
+        txn.originalAmount,
+        txn.isAnomaly,
+        txn.anomalyTypes,
+        txn.anomalyDetails,
+        txn.anomalyDismissed,
+      );
+    });
 
     // Store for review page
     sessionStorage.setItem(
@@ -94,11 +125,17 @@ export function FileProcessor() {
       `Parsed ${categorized.length} transactions${currencyInfo}! Redirecting to review…`,
     );
 
+    // Close password dialog if open
+    setPasswordDialogOpen(false);
+
+    // Close dialog before redirect to prevent unmount issues
+    onSuccess?.();
+
     setTimeout(() => router.push("/review"), 1000);
-  };
+  }, [setCurrency, currency, llmModel, llmStatus?.selectedModel, setContext, setModel, onSuccess, router]);
 
   // Process a file with optional password (for PDFs)
-  const processFile = async (file: File, password?: string) => {
+  const processFile = useCallback(async (file: File, password?: string) => {
     const ext = file.name.toLowerCase();
     const isPDF = ext.endsWith(".pdf");
     const isCSV = ext.endsWith(".csv");
@@ -108,10 +145,13 @@ export function FileProcessor() {
     let detectedCurrency: Currency | null = null;
 
     if (isPDF) {
-      setProgress("Parsing PDF...");
-      const result = await parsePDF(file, password);
+      const result = await parseWithLLMExtended(file, setProgress, password);
       parsed = result.statement;
-      detectedCurrency = result.detectedCurrency;
+      detectedCurrency = result.currency;
+      // Store CC statement metadata for the credit cards page
+      if (result.ccStatement) {
+        addCCStatement(result.ccStatement);
+      }
     } else if (isCSV) {
       setProgress("Parsing CSV...");
       const result = await parseCSV(file);
@@ -129,7 +169,58 @@ export function FileProcessor() {
     }
 
     processParsedStatement(parsed, detectedCurrency, file.name);
-  };
+  }, [processParsedStatement, addCCStatement]);
+
+  // Handle password submission - retry with password
+  const handlePasswordSubmit = useCallback(async (password: string) => {
+    if (!pendingFile) return;
+
+    setPasswordDialogOpen(false);
+    setIsProcessing(true);
+    setProgress("Parsing PDF with password...");
+
+    try {
+      await processFile(pendingFile, password);
+      // Success - clear password state
+      setPendingFile(null);
+      setPasswordAttempts(0);
+    } catch (err) {
+      if (isPasswordError(err)) {
+        const newAttempts = passwordAttempts + 1;
+        setPasswordAttempts(newAttempts);
+
+        if (newAttempts >= MAX_PASSWORD_ATTEMPTS) {
+          // Too many failed attempts
+          setPendingFile(null);
+          setPasswordAttempts(0);
+          setError("Too many failed password attempts. Please try uploading again.");
+        } else {
+          // Show error and re-open dialog for retry
+          const remaining = MAX_PASSWORD_ATTEMPTS - newAttempts;
+          setPasswordError(`Incorrect password. ${remaining} attempt${remaining > 1 ? "s" : ""} remaining.`);
+          setPasswordDialogOpen(true);
+        }
+      } else {
+        // Other error
+        setPendingFile(null);
+        setPasswordAttempts(0);
+        setError(err instanceof Error ? err.message : "Failed to parse PDF file");
+      }
+    } finally {
+      setIsProcessing(false);
+      setProgress(null);
+    }
+  }, [pendingFile, passwordAttempts, processFile]);
+
+  // Handle password dialog cancel
+  const handlePasswordCancel = useCallback(() => {
+    setPasswordDialogOpen(false);
+    setPendingFile(null);
+    setPasswordAttempts(0);
+    setPasswordError(null);
+    setIsProcessing(false);
+    setProgress(null);
+  }, []);
 
   const handleFileSelect = async (file: File) => {
     setIsProcessing(true);
@@ -140,79 +231,24 @@ export function FileProcessor() {
     setPasswordError(null);
 
     try {
+      // First attempt - no password
       await processFile(file);
     } catch (err) {
-      console.error("Error processing file:", err);
-
-      // Check if this is a password error for PDF
       if (isPasswordError(err)) {
-        // PDF is encrypted - show password dialog
+        // PDF needs password - show dialog
         setPendingFile(file);
         setPasswordDialogOpen(true);
         setIsProcessing(false);
         setProgress(null);
-        return;
+      } else {
+        setError(err instanceof Error ? err.message : "Failed to process file");
       }
-
-      setError(err instanceof Error ? err.message : "Failed to process file");
     } finally {
+      // Only clear processing if not waiting for password
       if (!passwordDialogOpen) {
         setIsProcessing(false);
         setProgress(null);
       }
-    }
-  };
-
-  const handlePasswordSubmit = async (password: string) => {
-    if (!pendingFile) return;
-
-    setIsPasswordProcessing(true);
-    setPasswordError(null);
-    setIsProcessing(true);
-    setProgress("Parsing PDF with password...");
-
-    try {
-      await processFile(pendingFile, password);
-
-      // Success - clear password state and close dialog
-      setPasswordDialogOpen(false);
-      setPendingFile(null);
-      setPasswordAttempts(0);
-    } catch (err) {
-      console.error("Error processing password-protected PDF:", err);
-
-      if (isPasswordError(err)) {
-        const newAttempts = passwordAttempts + 1;
-        setPasswordAttempts(newAttempts);
-
-        if (newAttempts >= MAX_PASSWORD_ATTEMPTS) {
-          // Too many failed attempts - close dialog with error
-          setPasswordDialogOpen(false);
-          setPendingFile(null);
-          setPasswordAttempts(0);
-          setError(
-            "Too many failed password attempts. Please try uploading again.",
-          );
-        } else {
-          // Show error with remaining attempts
-          const remaining = MAX_PASSWORD_ATTEMPTS - newAttempts;
-          setPasswordError(
-            `Incorrect password. ${remaining} attempt${remaining > 1 ? "s" : ""} remaining.`,
-          );
-        }
-      } else {
-        // Other error - close dialog, show generic error
-        setPasswordDialogOpen(false);
-        setPendingFile(null);
-        setPasswordAttempts(0);
-        setError(
-          err instanceof Error ? err.message : "Failed to parse PDF file",
-        );
-      }
-    } finally {
-      setIsPasswordProcessing(false);
-      setIsProcessing(false);
-      setProgress(null);
     }
   };
 
@@ -223,29 +259,30 @@ export function FileProcessor() {
       {/* Password Dialog */}
       <PasswordDialog
         open={passwordDialogOpen}
-        onOpenChange={setPasswordDialogOpen}
+        onOpenChange={(open) => {
+          if (!open) {
+            handlePasswordCancel();
+          }
+        }}
         onSubmit={handlePasswordSubmit}
         error={passwordError || undefined}
-        isProcessing={isPasswordProcessing}
+        isProcessing={false}
+        reason={passwordAttempts > 0 ? 2 : 1}
       />
 
       {/* Progress */}
       {progress && (
         <Alert>
-          <div className="flex items-center gap-2">
-            <div className="h-4 w-4 animate-spin rounded-full border-2 border-primary border-t-transparent" />
-            <AlertDescription>{progress}</AlertDescription>
-          </div>
+          <Loader2 className="h-4 w-4 animate-spin" />
+          <AlertDescription>{progress}</AlertDescription>
         </Alert>
       )}
 
       {/* Processing (non-LLM) */}
       {isProcessing && !progress && (
         <Alert>
-          <div className="flex items-center gap-2">
-            <div className="h-4 w-4 animate-spin rounded-full border-2 border-primary border-t-transparent" />
-            <AlertDescription>Processing your file…</AlertDescription>
-          </div>
+          <Loader2 className="h-4 w-4 animate-spin" />
+          <AlertDescription>Processing your file…</AlertDescription>
         </Alert>
       )}
 
@@ -267,9 +304,9 @@ export function FileProcessor() {
       )}
 
       {success && (
-        <Alert className="border-success bg-success/10">
+        <Alert className="border-success bg-success/20">
           <CheckCircle2 className="h-4 w-4 text-success" />
-          <AlertDescription className="text-success-foreground">
+          <AlertDescription className="text-success font-medium">
             {success}
           </AlertDescription>
         </Alert>

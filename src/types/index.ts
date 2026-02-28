@@ -1,39 +1,18 @@
-// Transaction types
-export interface Transaction {
-  id: string;
-  date: Date;
-  description: string;
-  amount: number; // Negative for expenses, positive for income
-  category: string;
-  type: "income" | "expense" | "transfer"; // Extended to include transfer
-  balance?: number; // Running balance after this transaction
-  merchant?: string;
-  originalText?: string;
-  budgetMonth?: string;
-  // AI categorization fields
-  categoryConfidence?: number; // 0-1, AI confidence score
-  needsReview?: boolean; // True if medium/low confidence
-  categorizedBy?: "keyword" | "ai" | "manual"; // How it was categorized
-  // Credit card extension fields
-  sourceType?: "bank" | "credit_card";
-  statementId?: string;
-  cardIssuer?: string;
-  cardLastFour?: string;
-  cardHolder?: string;
-  currency?: string;
-  originalAmount?: number;
-  transactionType?: "purchase" | "payment" | "refund" | "interest" | "fee";
-}
+// Re-export from class-based models
+export {
+  TransactionType,
+  CategoryType,
+  CategorizedBy,
+  SourceType,
+  AnomalyType,
+  FrequencyPeriod,
+  Category,
+  Transaction,
+} from '@/models';
+export type { TransactionJSON, AnomalyDetails } from '@/models';
 
-// Category types
-export interface Category {
-  id: string;
-  name: string;
-  icon?: string;
-  keywords: string[];
-  color?: string;
-  type: "income" | "expense" | "both";
-}
+// Import for local use in type definitions
+import type { Transaction } from '@/models';
 
 // Budget types
 export interface Budget {
@@ -115,7 +94,7 @@ export interface LLMParsedTransaction {
   date: string;
   description: string;
   amount: number;
-  type: "income" | "expense";
+  type: "credit" | "debit";
 }
 
 export interface LLMParseResult {

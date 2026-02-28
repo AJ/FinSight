@@ -24,9 +24,20 @@ export const useCategoryStore = create<CategoryStore>()(
 
       updateCategory: (id, updates) =>
         set((state) => ({
-          categories: state.categories.map((cat) =>
-            cat.id === id ? { ...cat, ...updates } : cat,
-          ),
+          categories: state.categories.map((cat) => {
+            if (cat.id !== id) return cat;
+            // Create new Category instance with updates
+            // eslint-disable-next-line @typescript-eslint/no-require-imports
+            const { Category } = require('@/types');
+            return new Category(
+              updates.id ?? cat.id,
+              updates.name ?? cat.name,
+              updates.type ?? cat.type,
+              updates.color ?? cat.color,
+              updates.icon ?? cat.icon,
+              updates.keywords ?? cat.keywords,
+            );
+          }),
         })),
 
       deleteCategory: (id) =>

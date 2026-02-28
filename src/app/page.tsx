@@ -10,6 +10,7 @@ import { StatCard } from '@/components/dashboard/StatCard';
 import { CategoryPieChart } from '@/components/dashboard/CategoryPieChart';
 import { TrendLineChart } from '@/components/dashboard/TrendLineChart';
 import { FinancialHealthCard } from '@/components/dashboard/FinancialHealthCard';
+import { AnomalySummaryCard } from '@/components/dashboard/AnomalySummaryCard';
 import { InsightsPanel } from '@/components/insights/InsightsPanel';
 import { RecurringPaymentsSummary } from '@/components/recurring/RecurringPaymentsSummary';
 import { TrueBalanceWidget, CreditUtilizationCard, DueDatesList } from '@/components/creditCard';
@@ -96,11 +97,11 @@ export default function DashboardPage() {
     }
 
     const income = transactions
-      .filter((t) => t.type === 'income')
+      .filter((t) => t.isIncome)
       .reduce((sum, t) => sum + t.amount, 0);
 
     const expenses = transactions
-      .filter((t) => t.type === 'expense')
+      .filter((t) => t.isExpense)
       .reduce((sum, t) => sum + Math.abs(t.amount), 0);
 
     const balance = income - expenses;
@@ -263,6 +264,9 @@ export default function DashboardPage() {
 
         {/* Recurring Payments Summary */}
         <RecurringPaymentsSummary />
+
+        {/* Anomaly Summary */}
+        <AnomalySummaryCard />
 
         {/* AI Insights */}
         <InsightsPanel />

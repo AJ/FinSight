@@ -1,7 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { Badge } from "@/components/ui/badge";
+import { Input } from "@/components/ui/input";
 import {
   Popover,
   PopoverContent,
@@ -9,12 +10,13 @@ import {
 } from "@/components/ui/popover";
 import { getCategoryById, DEFAULT_CATEGORIES } from "@/lib/categorization/categories";
 import { getCategoryDisplay } from "./CategoryBadge";
-import { ChevronDown, AlertCircle, Check } from "lucide-react";
+import { ChevronDown, AlertCircle, Check, Search } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { CategoryType } from "@/types";
 
 interface InlineCategoryEditorProps {
   categoryId: string;
-  transactionType: "income" | "expense" | "transfer";
+  isIncome: boolean;
   needsReview?: boolean;
   onCategoryChange: (newCategory: string) => void;
   className?: string;
@@ -22,15 +24,41 @@ interface InlineCategoryEditorProps {
 
 export function InlineCategoryEditor({
   categoryId,
-  transactionType,
+  isIncome,
   needsReview = false,
   onCategoryChange,
   className,
 }: InlineCategoryEditorProps) {
   const [isOpen, setIsOpen] = useState(false);
+  const [searchTerm, setSearchTerm] = useState("");
   const category = getCategoryById(categoryId);
   const display = getCategoryDisplay(categoryId);
   const IconComponent = display.icon;
+
+  // Filter categories by category type and search term
+  const filteredCategories = useMemo(() => {
+    const targetCategoryType = isIncome ? CategoryType.Income : CategoryType.Expense;
+    return DEFAULT_CATEGORIES.filter((c) => {
+      // Show categories matching the target type (exclude "excluded" categories)
+      const matchesType = c.type === targetCategoryType;
+      if (!matchesType) return false;
+
+      if (!searchTerm) return true;
+
+      const search = searchTerm.toLowerCase();
+      const matchesName = c.name.toLowerCase().includes(search);
+      const matchesKeywords = c.keywords.some(kw => kw.toLowerCase().includes(search));
+      return matchesName || matchesKeywords;
+    });
+  }, [isIncome, searchTerm]);
+
+  // Reset search when popover closes
+  const handleOpenChange = (open: boolean) => {
+    setIsOpen(open);
+    if (!open) {
+      setSearchTerm("");
+    }
+  };
 
   if (!category) {
     return (
@@ -40,12 +68,8 @@ export function InlineCategoryEditor({
     );
   }
 
-  const filteredCategories = DEFAULT_CATEGORIES.filter(
-    (c) => c.type === transactionType || c.type === "both"
-  );
-
   return (
-    <Popover open={isOpen} onOpenChange={setIsOpen}>
+    <Popover open={isOpen} onOpenChange={handleOpenChange}>
       <PopoverTrigger asChild>
         <button
           className={cn(
@@ -77,46 +101,61 @@ export function InlineCategoryEditor({
         align="start"
         sideOffset={4}
       >
-        <div className="text-xs text-muted-foreground px-2 py-1.5 border-b border-border mb-1">
-          Change category
+        {/* Search input */}
+        <div className="relative mb-1">
+          <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground" />
+          <Input
+            placeholder="Search categories..."
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+            className="h-8 pl-7 text-sm"
+            autoFocus
+          />
         </div>
-        <div className="max-h-64 overflow-y-auto">
-          {filteredCategories.map((cat) => {
-            const catDisplay = getCategoryDisplay(cat.id);
-            const CatIcon = catDisplay.icon;
-            const isSelected = cat.id === categoryId;
 
-            return (
-              <button
-                key={cat.id}
-                onClick={() => {
-                  onCategoryChange(cat.id);
-                  setIsOpen(false);
-                }}
-                className={cn(
-                  "w-full flex items-center gap-2 px-2 py-1.5 rounded-md text-sm transition-colors",
-                  "hover:bg-muted",
-                  isSelected && "bg-muted/50"
-                )}
-              >
-                <CatIcon
-                  className="w-3.5 h-3.5 flex-shrink-0"
-                  style={{ color: catDisplay.color }}
-                />
-                <span className="flex-1 text-left">{cat.name}</span>
-                {isSelected && (
-                  <Check className="w-3.5 h-3.5 text-primary" />
-                )}
-              </button>
-            );
-          })}
+        <div className="max-h-56 overflow-y-auto">
+          {filteredCategories.length === 0 ? (
+            <div className="text-xs text-muted-foreground text-center py-3">
+              No categories found
+            </div>
+          ) : (
+            filteredCategories.map((cat) => {
+              const catDisplay = getCategoryDisplay(cat.id);
+              const CatIcon = catDisplay.icon;
+              const isSelected = cat.id === categoryId;
+
+              return (
+                <button
+                  key={cat.id}
+                  onClick={() => {
+                    onCategoryChange(cat.id);
+                    setIsOpen(false);
+                  }}
+                  className={cn(
+                    "w-full flex items-center gap-2 px-2 py-1.5 rounded-md text-sm transition-colors",
+                    "hover:bg-muted",
+                    isSelected && "bg-muted/50"
+                  )}
+                >
+                  <CatIcon
+                    className="w-3.5 h-3.5 flex-shrink-0"
+                    style={{ color: catDisplay.color }}
+                  />
+                  <span className="flex-1 text-left">{cat.name}</span>
+                  {isSelected && (
+                    <Check className="w-3.5 h-3.5 text-primary" />
+                  )}
+                </button>
+              );
+            })
+          )}
         </div>
       </PopoverContent>
 
       {needsReview && (
         <span className="flex items-center gap-1 text-xs text-amber-600 ml-2">
           <AlertCircle className="w-3 h-3" />
-          <span className="hidden sm:inline">review</span>
+          <span className="hidden sm:inline">Review</span>
         </span>
       )}
     </Popover>

@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { CreditCard, Upload } from "lucide-react";
@@ -24,6 +24,12 @@ export default function CreditCardsPage() {
   const getAllUniqueCards = useCreditCardStore((state) => state.getAllUniqueCards);
   const transactions = useTransactionStore((state) => state.transactions);
 
+  // Track hydration to prevent SSR mismatch
+  const [isHydrated, setIsHydrated] = useState(false);
+  useEffect(() => {
+    setIsHydrated(true);
+  }, []);
+
   const uniqueCards = useMemo(() => getAllUniqueCards(), [getAllUniqueCards]);
   const hasCCData = uniqueCards.length > 0;
 
@@ -31,6 +37,22 @@ export default function CreditCardsPage() {
   const ccTransactionCount = useMemo(() => {
     return transactions.filter((t) => t.sourceType === "credit_card").length;
   }, [transactions]);
+
+  // Wait for hydration to prevent SSR mismatch
+  if (!isHydrated) {
+    return (
+      <div className="flex-1 overflow-y-auto">
+        <div className="border-b border-border bg-card">
+          <div className="px-6 py-4">
+            <h1 className="text-xl font-bold text-foreground flex items-center gap-2">
+              <CreditCard className="w-5 h-5" />
+              Credit Cards
+            </h1>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="flex-1 overflow-y-auto">

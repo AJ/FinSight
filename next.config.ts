@@ -13,7 +13,7 @@ const nextConfig: NextConfig = {
     },
   },
   async headers() {
-    const headers: Record<string, string>[] = [
+    const headers: { key: string; value: string }[] = [
       // Prevent clickjacking
       {
         key: "X-Frame-Options",

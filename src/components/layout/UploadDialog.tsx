@@ -18,7 +18,7 @@ export function UploadDialog({ open, onOpenChange }: UploadDialogProps) {
         </DialogHeader>
         <div className="space-y-4">
           <AIConnectionBar />
-          <FileProcessor />
+          <FileProcessor onSuccess={() => onOpenChange(false)} />
           <p className="text-xs text-muted-foreground text-center">
             Supports PDF, CSV • All processing happens locally on your device
           </p>

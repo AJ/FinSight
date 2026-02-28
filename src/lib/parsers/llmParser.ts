@@ -1,4 +1,4 @@
-import { Transaction, ParsedStatement, Currency, LLMStatus } from "@/types";
+import { ParsedStatement, Currency, LLMStatus, TransactionType, Transaction, Category, SourceType } from "@/types";
 import { v4 as uuidv4 } from "uuid";
 import { useSettingsStore } from "@/lib/store/settingsStore";
 import { getBrowserClient } from "@/lib/llm/index";
@@ -69,8 +69,21 @@ export class PDFPasswordError extends Error {
 }
 
 /**
+ * Password reason codes from pdfjs-dist
+ * 1 = NEED_PASSWORD - PDF is encrypted, no password provided yet
+ * 2 = INCORRECT_PASSWORD - Password was attempted and failed
+ */
+export const PASSWORD_REASON = {
+  NEED_PASSWORD: 1,
+  INCORRECT_PASSWORD: 2,
+} as const;
+
+/**
  * Extract raw text from a PDF file using pdfjs-dist (runs in browser).
  * Preserves spatial layout for better LLM comprehension.
+ *
+ * @param file - The PDF file to extract text from
+ * @param password - Optional password for encrypted PDFs
  */
 export async function extractTextFromPDF(
   file: File,
@@ -81,62 +94,99 @@ export async function extractTextFromPDF(
 
   const arrayBuffer = await file.arrayBuffer();
 
-  // Build document options with optional password
-  const docOptions: { data: ArrayBuffer; password?: string } = {
-    data: arrayBuffer,
-  };
-  if (password) {
-    docOptions.password = password;
-  }
+  return new Promise((resolve, reject) => {
+    const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer });
 
-  const pdf = await pdfjsLib.getDocument(docOptions).promise;
-
-  let fullText = "";
-
-  for (let i = 1; i <= pdf.numPages; i++) {
-    const page = await pdf.getPage(i);
-    const textContent = await page.getTextContent();
-
-    // Preserve spatial layout: group by Y, sort by X
-    const items = textContent.items
-      .filter((item): item is { str: string; transform: number[] } =>
-        'str' in item && typeof item.str === 'string' && item.str.trim().length > 0
-      )
-      .map((item) => ({
-        text: item.str.trim(),
-        x: Math.round(item.transform[4]),
-        y: Math.round(item.transform[5]),
-      }));
-
-    const lines: { y: number; items: { text: string; x: number }[] }[] = [];
-    for (const item of items) {
-      const existing = lines.find((l) => Math.abs(l.y - item.y) < 3);
-      if (existing) {
-        existing.items.push(item);
-      } else {
-        lines.push({ y: item.y, items: [item] });
-      }
-    }
-
-    lines.sort((a, b) => b.y - a.y);
-    for (const line of lines) {
-      line.items.sort((a, b) => a.x - b.x);
-      // Use tab separators between items that are far apart
-      let prev = 0;
-      const parts: string[] = [];
-      for (const item of line.items) {
-        if (prev > 0 && item.x - prev > 50) {
-          parts.push("\t");
+    // Synchronous password handler - must call updateCallback immediately
+    // NOTE: The console.logs below are intentionally kept - they provide micro-delays
+    // that prevent a race condition in pdfjs-dist's internal state machine when
+    // bundled by Next.js/Turbopack. Removing them may cause password auth to fail.
+    loadingTask.onPassword = (
+      updateCallback: (password: string) => void,
+      reason: number
+    ) => {
+      console.log('[onPassword] reason:', reason, 'password provided:', !!password);
+      if (reason === 1) {
+        // NEED_PASSWORD
+        if (password) {
+          // Password provided - use it immediately (synchronous)
+          updateCallback(password);
+          console.log('[onPassword] updateCallback called');
+        } else {
+          // No password - destroy task and reject
+          loadingTask.destroy().finally(() => {
+            reject(new PDFPasswordError("PDF requires a password", 1));
+          });
         }
-        parts.push(item.text);
-        prev = item.x + item.text.length * 5;
+      } else {
+        // INCORRECT_PASSWORD - destroy task and reject
+        console.log('[onPassword] reason=2, rejecting');
+        loadingTask.destroy().finally(() => {
+          reject(new PDFPasswordError("Incorrect password", 2));
+        });
       }
-      fullText += parts.join(" ") + "\n";
-    }
-    fullText += "\n--- PAGE BREAK ---\n\n";
-  }
+    };
 
-  return fullText;
+    loadingTask.promise
+      .then(async (pdf) => {
+        let fullText = "";
+
+        for (let i = 1; i <= pdf.numPages; i++) {
+          const page = await pdf.getPage(i);
+          const textContent = await page.getTextContent();
+
+          // Preserve spatial layout: group by Y, sort by X
+          const items = textContent.items
+            .filter(
+              (item) =>
+                "str" in item &&
+                "transform" in item &&
+                typeof (item as { str: string }).str === "string" &&
+                (item as { str: string }).str.trim().length > 0
+            )
+            .map((item) => {
+              const textItem = item as { str: string; transform: number[] };
+              return {
+                text: textItem.str.trim(),
+                x: Math.round(textItem.transform[4]),
+                y: Math.round(textItem.transform[5]),
+              };
+            });
+
+          const lines: { y: number; items: { text: string; x: number }[] }[] = [];
+          for (const item of items) {
+            const existing = lines.find((l) => Math.abs(l.y - item.y) < 3);
+            if (existing) {
+              existing.items.push(item);
+            } else {
+              lines.push({ y: item.y, items: [item] });
+            }
+          }
+
+          lines.sort((a, b) => b.y - a.y);
+          for (const line of lines) {
+            line.items.sort((a, b) => a.x - b.x);
+            // Use tab separators between items that are far apart
+            let prev = 0;
+            const parts: string[] = [];
+            for (const item of line.items) {
+              if (prev > 0 && item.x - prev > 50) {
+                parts.push("\t");
+              }
+              parts.push(item.text);
+              prev = item.x + item.text.length * 5;
+            }
+            fullText += parts.join(" ") + "\n";
+          }
+          fullText += "\n--- PAGE BREAK ---\n\n";
+        }
+
+        resolve(fullText);
+      })
+      .catch((err: unknown) => {
+        reject(err);
+      });
+  });
 }
 
 /**
@@ -217,6 +267,7 @@ export async function parseWithLLM(
   onProgress?.(`Found ${result.transactions.length} transactions!`);
 
   // 3 — Convert to Transaction objects
+  const otherCategory = Category.fromId(Category.DEFAULT_ID)!;
   const transactions: Transaction[] = (
     result.transactions as {
       date: string;
@@ -225,18 +276,18 @@ export async function parseWithLLM(
       type: string;
     }[]
   )
-    .map(
-      (t) => ({
-        id: uuidv4(),
-        date: new Date(t.date),
-        description: t.description,
-        amount: t.type === "expense" ? -Math.abs(t.amount) : Math.abs(t.amount),
-        category: "other",
-        type: t.type as "income" | "expense",
-        originalText: t.description,
-      }),
-    )
-    .filter((t: Transaction) => !isNaN(t.date.getTime()) && t.amount !== 0);
+    .map((t) => new Transaction(
+      uuidv4(),
+      new Date(t.date),
+      t.description,
+      Math.abs(t.amount),
+      t.type as TransactionType,
+      otherCategory,
+      undefined, // balance
+      undefined, // merchant
+      t.description, // originalText
+    ))
+    .filter((t) => !isNaN(t.date.getTime()) && t.amount !== 0);
 
   const currency: Currency = {
     code: result.currency?.code || "USD",
@@ -286,18 +337,20 @@ IMPORTANT RULES:
    - date: in YYYY-MM-DD format
    - description: the payee, merchant, or narration text
    - amount: the absolute numeric value (always positive)
-   - type: "expense" for debits/withdrawals/payments/money-out, "income" for credits/deposits/transfers-in/money-in
+   - type: "debit" for money going out (withdrawals/payments/expenses), "credit" for money coming in (deposits/transfers-in/refunds)
 5. Look for these clues to determine type:
-   - Separate "Debit" and "Credit" columns → debit = expense, credit = income
-   - Keywords: DEBIT/DR/WITHDRAWAL/PAID/SENT = expense; CREDIT/CR/DEPOSIT/RECEIVED/REFUND = income
-   - Negative amounts or amounts in parentheses = expense
-   - Column headers like "Money Out" vs "Money In"
+   - Separate "Debit" and "Credit" columns → debit column = "debit", credit column = "credit"
+   - Keywords indicating DEBIT: DEBIT, DR, WITHDRAWAL, PAID, SENT, OUT, PAYMENT TO, TRANSFER TO, NEFT-OUT, IMPS-OUT
+   - Keywords indicating CREDIT: CREDIT, CR, DEPOSIT, RECEIVED, IN, REFUND, TRANSFER FROM, NEFT-IN, IMPS-IN, UPI-CREDIT, CASH DEPOSIT
+   - Negative amounts or amounts in parentheses = debit
+   - Column headers like "Money Out" vs "Money In" → out = debit, in = credit
+   - TRANSFERS: "Transfer from X" or "Received from X" = credit; "Transfer to X" or "Sent to X" = debit
 6. Do NOT include opening/closing balance rows, interest calculations, or summary rows — only actual transactions.
 7. Do NOT hallucinate transactions. Only extract what is actually in the text.
 8. Output ONLY valid JSON — no markdown fences, no explanation, no extra text.
 
 REQUIRED JSON FORMAT:
-{"currency":{"code":"INR","symbol":"₹","name":"Indian Rupee"},"transactions":[{"date":"2024-01-15","description":"Amazon Purchase","amount":500.00,"type":"expense"},{"date":"2024-01-20","description":"Salary Credit","amount":50000.00,"type":"income"}]}
+{"currency":{"code":"INR","symbol":"₹","name":"Indian Rupee"},"transactions":[{"date":"2024-01-15","description":"Amazon Purchase","amount":500.00,"type":"debit"},{"date":"2024-01-20","description":"Salary Credit","amount":50000.00,"type":"credit"}]}
 
 BANK STATEMENT TEXT:
 ---
@@ -409,7 +462,7 @@ async function parseLLMDirect(
     (t: Record<string, unknown>) => {
       if (!t.date || !t.description || typeof t.amount !== "number")
         return false;
-      if (t.type !== "income" && t.type !== "expense") return false;
+      if (t.type !== TransactionType.Credit && t.type !== TransactionType.Debit) return false;
       if (t.amount === 0) return false;
 
       const key = `${t.date}|${String(t.description).substring(0, 30)}|${Math.abs(t.amount as number)}`;
@@ -421,10 +474,7 @@ async function parseLLMDirect(
 
   const normalizedTransactions = validTransactions.map((t) => ({
     ...t,
-    amount:
-      t.type === "expense"
-        ? -Math.abs(t.amount as number)
-        : Math.abs(t.amount as number),
+    amount: Math.abs(t.amount as number),
   }));
 
   return { currency, transactions: normalizedTransactions };
@@ -440,11 +490,11 @@ export function buildChatContext(
 ): string {
   if (transactions.length === 0) return "No transactions loaded.";
 
-  const income = transactions.filter((t) => t.type === "income");
-  const expenses = transactions.filter((t) => t.type === "expense");
+  const credits = transactions.filter((t) => t.isCredit);
+  const debits = transactions.filter((t) => t.isDebit);
 
-  const totalIncome = income.reduce((s, t) => s + Math.abs(t.amount), 0);
-  const totalExpenses = expenses.reduce((s, t) => s + Math.abs(t.amount), 0);
+  const totalCredits = credits.reduce((s, t) => s + t.amount, 0);
+  const totalDebits = debits.reduce((s, t) => s + t.amount, 0);
 
   const dates = transactions
     .map((t) => new Date(t.date))
@@ -462,16 +512,16 @@ export function buildChatContext(
 Period: ${fmt(dates[0])} to ${fmt(dates[dates.length - 1])}
 Currency: ${currency.name} (${currency.symbol}) [${currency.code}]
 Total Transactions: ${transactions.length}
-Total Income: ${currency.symbol}${totalIncome.toLocaleString()}
-Total Expenses: ${currency.symbol}${totalExpenses.toLocaleString()}
-Net: ${currency.symbol}${(totalIncome - totalExpenses).toLocaleString()}
+Total Credits: ${currency.symbol}${totalCredits.toLocaleString()}
+Total Debits: ${currency.symbol}${totalDebits.toLocaleString()}
+Net: ${currency.symbol}${(totalCredits - totalDebits).toLocaleString()}
 
 All Transactions:
 `;
 
   for (const t of transactions) {
-    const sign = t.type === "income" ? "+" : "-";
-    ctx += `${fmt(new Date(t.date))} | ${t.description} | ${sign}${currency.symbol}${Math.abs(t.amount).toLocaleString()} | ${t.type} | category: ${t.category}\n`;
+    const sign = t.isCredit ? "+" : "-";
+    ctx += `${fmt(new Date(t.date))} | ${t.description} | ${sign}${currency.symbol}${t.amount.toLocaleString()} | ${t.type} | category: ${t.category.id}\n`;
   }
 
   return ctx;
@@ -571,26 +621,66 @@ async function parseCCStatement(
 
         // Accumulate transactions
         if (Array.isArray(parsed.transactions)) {
-          const txns = parsed.transactions.map((t) => ({
-            id: uuidv4(),
-            date: new Date(t.date),
-            description: t.description,
-            amount: t.transactionType === 'payment' || t.transactionType === 'refund'
-              ? Math.abs(t.amount)
-              : -Math.abs(t.amount),
-            category: 'other',
-            type: (t.transactionType === 'payment' || t.transactionType === 'refund'
-              ? 'income'
-              : 'expense') as 'income' | 'expense',
-            originalText: t.description,
-            sourceType: 'credit_card' as const,
-            cardIssuer: ccResult?.statement.cardIssuer,
-            cardLastFour: ccResult?.statement.cardLastFour,
-            cardHolder: t.cardHolder,
-            currency: t.currency,
-            originalAmount: t.originalAmount,
-            transactionType: t.transactionType,
-          })).filter((t) => !isNaN(t.date.getTime()) && t.amount !== 0);
+          // Credit types: refund, cashback (money coming IN to the card)
+          // Handle variations: cashback, cash back, cash_back, cb
+          const isCreditType = (tType: string | undefined) => {
+            if (!tType) return false;
+            const normalized = tType.toLowerCase().replace(/[_\s]/g, '');
+            return normalized === 'refund' || normalized === 'cashback' || normalized === 'cb';
+          };
+
+          // Payment type: paying off credit card debt (should be transfer)
+          const isPaymentType = (tType: string | undefined) => {
+            if (!tType) return false;
+            const normalized = tType.toLowerCase().replace(/[_\s]/g, '');
+            return normalized === 'payment';
+          };
+
+          const otherCategory = Category.fromId(Category.DEFAULT_ID)!;
+          const billsCategory = Category.fromId('bills')!;
+
+          const txns = parsed.transactions.map((t) => {
+            // Determine direction based on transaction type
+            // credit = money coming in, debit = money going out
+            let txnType: TransactionType;
+
+            if (isPaymentType(t.transactionType)) {
+              // CC payment received = credit (money coming in to pay off debt)
+              txnType = TransactionType.Credit;
+            } else if (isCreditType(t.transactionType)) {
+              // Refund/cashback = credit (money returned)
+              txnType = TransactionType.Credit;
+            } else {
+              // Purchase/fee/interest = debit (charge added)
+              txnType = TransactionType.Debit;
+            }
+
+            // Determine category - CC payments go to bills
+            const category = isCCPayment(t.description) ? billsCategory : otherCategory;
+
+            return new Transaction(
+              uuidv4(),
+              new Date(t.date),
+              t.description,
+              Math.abs(t.amount),
+              txnType,
+              category,
+              undefined, // balance
+              undefined, // merchant
+              t.description, // originalText
+              undefined, // budgetMonth
+              undefined, // categoryConfidence
+              undefined, // needsReview
+              undefined, // categorizedBy
+              SourceType.CreditCard,
+              undefined, // statementId
+              ccResult?.statement.cardIssuer,
+              ccResult?.statement.cardLastFour,
+              t.cardHolder,
+              t.currency,
+              t.originalAmount,
+            );
+          }).filter((t) => !isNaN(t.date.getTime()) && t.amount !== 0);
 
           allTransactions.push(...txns);
         }
@@ -609,10 +699,11 @@ async function parseCCStatement(
     return true;
   });
 
-  // Classify CC payments as transfers
+  // Classify CC payments - update category to 'bills'
+  const billsCategory = Category.fromId('bills')!;
   for (const txn of uniqueTransactions) {
     if (isCCPayment(txn.description)) {
-      txn.type = 'transfer';
+      txn.category = billsCategory;
     }
   }
 
@@ -728,16 +819,23 @@ export async function parseWithLLMExtended(
       throw new Error("AI could not find any transactions in the document.");
     }
 
-    transactions = result.transactions.map((t) => ({
-      id: uuidv4(),
-      date: new Date(t.date as string),
-      description: t.description as string,
-      amount: t.amount as number,
-      category: 'other',
-      type: t.type as 'income' | 'expense',
-      originalText: t.description as string,
-      sourceType: 'bank' as const,
-    })).filter((t) => !isNaN(t.date.getTime()) && t.amount !== 0);
+    const otherCategory = Category.fromId(Category.DEFAULT_ID)!;
+    transactions = result.transactions.map((t) => new Transaction(
+      uuidv4(),
+      new Date(t.date as string),
+      t.description as string,
+      Math.abs(t.amount as number),
+      t.type as TransactionType,
+      otherCategory,
+      undefined, // balance
+      undefined, // merchant
+      t.description as string, // originalText
+      undefined, // budgetMonth
+      undefined, // categoryConfidence
+      undefined, // needsReview
+      undefined, // categorizedBy
+      SourceType.Bank,
+    )).filter((t) => !isNaN(t.date.getTime()) && t.amount !== 0);
 
     currency = {
       code: result.currency?.code || "INR",

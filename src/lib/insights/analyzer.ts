@@ -42,7 +42,7 @@ export function groupByMonth(transactions: Transaction[]): Record<string, { inco
       byMonth[monthKey] = { income: 0, expenses: 0 };
     }
 
-    if (txn.type === 'income') {
+    if (txn.isIncome) {
       byMonth[monthKey].income += txn.amount;
     } else {
       byMonth[monthKey].expenses += Math.abs(txn.amount);
@@ -59,7 +59,7 @@ export function groupByCategory(transactions: Transaction[]): Record<string, { t
   const byCategory: Record<string, { total: number; count: number }> = {};
 
   for (const txn of transactions) {
-    const category = txn.category || 'uncategorized';
+    const category = txn.category?.id || 'uncategorized';
 
     if (!byCategory[category]) {
       byCategory[category] = { total: 0, count: 0 };
@@ -88,10 +88,10 @@ export function groupByCategory(transactions: Transaction[]): Record<string, { t
 export function groupByCategoryByMonth(transactions: Transaction[]): Record<string, Record<string, number>> {
   const result: Record<string, Record<string, number>> = {};
 
-  const expenses = transactions.filter((t) => t.type === 'expense');
+  const expenses = transactions.filter((t) => t.isExpense);
 
   for (const txn of expenses) {
-    const category = txn.category || 'uncategorized';
+    const category = txn.category?.id || 'uncategorized';
     const monthKey = format(toDate(txn.date), 'yyyy-MM');
 
     if (!result[category]) {
@@ -122,7 +122,7 @@ export function groupByDayOfWeek(transactions: Transaction[]): Record<number, { 
     6: { total: 0, count: 0 },
   };
 
-  const expenses = transactions.filter((t) => t.type === 'expense');
+  const expenses = transactions.filter((t) => t.isExpense);
 
   for (const txn of expenses) {
     const dayOfWeek = toDate(txn.date).getDay();
@@ -138,7 +138,7 @@ export function groupByDayOfWeek(transactions: Transaction[]): Record<number, { 
  * Returns transactions with z-score > 2 (unusual spending).
  */
 export function detectAnomalies(transactions: Transaction[]): Array<{ description: string; amount: number; zScore: number }> {
-  const expenses = transactions.filter((t) => t.type === 'expense');
+  const expenses = transactions.filter((t) => t.isExpense);
 
   if (expenses.length < 5) {
     return [];
@@ -176,7 +176,7 @@ export function detectAnomalies(transactions: Transaction[]): Array<{ descriptio
  * Get top merchants by spending.
  */
 export function getTopMerchants(transactions: Transaction[], limit: number = 5): Array<{ name: string; total: number; count: number }> {
-  const expenses = transactions.filter((t) => t.type === 'expense');
+  const expenses = transactions.filter((t) => t.isExpense);
   const byMerchant: Record<string, { total: number; count: number }> = {};
 
   for (const txn of expenses) {
@@ -205,7 +205,7 @@ export function getTopCategories(
   byCategory: Record<string, { total: number; count: number; avg: number }>,
   limit: number = 5
 ): Array<{ category: string; total: number; percentage: number }> {
-  const expenses = transactions.filter((t) => t.type === 'expense');
+  const expenses = transactions.filter((t) => t.isExpense);
   const totalExpenses = expenses.reduce((sum, t) => sum + Math.abs(t.amount), 0);
 
   if (totalExpenses === 0) {
