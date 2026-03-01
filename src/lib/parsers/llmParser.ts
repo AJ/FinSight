@@ -4,6 +4,7 @@ import { useSettingsStore } from "@/lib/store/settingsStore";
 import { getBrowserClient } from "@/lib/llm/index";
 import { LLMProvider } from "@/lib/llm/types";
 import { debugLog } from "@/lib/utils/debug";
+import { getTransactionSignature } from "@/lib/transactionUtils";
 import {
   CreditCardStatement,
   TypeDetectionResult,
@@ -268,6 +269,7 @@ export async function parseWithLLM(
 
   // 3 — Convert to Transaction objects
   const otherCategory = Category.fromId(Category.DEFAULT_ID)!;
+  const seen = new Set<string>();
   const transactions: Transaction[] = (
     result.transactions as {
       date: string;
@@ -287,7 +289,16 @@ export async function parseWithLLM(
       undefined, // merchant
       t.description, // originalText
     ))
-    .filter((t) => !isNaN(t.date.getTime()) && t.amount !== 0);
+    .filter((t) => !isNaN(t.date.getTime()) && t.amount !== 0)
+    .filter((t) => {
+      const sig = getTransactionSignature(t);
+      if (seen.has(sig)) {
+        debugLog('[LLMParser] Duplicate transaction filtered:', t.description);
+        return false;
+      }
+      seen.add(sig);
+      return true;
+    });
 
   const currency: Currency = {
     code: result.currency?.code || "USD",
@@ -638,6 +649,7 @@ async function parseCCStatement(
 
           const otherCategory = Category.fromId(Category.DEFAULT_ID)!;
           const billsCategory = Category.fromId('bills')!;
+          const seenCC = new Set<string>();
 
           const txns = parsed.transactions.map((t) => {
             // Determine direction based on transaction type
@@ -680,7 +692,16 @@ async function parseCCStatement(
               t.currency,
               t.originalAmount,
             );
-          }).filter((t) => !isNaN(t.date.getTime()) && t.amount !== 0);
+          }).filter((t) => !isNaN(t.date.getTime()) && t.amount !== 0)
+            .filter((t) => {
+              const sig = getTransactionSignature(t);
+              if (seenCC.has(sig)) {
+                debugLog('[LLMParser] Duplicate CC transaction filtered:', t.description);
+                return false;
+              }
+              seenCC.add(sig);
+              return true;
+            });
 
           allTransactions.push(...txns);
         }
@@ -820,6 +841,7 @@ export async function parseWithLLMExtended(
     }
 
     const otherCategory = Category.fromId(Category.DEFAULT_ID)!;
+    const seenBank = new Set<string>();
     transactions = result.transactions.map((t) => new Transaction(
       uuidv4(),
       new Date(t.date as string),
@@ -835,7 +857,16 @@ export async function parseWithLLMExtended(
       undefined, // needsReview
       undefined, // categorizedBy
       SourceType.Bank,
-    )).filter((t) => !isNaN(t.date.getTime()) && t.amount !== 0);
+    )).filter((t) => !isNaN(t.date.getTime()) && t.amount !== 0)
+      .filter((t) => {
+        const sig = getTransactionSignature(t);
+        if (seenBank.has(sig)) {
+          debugLog('[LLMParser] Duplicate bank transaction filtered:', t.description);
+          return false;
+        }
+        seenBank.add(sig);
+        return true;
+      });
 
     currency = {
       code: result.currency?.code || "INR",

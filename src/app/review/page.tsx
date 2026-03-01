@@ -173,7 +173,7 @@ export default function ReviewPage() {
   };
 
   return (
-    <div className="min-h-screen bg-background">
+    <div className="min-h-screen bg-background w-full max-w-[100vw]">
       {/* Header */}
       <div className="border-b">
         <div className="container mx-auto px-4 py-6">
@@ -225,20 +225,20 @@ export default function ReviewPage() {
       </div>
 
       {/* Transactions Table */}
-      <div className="w-[95%] mx-auto pb-8">
-        <div className="rounded-lg border px-5">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead className="w-[120px]">Date</TableHead>
-                <TableHead className="max-w-[60%]">Description</TableHead>
-                <TableHead className="w-[150px]">Amount</TableHead>
-                <TableHead className="w-[120px]">Type</TableHead>
-                <TableHead className="w-[130px]">Balance</TableHead>
-                <TableHead className="w-[200px]">Category</TableHead>
-                <TableHead className="w-[100px]">Actions</TableHead>
-              </TableRow>
-            </TableHeader>
+      <div className="flex justify-center pb-8">
+        <div className="w-[80vw] mx-auto pb-8">
+          <div className="rounded-lg border">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead className="w-[8%] text-center">Date</TableHead>
+                  <TableHead>Description</TableHead>
+                  <TableHead className="w-[8%] text-right pr-2">Amount</TableHead>
+                  <TableHead className="w-[5%] text-center">Type</TableHead>
+                  <TableHead className="w-[15%] text-center">Category</TableHead>
+                  <TableHead className="w-[5%] text-center">Actions</TableHead>
+                </TableRow>
+              </TableHeader>
             <TableBody>
               {pendingTransactions.map((transaction) => {
                 const categoryDisplay = getCategoryDisplay(transaction.category.id);
@@ -247,7 +247,7 @@ export default function ReviewPage() {
                 return (
                   <TableRow key={transaction.id}>
                     {/* Date */}
-                    <TableCell className="font-mono text-sm">
+                    <TableCell className="font-mono text-sm text-center">
                       {isEditing ? (
                         <Input
                           type="date"
@@ -264,7 +264,7 @@ export default function ReviewPage() {
                     </TableCell>
 
                     {/* Description */}
-                    <TableCell className="max-w-[400px]">
+                    <TableCell>
                       {isEditing ? (
                         <Input
                           value={transaction.description}
@@ -292,7 +292,7 @@ export default function ReviewPage() {
                     </TableCell>
 
                     {/* Amount */}
-                    <TableCell>
+                    <TableCell className="text-right  pr-2">
                       {isEditing ? (
                         <Input
                           type="number"
@@ -310,18 +310,18 @@ export default function ReviewPage() {
                       ) : (
                         <span
                           className={`font-mono font-semibold ${
-                            transaction.isIncome
-                              ? "text-success"
-                              : "text-destructive"
+                            transaction.isCredit
+                              ? "text-emerald-600 dark:text-emerald-400"
+                              : "text-rose-600 dark:text-rose-400"
                           }`}
                         >
-                          {formatCurrency(transaction.amount, currency)}
+                          {formatCurrency(transaction.signedAmount, currency)}
                         </span>
                       )}
                     </TableCell>
 
                     {/* Type */}
-                    <TableCell>
+                    <TableCell className="text-center">
                       {isEditing ? (
                         <Select
                           value={transaction.type}
@@ -339,23 +339,15 @@ export default function ReviewPage() {
                         </Select>
                       ) : (
                         <Badge
-                          variant={
-                            transaction.isIncome
-                              ? "default"
-                              : "secondary"
+                          className={
+                            transaction.isCredit
+                              ? "bg-emerald-500 text-white hover:bg-emerald-600"
+                              : "bg-slate-500 text-white hover:bg-slate-600"
                           }
                         >
                           {transaction.isCredit ? "Credit" : "Debit"}
                         </Badge>
                       )}
-                    </TableCell>
-
-                    {/* Balance */}
-                    <TableCell className="font-mono text-sm text-muted-foreground">
-                      {transaction.balance !== undefined &&
-                      transaction.balance !== null
-                        ? formatCurrency(transaction.balance, currency, false)
-                        : "—"}
                     </TableCell>
 
                     {/* Category */}
@@ -427,6 +419,7 @@ export default function ReviewPage() {
               })}
             </TableBody>
           </Table>
+          </div>
         </div>
       </div>
     </div>

@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { Transaction, Category, TransactionJSON, CategorizedBy } from '@/types';
 import { useSettingsStore } from './settingsStore';
+import { deduplicateTransactions } from '@/lib/transactionUtils';
 import '@/lib/categorization/categories'; // Ensure categories are registered before store hydrates
 
 // Lazy import to avoid circular dependencies
@@ -117,9 +118,16 @@ export const useTransactionStore = create<TransactionStore>()(
       categorizeProgress: '',
 
       addTransactions: (txns) =>
-        set((state) => ({
-          transactions: [...state.transactions, ...rehydrateTransactions(txns)],
-        })),
+        set((state) => {
+          const rehydrated = rehydrateTransactions(txns);
+          const unique = deduplicateTransactions(rehydrated, state.transactions);
+          if (unique.length < rehydrated.length) {
+            console.log(`[Store] Filtered ${rehydrated.length - unique.length} duplicate transaction(s)`);
+          }
+          return {
+            transactions: [...state.transactions, ...unique],
+          };
+        }),
 
       updateTransaction: (id, updates) =>
         set((state) => ({
