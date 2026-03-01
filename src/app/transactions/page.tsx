@@ -31,6 +31,7 @@ import {
   AlertTriangle,
   Loader2,
   CreditCard,
+  Landmark,
   SlidersHorizontal,
   X,
   Undo2,
@@ -64,6 +65,7 @@ function TransactionsPageContent() {
   const [searchTerm, setSearchTerm] = useState("");
   const [filterCategory, setFilterCategory] = useState<string>("all");
   const [filterType, setFilterType] = useState<string>("all");
+  const [filterSource, setFilterSource] = useState<string>("all");
   const [filterAnomaly, setFilterAnomaly] = useState<boolean>(
     searchParams.get("anomaly") === "true"
   );
@@ -86,18 +88,20 @@ function TransactionsPageContent() {
         const matchesCategory =
           filterCategory === "all" || t.category.id === filterCategory;
         const matchesType = filterType === "all" || t.type === filterType;
+        const matchesSource =
+          filterSource === "all" || t.sourceType === filterSource;
         const matchesAnomaly =
           !filterAnomaly || (t.isAnomaly && !t.anomalyDismissed);
         const matchesNeedsReview = !filterNeedsReview || t.needsReview;
 
-        return matchesSearch && matchesCategory && matchesType && matchesAnomaly && matchesNeedsReview;
+        return matchesSearch && matchesCategory && matchesType && matchesSource && matchesAnomaly && matchesNeedsReview;
       })
       .sort((a, b) => {
         const dateA = a.date instanceof Date ? a.date : new Date(a.date);
         const dateB = b.date instanceof Date ? b.date : new Date(b.date);
         return dateB.getTime() - dateA.getTime();
       });
-  }, [transactions, searchTerm, filterCategory, filterType, filterAnomaly, filterNeedsReview]);
+  }, [transactions, searchTerm, filterCategory, filterType, filterSource, filterAnomaly, filterNeedsReview]);
 
   // Count active anomalies
   const activeAnomalyCount = useMemo(() => {
@@ -198,12 +202,13 @@ function TransactionsPageContent() {
     runCategorization(getTransactionsNeedingReview());
   };
 
-  const hasFilters = searchTerm || filterCategory !== "all" || filterType !== "all" || filterAnomaly || filterNeedsReview;
+  const hasFilters = searchTerm || filterCategory !== "all" || filterType !== "all" || filterSource !== "all" || filterAnomaly || filterNeedsReview;
 
   const clearFilters = () => {
     setSearchTerm("");
     setFilterCategory("all");
     setFilterType("all");
+    setFilterSource("all");
     setFilterAnomaly(false);
     setFilterNeedsReview(false);
   };
@@ -294,6 +299,28 @@ function TransactionsPageContent() {
               <SelectItem value="income">Income</SelectItem>
               <SelectItem value="expense">Expense</SelectItem>
               <SelectItem value="transfer">Transfer</SelectItem>
+            </SelectContent>
+          </Select>
+
+          {/* Source filter */}
+          <Select value={filterSource} onValueChange={setFilterSource}>
+            <SelectTrigger className="w-[140px] h-9 bg-background">
+              <SelectValue placeholder="Source" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All Sources</SelectItem>
+              <SelectItem value="bank">
+                <span className="flex items-center gap-2">
+                  <Landmark className="w-3 h-3" />
+                  Bank
+                </span>
+              </SelectItem>
+              <SelectItem value="credit_card">
+                <span className="flex items-center gap-2">
+                  <CreditCard className="w-3 h-3" />
+                  Credit Card
+                </span>
+              </SelectItem>
             </SelectContent>
           </Select>
 

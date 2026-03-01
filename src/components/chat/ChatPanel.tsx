@@ -118,6 +118,7 @@ export function ChatPanel() {
       if (!text || isStreaming) return;
 
       setInput('');
+      inputRef.current?.focus();
 
       const userMsg: ChatMessage = {
         id: crypto.randomUUID(),
