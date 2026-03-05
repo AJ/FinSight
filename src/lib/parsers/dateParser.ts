@@ -107,7 +107,7 @@ function expandYear(y: number): number {
  * Parse a single date string into a Date object.
  * Tries all known patterns. Returns null on failure.
  */
-export function parseDate(raw: string): Date | null {
+export function parseDate(raw: string, preferredOrder: "DMY" | "MDY" = "DMY"): Date | null {
   if (!raw) return null;
 
   // Clean up common noise
@@ -124,6 +124,47 @@ export function parseDate(raw: string): Date | null {
   );
   // Remove ordinal suffixes (1st, 2nd, 3rd, 4th...)
   cleaned = cleaned.replace(/(\d)(st|nd|rd|th)\b/gi, "$1");
+
+  // Disambiguate numeric dates like 01/02/2024 using preferred order.
+  const ambiguousNumeric = cleaned.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{2,4})$/);
+  if (ambiguousNumeric) {
+    const a = +ambiguousNumeric[1];
+    const b = +ambiguousNumeric[2];
+    const year = expandYear(+ambiguousNumeric[3]);
+
+    const makeDate = (day: number, monthOneBased: number): Date | null => {
+      const month = monthOneBased - 1;
+      if (month < 0 || month > 11) return null;
+      if (day < 1 || day > 31) return null;
+      if (year < 1990 || year > 2100) return null;
+
+      const d = new Date(year, month, day);
+      if (d.getFullYear() === year && d.getMonth() === month && d.getDate() === day) {
+        return d;
+      }
+      return null;
+    };
+
+    // Unambiguous first (e.g., 13/02/2024 or 02/13/2024)
+    if (a > 12 && b <= 12) {
+      const dmy = makeDate(a, b);
+      if (dmy) return dmy;
+    }
+    if (b > 12 && a <= 12) {
+      const mdy = makeDate(b, a);
+      if (mdy) return mdy;
+    }
+
+    // Ambiguous (both <= 12): apply preferred order.
+    if (a <= 12 && b <= 12) {
+      const preferred = preferredOrder === "MDY" ? makeDate(b, a) : makeDate(a, b);
+      if (preferred) return preferred;
+
+      // Fallback to the alternate interpretation if preferred failed validation.
+      const alternate = preferredOrder === "MDY" ? makeDate(a, b) : makeDate(b, a);
+      if (alternate) return alternate;
+    }
+  }
 
   for (const pattern of DATE_PATTERNS) {
     const match = cleaned.match(pattern.regex);
@@ -233,3 +274,4 @@ export function excelSerialToDate(serial: number): Date | null {
   if (d.getFullYear() < 1990 || d.getFullYear() > 2100) return null;
   return d;
 }
+

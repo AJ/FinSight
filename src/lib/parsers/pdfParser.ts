@@ -215,16 +215,15 @@ export async function parsePDF(
     const pdfjsLib = await import("pdfjs-dist");
 
     // DEBUG: Log pdfjs library info
-    console.log('[pdfParser] pdfjsLib version:', pdfjsLib.version);
-    console.log('[pdfParser] pdfjsLib.getDocument:', typeof pdfjsLib.getDocument);
-    console.log('[pdfParser] pdfjsLib keys:', Object.keys(pdfjsLib).slice(0, 20).join(', '));
+    debugLog('[pdfParser] pdfjsLib version:', pdfjsLib.version);
+    debugLog('[pdfParser] pdfjsLib.getDocument:', typeof pdfjsLib.getDocument);
+    debugLog('[pdfParser] pdfjsLib keys:', Object.keys(pdfjsLib).slice(0, 20).join(', '));
 
     pdfjsLib.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.mjs";
 
     const arrayBuffer = await file.arrayBuffer();
 
     // Build document options with optional password
-    console.log('[pdfParser] Received password parameter:', password ? `"${password}" (${password.length} chars)` : '(undefined/empty)');
     const docOptions: { data: ArrayBuffer; password?: string } = {
       data: arrayBuffer,
     };
@@ -896,8 +895,10 @@ function validateWithBalance(transactions: Transaction[]): Transaction[] {
         curr.cardIssuer,
         curr.cardLastFour,
         curr.cardHolder,
-        curr.currency,
+        curr.localCurrency,
+        curr.originalCurrency,
         curr.originalAmount,
+        curr.isInternational,
         curr.isAnomaly,
         curr.anomalyTypes,
         curr.anomalyDetails,
@@ -932,8 +933,10 @@ function validateWithBalance(transactions: Transaction[]): Transaction[] {
           result[i].cardIssuer,
           result[i].cardLastFour,
           result[i].cardHolder,
-          result[i].currency,
+          result[i].localCurrency,
+          result[i].originalCurrency,
           result[i].originalAmount,
+          result[i].isInternational,
           result[i].isAnomaly,
           result[i].anomalyTypes,
           result[i].anomalyDetails,

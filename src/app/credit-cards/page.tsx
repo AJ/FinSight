@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useSyncExternalStore } from "react";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { CreditCard, Upload } from "lucide-react";
@@ -9,14 +9,20 @@ import { useTransactionStore } from "@/lib/store/transactionStore";
 import { useUpload } from "@/components/layout/UploadContext";
 import {
   TrueBalanceWidget,
-  CreditUtilizationCard,
   DueDatesList,
-  CardComparisonTable,
   FinancialHealthScoreCard,
   PaymentBehaviorCard,
-  InternationalSpendingCard,
-  DimensionalAnalysisView,
-  PeriodComparisonView,
+  // New components
+  StatementHistoryCard,
+  InterestCalculatorCard,
+  PaymentStrategyCard,
+  DebtTrapWarningCard,
+  CashbackSummaryCard,
+  RewardPointsCard,
+  // Card display
+  CreditCardsGrid,
+  // Tabs
+  SpendingTab,
 } from "@/components/creditCard";
 
 export default function CreditCardsPage() {
@@ -24,11 +30,12 @@ export default function CreditCardsPage() {
   const getAllUniqueCards = useCreditCardStore((state) => state.getAllUniqueCards);
   const transactions = useTransactionStore((state) => state.transactions);
 
-  // Track hydration to prevent SSR mismatch
-  const [isHydrated, setIsHydrated] = useState(false);
-  useEffect(() => {
-    setIsHydrated(true);
-  }, []);
+  // Hydration-safe client gate without effect-driven setState.
+  const isHydrated = useSyncExternalStore(
+    () => () => {},
+    () => true,
+    () => false
+  );
 
   const uniqueCards = useMemo(() => getAllUniqueCards(), [getAllUniqueCards]);
   const hasCCData = uniqueCards.length > 0;
@@ -94,38 +101,55 @@ export default function CreditCardsPage() {
           </div>
         ) : (
           <>
-            {/* Summary Widgets */}
-            <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
-              <TrueBalanceWidget />
-              <FinancialHealthScoreCard />
-              <CreditUtilizationCard />
-              <DueDatesList />
+            {/* KPI Row - 3 compact cards */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+              <TrueBalanceWidget variant="total" compact />
+              <DueDatesList compact />
+              <FinancialHealthScoreCard compact />
+            </div>
+
+            {/* Your Cards - Section Label */}
+            <div className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wide mb-3">
+              Your Cards
+            </div>
+
+            {/* Cards Grid */}
+            <div className="mb-6">
+              <CreditCardsGrid />
             </div>
 
             {/* Tabbed Content */}
-            <Tabs defaultValue="comparison" className="space-y-6">
-              <TabsList className="grid w-full grid-cols-4 lg:w-auto lg:inline-grid">
-                <TabsTrigger value="comparison">Card Comparison</TabsTrigger>
-                <TabsTrigger value="analysis">Spending Analysis</TabsTrigger>
+            <Tabs defaultValue="spending" className="space-y-6">
+              <TabsList className="grid w-full grid-cols-5 lg:w-auto lg:inline-grid">
+                <TabsTrigger value="spending">Spending</TabsTrigger>
                 <TabsTrigger value="behavior">Payment Behavior</TabsTrigger>
-                <TabsTrigger value="period">Period Comparison</TabsTrigger>
+                <TabsTrigger value="insights">AI Insights</TabsTrigger>
+                <TabsTrigger value="strategy">Payment Strategy</TabsTrigger>
+                <TabsTrigger value="rewards">Rewards & Fees</TabsTrigger>
               </TabsList>
 
-              <TabsContent value="comparison" className="space-y-6">
-                <CardComparisonTable />
-                <InternationalSpendingCard />
-              </TabsContent>
-
-              <TabsContent value="analysis" className="space-y-6">
-                <DimensionalAnalysisView />
+              <TabsContent value="spending" className="space-y-6">
+                <SpendingTab />
               </TabsContent>
 
               <TabsContent value="behavior" className="space-y-6">
+                <FinancialHealthScoreCard />
                 <PaymentBehaviorCard />
               </TabsContent>
 
-              <TabsContent value="period" className="space-y-6">
-                <PeriodComparisonView />
+              <TabsContent value="insights" className="space-y-6">
+                <DebtTrapWarningCard />
+              </TabsContent>
+
+              <TabsContent value="strategy" className="space-y-6">
+                <InterestCalculatorCard />
+                <PaymentStrategyCard />
+                <StatementHistoryCard />
+              </TabsContent>
+
+              <TabsContent value="rewards" className="space-y-6">
+                <CashbackSummaryCard />
+                <RewardPointsCard />
               </TabsContent>
             </Tabs>
           </>
@@ -134,3 +158,4 @@ export default function CreditCardsPage() {
     </div>
   );
 }
+

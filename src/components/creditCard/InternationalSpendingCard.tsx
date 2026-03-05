@@ -28,9 +28,9 @@ export function InternationalSpendingCard() {
   const currency = useSettingsStore((state) => state.currency);
 
   const internationalData = useMemo(() => {
-    // Filter transactions with foreign currency
+    // Filter international transactions
     const intlTxns = transactions.filter(
-      (t) => t.currency && t.currency !== "INR" && t.sourceType === "credit_card"
+      (t) => t.isInternational && t.originalCurrency && t.sourceType === "credit_card"
     );
 
     if (intlTxns.length === 0) return null;
@@ -39,7 +39,7 @@ export function InternationalSpendingCard() {
     const currencyMap = new Map<string, CurrencyTotal>();
 
     for (const txn of intlTxns) {
-      const curr = txn.currency!;
+      const curr = txn.originalCurrency!.code;
       const existing = currencyMap.get(curr);
 
       if (existing) {

@@ -1,5 +1,9 @@
 import { Transaction } from '@/types';
 
+function escapeCsv(value: string): string {
+  return `"${value.replace(/"/g, '""')}"`;
+}
+
 export function exportTransactionsToCSV(transactions: Transaction[]): void {
   if (transactions.length === 0) {
     alert('No transactions to export!');
@@ -12,11 +16,11 @@ export function exportTransactionsToCSV(transactions: Transaction[]): void {
   // Create CSV rows
   const rows = transactions.map((t) => {
     const date = t.date.toISOString().split('T')[0];
-    const description = `"${t.description.replace(/"/g, '""')}"`;
+    const description = escapeCsv(t.description);
     const amount = t.amount.toString();
     const type = t.type;
-    const category = t.category;
-    const merchant = t.merchant ? `"${t.merchant.replace(/"/g, '""')}"` : '';
+    const category = escapeCsv(t.category.name);
+    const merchant = t.merchant ? escapeCsv(t.merchant) : '';
 
     return [date, description, amount, type, category, merchant].join(',');
   });

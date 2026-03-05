@@ -4,10 +4,16 @@ import { useMemo } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
 import { Separator } from "@/components/ui/separator";
+import { Badge } from "@/components/ui/badge";
 import { Activity, TrendingUp, TrendingDown, Percent, Clock, Wallet } from "lucide-react";
 import { useCreditCardStore } from "@/lib/store/creditCardStore";
 import { useTransactionStore } from "@/lib/store/transactionStore";
 import { FinancialHealthScore } from "@/types/creditCard";
+
+interface FinancialHealthScoreCardProps {
+  /** Compact mode hides component breakdown */
+  compact?: boolean;
+}
 
 /**
  * Financial Health Score Card
@@ -17,8 +23,10 @@ import { FinancialHealthScore } from "@/types/creditCard";
  * - Full payment rate (35% weight)
  * - On-time payment rate (15% weight)
  * - Spending trend (10% weight)
+ *
+ * In compact mode, shows a simplified KPI-style card.
  */
-export function FinancialHealthScoreCard() {
+export function FinancialHealthScoreCard({ compact = false }: FinancialHealthScoreCardProps) {
   const transactions = useTransactionStore((state) => state.transactions);
   const getFinancialHealthScore = useCreditCardStore((state) => state.getFinancialHealthScore);
   const getTotalIncome = useTransactionStore((state) => state.getTotalIncome);
@@ -57,6 +65,41 @@ export function FinancialHealthScoreCard() {
   const { score, components } = healthScore;
   const scoreColor = getScoreColor(score);
   const scoreLabel = getScoreLabel(score);
+
+  // Get badge variant based on score
+  const getBadgeVariant = (score: number): "default" | "secondary" | "outline" | "destructive" => {
+    if (score >= 80) return "default";
+    if (score >= 60) return "secondary";
+    if (score >= 40) return "outline";
+    return "destructive";
+  };
+
+  // Check for partial data indicator
+  const hasBankData = transactions.some((t) => t.sourceType !== "credit_card");
+  const partialInfo = !hasBankData ? "no bank stmt" : undefined;
+
+  // Compact mode: Simple KPI card
+  if (compact) {
+    return (
+      <Card>
+        <CardContent className="p-4">
+          <div className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wide">
+            Health Score
+          </div>
+          <div className="text-2xl font-bold mt-1.5">
+            <span className={scoreColor}>{score}</span>
+            <span className="text-sm text-muted-foreground font-normal">/100</span>
+          </div>
+          <div className="flex items-center gap-2 mt-1.5 flex-wrap">
+            <Badge variant={getBadgeVariant(score)}>{scoreLabel}</Badge>
+            {partialInfo && (
+              <span className="text-xs text-muted-foreground">{partialInfo}</span>
+            )}
+          </div>
+        </CardContent>
+      </Card>
+    );
+  }
 
   return (
     <Card>

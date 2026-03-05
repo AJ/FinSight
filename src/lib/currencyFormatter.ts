@@ -1,5 +1,8 @@
 import { Currency } from "@/types";
-import { getLocaleForCurrency } from "@/lib/parsers/currencyDetector";
+import { getLocaleForCurrency, getCurrencyByCode } from "@/lib/parsers/currencyDetector";
+
+// Re-export for convenience
+export { getCurrencyByCode };
 
 export function formatCurrency(
   amount: number,
@@ -32,7 +35,7 @@ export function formatCurrency(
   }
 
   if (!showSign) return formatted;
-  return amount < 0 ? `-${formatted}` : `+${formatted}`;
+  return amount < 0 ? `-${formatted}` : formatted;
 }
 
 export function parseCurrencyAmount(value: string): number {
@@ -40,4 +43,33 @@ export function parseCurrencyAmount(value: string): number {
   const cleaned = value.replace(/[^0-9.\-]/g, "");
   const parsed = parseFloat(cleaned);
   return isNaN(parsed) ? 0 : parsed;
+}
+
+/**
+ * Format an amount with explicit sign direction.
+ * Debit (money out) = negative sign, Credit (money in) = no sign.
+ */
+export function formatSignedAmount(
+  amount: number,
+  isDebit: boolean,
+  currency: Currency,
+): string {
+  const signedAmount = isDebit ? -Math.abs(amount) : Math.abs(amount);
+  return formatCurrency(signedAmount, currency, true);
+}
+
+/**
+ * Format a transaction's amount with sign derived from transaction type.
+ * Debit (money out) = negative sign, Credit (money in) = no sign.
+ */
+export function formatTransactionAmount(transaction: {
+  amount: number;
+  type: { isDebit: boolean };
+  localCurrency: Currency;
+}): string {
+  return formatSignedAmount(
+    transaction.amount,
+    transaction.type.isDebit,
+    transaction.localCurrency,
+  );
 }

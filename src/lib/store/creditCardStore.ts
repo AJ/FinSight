@@ -8,8 +8,29 @@ import {
   DueDateItem,
   UtilizationResult,
   CardComparison,
+  InterestProjection,
+  PaymentStrategy,
+  PaymentRecommendation,
+  DebtTrapAnalysis,
+  CashbackAnalysis,
+  RewardPointsAnalysis,
+  RewardPointsSummary,
 } from '@/types/creditCard';
 import { Transaction } from '@/types';
+import {
+  generateProjection,
+} from '@/lib/creditCard/interestCalculator';
+import {
+  calculateAvalanche,
+  calculateSnowball,
+} from '@/lib/creditCard/paymentStrategy';
+import {
+  calculateDebtTrapAnalysis,
+} from '@/lib/creditCard/revolvingDetector';
+import {
+  getAPRForIssuer,
+  getPointValueForIssuer,
+} from '@/lib/creditCard/constants';
 
 /** Ensure a value is a proper Date object */
 function toDate(v: Date | string): Date {
@@ -18,7 +39,7 @@ function toDate(v: Date | string): Date {
 
 /** Rehydrate date fields in a statement */
 function rehydrateStatement(stmt: CreditCardStatement): CreditCardStatement {
-  return {
+  const rehydrated: CreditCardStatement = {
     ...stmt,
     parseDate: toDate(stmt.parseDate),
     statementPeriod: {
@@ -27,7 +48,24 @@ function rehydrateStatement(stmt: CreditCardStatement): CreditCardStatement {
     },
     statementDate: toDate(stmt.statementDate),
     paymentDueDate: toDate(stmt.paymentDueDate),
+    // Ensure isPaid has a default value
+    isPaid: stmt.isPaid ?? false,
   };
+
+  // Rehydrate paidDate if present
+  if (stmt.paidDate) {
+    rehydrated.paidDate = toDate(stmt.paidDate);
+  }
+
+  // Rehydrate rewardPoints.expiringNextDate if present
+  if (stmt.rewardPoints?.expiringNextDate) {
+    rehydrated.rewardPoints = {
+      ...stmt.rewardPoints,
+      expiringNextDate: toDate(stmt.rewardPoints.expiringNextDate),
+    };
+  }
+
+  return rehydrated;
 }
 
 interface CreditCardStore {
@@ -38,6 +76,8 @@ interface CreditCardStore {
   addStatement: (statement: CreditCardStatement) => void;
   addStatements: (statements: CreditCardStatement[]) => void;
   clearStatements: () => void;
+  markStatementPaid: (statementId: string, paidDate: Date, paidAmount?: number) => void;
+  updateStatement: (statementId: string, updates: Partial<CreditCardStatement>) => void;
 
   // Queries
   getStatementsByCard: (cardIssuer: string, cardLastFour: string) => CreditCardStatement[];
@@ -51,6 +91,13 @@ interface CreditCardStore {
   getPaymentBehavior: (months: number) => PaymentBehavior;
   getFinancialHealthScore: (transactions: Transaction[], income: number, expenses: number) => FinancialHealthScore;
   getCardComparison: (transactions: Transaction[], periodStart: Date, periodEnd: Date) => CardComparison[];
+  // New queries
+  getUnpaidStatements: () => CreditCardStatement[];
+  getInterestProjections: () => InterestProjection[];
+  getPaymentRecommendations: (availableAmount: number, strategy: PaymentStrategy) => PaymentRecommendation;
+  getDebtTrapAnalysis: () => DebtTrapAnalysis;
+  getCashbackAnalysis: () => CashbackAnalysis;
+  getRewardPointsAnalysis: () => RewardPointsAnalysis;
 }
 
 export const useCreditCardStore = create<CreditCardStore>()(
@@ -171,20 +218,21 @@ export const useCreditCardStore = create<CreditCardStore>()(
 
         for (const card of uniqueCards) {
           const recent = get().getMostRecentStatement(card.cardIssuer, card.cardLastFour);
-          if (recent) {
-            const dueDate = toDate(recent.paymentDueDate);
-            const daysUntilDue = Math.ceil((dueDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
+          // Skip if no statement or already paid
+          if (!recent || recent.isPaid) continue;
 
-            dueDates.push({
-              cardIssuer: card.cardIssuer,
-              cardLastFour: card.cardLastFour,
-              dueDate,
-              totalDue: recent.totalDue,
-              minimumDue: recent.minimumDue,
-              daysUntilDue,
-              isOverdue: daysUntilDue < 0,
-            });
-          }
+          const dueDate = toDate(recent.paymentDueDate);
+          const daysUntilDue = Math.ceil((dueDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
+
+          dueDates.push({
+            cardIssuer: card.cardIssuer,
+            cardLastFour: card.cardLastFour,
+            dueDate,
+            totalDue: recent.totalDue,
+            minimumDue: recent.minimumDue,
+            daysUntilDue,
+            isOverdue: daysUntilDue < 0,
+          });
         }
 
         return dueDates.sort((a, b) => a.daysUntilDue - b.daysUntilDue);
@@ -318,6 +366,185 @@ export const useCreditCardStore = create<CreditCardStore>()(
             categoryBreakdown,
           };
         }).sort((a, b) => b.totalSpend - a.totalSpend);
+      },
+
+      // New actions
+      markStatementPaid: (statementId, paidDate, paidAmount) =>
+        set((state) => ({
+          statements: state.statements.map((s) =>
+            s.id === statementId
+              ? { ...s, isPaid: true, paidDate, paidAmount: paidAmount ?? s.totalDue }
+              : s
+          ),
+        })),
+
+      updateStatement: (statementId, updates) =>
+        set((state) => ({
+          statements: state.statements.map((s) =>
+            s.id === statementId ? { ...s, ...updates } : s
+          ),
+        })),
+
+      // New queries
+      getUnpaidStatements: () => {
+        const { statements } = get();
+        const now = new Date();
+        return statements
+          .filter((s) => !s.isPaid)
+          .filter((s) => toDate(s.paymentDueDate) >= now || toDate(s.paymentDueDate) < now)
+          .sort((a, b) => toDate(a.paymentDueDate).getTime() - toDate(b.paymentDueDate).getTime());
+      },
+
+      getInterestProjections: () => {
+        const uniqueCards = get().getAllUniqueCards();
+        const projections: InterestProjection[] = [];
+
+        for (const card of uniqueCards) {
+          const recent = get().getMostRecentStatement(card.cardIssuer, card.cardLastFour);
+          if (recent && recent.totalDue > 0) {
+            const apr = getAPRForIssuer(card.cardIssuer, recent.apr);
+            projections.push(generateProjection(recent, apr));
+          }
+        }
+
+        return projections;
+      },
+
+      getPaymentRecommendations: (availableAmount, strategy) => {
+        const uniqueCards = get().getAllUniqueCards();
+        const cardsWithDebt = uniqueCards
+          .map((card) => {
+            const recent = get().getMostRecentStatement(card.cardIssuer, card.cardLastFour);
+            return {
+              issuer: card.cardIssuer,
+              lastFour: card.cardLastFour,
+              balance: recent?.totalDue ?? 0,
+              apr: recent ? getAPRForIssuer(card.cardIssuer, recent.apr) : 0.408,
+            };
+          })
+          .filter((c) => c.balance > 0);
+
+        if (strategy === 'avalanche') {
+          return calculateAvalanche(cardsWithDebt, availableAmount);
+        }
+        return calculateSnowball(cardsWithDebt, availableAmount);
+      },
+
+      getDebtTrapAnalysis: () => {
+        const { statements } = get();
+        return calculateDebtTrapAnalysis(statements);
+      },
+
+      getCashbackAnalysis: () => {
+        const { statements } = get();
+        const byCard = new Map<string, { cashback: number; spend: number; periods: Map<string, number> }>();
+
+        for (const stmt of statements) {
+          const key = `${stmt.cardIssuer}-${stmt.cardLastFour}`;
+          if (!byCard.has(key)) {
+            byCard.set(key, { cashback: 0, spend: 0, periods: new Map() });
+          }
+          const card = byCard.get(key)!;
+          card.cashback += stmt.cashbackEarned ?? 0;
+          card.spend += stmt.purchasesAndCharges;
+
+          const period = `${toDate(stmt.statementDate).getFullYear()}-${String(toDate(stmt.statementDate).getMonth() + 1).padStart(2, '0')}`;
+          card.periods.set(period, (card.periods.get(period) ?? 0) + (stmt.cashbackEarned ?? 0));
+        }
+
+        const byCardArray = Array.from(byCard.entries()).map(([key, data]) => {
+          const [issuer, lastFour] = key.split('-');
+          return {
+            cardIssuer: issuer,
+            cardLastFour: lastFour,
+            totalCashback: data.cashback,
+            cashbackByPeriod: Array.from(data.periods.entries())
+              .map(([period, cashback]) => ({ period, cashback }))
+              .sort((a, b) => a.period.localeCompare(b.period)),
+            averageCashbackRate: data.spend > 0 ? data.cashback / data.spend : 0,
+          };
+        });
+
+        const totalCashbackAllCards = byCardArray.reduce((sum, c) => sum + c.totalCashback, 0);
+        const sortedByRate = [...byCardArray].sort((a, b) => b.averageCashbackRate - a.averageCashbackRate);
+        const bestCard = sortedByRate[0]?.averageCashbackRate > 0
+          ? { issuer: sortedByRate[0].cardIssuer, lastFour: sortedByRate[0].cardLastFour, rate: sortedByRate[0].averageCashbackRate }
+          : null;
+
+        return {
+          totalCashbackAllCards,
+          byCard: byCardArray,
+          bestCard,
+        };
+      },
+
+      getRewardPointsAnalysis: () => {
+        const { statements } = get();
+        const byCard = new Map<string, RewardPointsSummary>();
+        const expiringSoon: RewardPointsAnalysis['expiringSoon'] = [];
+
+        for (const stmt of statements) {
+          const key = `${stmt.cardIssuer}-${stmt.cardLastFour}`;
+
+          if (stmt.rewardPoints) {
+            if (!byCard.has(key)) {
+              byCard.set(key, {
+                cardIssuer: stmt.cardIssuer,
+                cardLastFour: stmt.cardLastFour,
+                currentBalance: 0,
+                totalEarned: 0,
+                totalRedeemed: 0,
+                totalExpired: 0,
+                earningRate: 0,
+                estimatedValue: 0,
+              });
+            }
+
+            const card = byCard.get(key)!;
+            card.currentBalance = stmt.rewardPoints.closingBalance;
+            card.totalEarned += stmt.rewardPoints.earned;
+            card.totalRedeemed += stmt.rewardPoints.redeemed;
+            card.totalExpired += stmt.rewardPoints.expired;
+
+            // Calculate earning rate
+            if (stmt.purchasesAndCharges > 0) {
+              const periodRate = stmt.rewardPoints.earned / (stmt.purchasesAndCharges / 100);
+              card.earningRate = (card.earningRate + periodRate) / 2;
+            }
+
+            // Track expiring points
+            if (stmt.rewardPoints.expiringNext && stmt.rewardPoints.expiringNextDate) {
+              const expDate = toDate(stmt.rewardPoints.expiringNextDate);
+              const thirtyDaysFromNow = new Date();
+              thirtyDaysFromNow.setDate(thirtyDaysFromNow.getDate() + 90);
+
+              if (expDate <= thirtyDaysFromNow) {
+                expiringSoon.push({
+                  cardIssuer: stmt.cardIssuer,
+                  cardLastFour: stmt.cardLastFour,
+                  points: stmt.rewardPoints.expiringNext,
+                  expiryDate: expDate,
+                });
+              }
+            }
+          }
+        }
+
+        // Calculate estimated values
+        for (const card of byCard.values()) {
+          card.estimatedValue = card.currentBalance * getPointValueForIssuer(card.cardIssuer);
+        }
+
+        const byCardArray = Array.from(byCard.values());
+        const totalPointsAllCards = byCardArray.reduce((sum, c) => sum + c.currentBalance, 0);
+        const estimatedTotalValue = byCardArray.reduce((sum, c) => sum + c.estimatedValue, 0);
+
+        return {
+          totalPointsAllCards,
+          estimatedTotalValue,
+          byCard: byCardArray,
+          expiringSoon: expiringSoon.sort((a, b) => a.expiryDate.getTime() - b.expiryDate.getTime()),
+        };
       },
     }),
     {

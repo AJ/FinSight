@@ -87,7 +87,11 @@ function TransactionsPageContent() {
           .includes(searchTerm.toLowerCase());
         const matchesCategory =
           filterCategory === "all" || t.category.id === filterCategory;
-        const matchesType = filterType === "all" || t.type === filterType;
+        const matchesType =
+          filterType === "all" ||
+          (filterType === "income" && t.isIncome) ||
+          (filterType === "expense" && t.isExpense) ||
+          (filterType === "transfer" && t.isExcluded);
         const matchesSource =
           filterSource === "all" || t.sourceType === filterSource;
         const matchesAnomaly =
@@ -495,9 +499,9 @@ function TransactionsPageContent() {
                               {transaction.cardIssuer}
                             </span>
                           )}
-                          {transaction.currency && transaction.currency !== "INR" && (
+                          {transaction.isInternational && transaction.originalCurrency && (
                             <span className="text-xs text-muted-foreground">
-                              {transaction.originalAmount?.toFixed(2)} {transaction.currency}
+                              {transaction.originalAmount?.toFixed(2)} {transaction.originalCurrency.code}
                             </span>
                           )}
                         </div>
@@ -640,3 +644,4 @@ export default function TransactionsPage() {
     </Suspense>
   );
 }
+

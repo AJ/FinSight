@@ -417,3 +417,15 @@ export function detectCurrencyFromHeaders(headers: string[]): Currency | null {
   const joined = headers.join(" ");
   return detectCurrencyFromText(joined);
 }
+
+/**
+ * Get Currency object from ISO currency code.
+ * Returns the Currency object or undefined if not found.
+ */
+export function getCurrencyByCode(code: string): Currency | undefined {
+  const entry = CURRENCY_DB.find((c) => c.code === code.toUpperCase());
+  if (entry) {
+    return { code: entry.code, symbol: entry.symbol, name: entry.name };
+  }
+  return undefined;
+}

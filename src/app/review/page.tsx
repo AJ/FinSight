@@ -22,7 +22,7 @@ import {
 } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
 import { ArrowLeft, CheckCircle, Edit2, Trash2, Download } from "lucide-react";
-import { Transaction, TransactionType, Category } from "@/types";
+import { Transaction, TransactionType, Category, CategorizedBy, SourceType } from "@/types";
 import { useTransactionStore } from "@/lib/store/transactionStore";
 import { useSettingsStore } from "@/lib/store/settingsStore";
 import { formatCurrency } from "@/lib/currencyFormatter";
@@ -53,14 +53,16 @@ function loadPendingTransactions(): Transaction[] {
         t.budgetMonth as string | undefined,
         t.categoryConfidence as number | undefined,
         t.needsReview as boolean | undefined,
-        t.categorizedBy as undefined,
-        t.sourceType as undefined,
+        t.categorizedBy as CategorizedBy | undefined,
+        t.sourceType as SourceType | undefined,
         t.statementId as string | undefined,
         t.cardIssuer as string | undefined,
         t.cardLastFour as string | undefined,
         t.cardHolder as string | undefined,
-        t.currency as string | undefined,
+        t.localCurrency as { code: string; symbol: string; name: string } | undefined,
+        t.originalCurrency as { code: string; symbol: string; name: string } | undefined,
         t.originalAmount as number | undefined,
+        t.isInternational as boolean | undefined,
         t.isAnomaly as boolean | undefined,
         t.anomalyTypes as undefined,
         t.anomalyDetails as undefined,
@@ -133,8 +135,10 @@ export default function ReviewPage() {
           t.cardIssuer,
           t.cardLastFour,
           t.cardHolder,
-          t.currency,
+          t.localCurrency,
+          t.originalCurrency,
           t.originalAmount,
+          t.isInternational,
           t.isAnomaly,
           t.anomalyTypes,
           t.anomalyDetails,

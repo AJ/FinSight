@@ -75,6 +75,7 @@ Guidelines:
     const transformed = new ReadableStream({
       async start(controller) {
         const reader = llmStream.getReader();
+        let ndjsonBuffer = '';
         try {
           while (true) {
             const { done, value } = await reader.read();
@@ -86,10 +87,13 @@ Guidelines:
               // LM Studio already returns SSE format, pass through
               controller.enqueue(value);
             } else {
-              // Ollama returns NDJSON, transform to SSE
-              const lines = text.split('\n').filter((l) => l.trim());
+              // Ollama returns NDJSON, transform complete lines to SSE and keep partials buffered.
+              ndjsonBuffer += text;
+              const lines = ndjsonBuffer.split('\n');
+              ndjsonBuffer = lines.pop() ?? '';
 
               for (const line of lines) {
+                if (!line.trim()) continue;
                 try {
                   const json = JSON.parse(line);
                   if (json.message?.content) {
@@ -106,6 +110,23 @@ Guidelines:
                   /* skip malformed lines */
                 }
               }
+            }
+          }
+
+          // Flush any trailing NDJSON frame after stream end.
+          if (llmProvider !== 'lmstudio' && ndjsonBuffer.trim()) {
+            try {
+              const json = JSON.parse(ndjsonBuffer.trim());
+              if (json.message?.content) {
+                controller.enqueue(
+                  encoder.encode(`data: ${JSON.stringify({ content: json.message.content })}\n\n`)
+                );
+              }
+              if (json.done) {
+                controller.enqueue(encoder.encode('data: [DONE]\n\n'));
+              }
+            } catch {
+              /* skip malformed trailing frame */
             }
           }
         } catch (err) {
@@ -133,3 +154,7 @@ Guidelines:
     );
   }
 }
+
+
+
+

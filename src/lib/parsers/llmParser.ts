@@ -20,6 +20,13 @@ import {
   getTextForDetection,
 } from "@/lib/llm/ccPrompts";
 import { createCreditCardStatement } from "@/lib/store/creditCardStore";
+import {
+  verifyStatement,
+  ParsedTransaction,
+  StatementMeta,
+  VerificationReport,
+} from "@/lib/verification/verificationEngine";
+import { getCurrencyByCode } from "@/lib/currencyFormatter";
 
 /* ============================================================
    LLM-POWERED PARSER
@@ -106,13 +113,13 @@ export async function extractTextFromPDF(
       updateCallback: (password: string) => void,
       reason: number
     ) => {
-      console.log('[onPassword] reason:', reason, 'password provided:', !!password);
+      debugLog('[onPassword] reason:', reason, 'password provided:', !!password);
       if (reason === 1) {
         // NEED_PASSWORD
         if (password) {
           // Password provided - use it immediately (synchronous)
           updateCallback(password);
-          console.log('[onPassword] updateCallback called');
+          debugLog('[onPassword] updateCallback called');
         } else {
           // No password - destroy task and reject
           loadingTask.destroy().finally(() => {
@@ -356,12 +363,16 @@ IMPORTANT RULES:
    - Negative amounts or amounts in parentheses = debit
    - Column headers like "Money Out" vs "Money In" → out = debit, in = credit
    - TRANSFERS: "Transfer from X" or "Received from X" = credit; "Transfer to X" or "Sent to X" = debit
-6. Do NOT include opening/closing balance rows, interest calculations, or summary rows — only actual transactions.
-7. Do NOT hallucinate transactions. Only extract what is actually in the text.
-8. Output ONLY valid JSON — no markdown fences, no explanation, no extra text.
+6. EXTRACT BALANCE INFORMATION:
+   - openingBalance: the account balance at the START of the statement period (look for "Opening Balance", "Brought Forward", "Balance B/F", starting balance)
+   - closingBalance: the account balance at the END of the statement period (look for "Closing Balance", "Carried Forward", "Balance C/F", ending balance)
+   - These are CRITICAL for verification - extract them as numbers (positive for credit balance, negative for overdraft)
+7. Do NOT include opening/closing balance rows as transactions — only actual transactions.
+8. Do NOT hallucinate transactions. Only extract what is actually in the text.
+9. Output ONLY valid JSON — no markdown fences, no explanation, no extra text.
 
 REQUIRED JSON FORMAT:
-{"currency":{"code":"INR","symbol":"₹","name":"Indian Rupee"},"transactions":[{"date":"2024-01-15","description":"Amazon Purchase","amount":500.00,"type":"debit"},{"date":"2024-01-20","description":"Salary Credit","amount":50000.00,"type":"credit"}]}
+{"currency":{"code":"INR","symbol":"₹","name":"Indian Rupee"},"openingBalance":50000.00,"closingBalance":45000.00,"transactions":[{"date":"2024-01-15","description":"Amazon Purchase","amount":500.00,"type":"debit"},{"date":"2024-01-20","description":"Salary Credit","amount":50000.00,"type":"credit"}]}
 
 BANK STATEMENT TEXT:
 ---
@@ -432,6 +443,8 @@ async function parseLLMDirect(
 ): Promise<{
   currency: Record<string, string> | null;
   transactions: Record<string, unknown>[];
+  openingBalance?: number;
+  closingBalance?: number;
 }> {
   const MAX_CHUNK_CHARS = 12000;
   const chunks = splitTextIntoChunks(text, MAX_CHUNK_CHARS);
@@ -439,6 +452,8 @@ async function parseLLMDirect(
 
   const allTransactions: Record<string, unknown>[] = [];
   let currency: Record<string, string> | null = null;
+  let openingBalance: number | undefined;
+  let closingBalance: number | undefined;
 
   for (let i = 0; i < chunks.length; i++) {
     const prompt =
@@ -464,6 +479,21 @@ async function parseLLMDirect(
       if (parsed.currency && !currency) {
         currency = parsed.currency as Record<string, string>;
       }
+      // Capture balances from any chunk:
+      // opening = first valid value seen, closing = last valid value seen.
+      if (
+        openingBalance === undefined &&
+        typeof parsed.openingBalance === 'number' &&
+        Number.isFinite(parsed.openingBalance)
+      ) {
+        openingBalance = parsed.openingBalance;
+      }
+      if (
+        typeof parsed.closingBalance === 'number' &&
+        Number.isFinite(parsed.closingBalance)
+      ) {
+        closingBalance = parsed.closingBalance;
+      }
     }
   }
 
@@ -488,7 +518,12 @@ async function parseLLMDirect(
     amount: Math.abs(t.amount as number),
   }));
 
-  return { currency, transactions: normalizedTransactions };
+  return {
+    currency,
+    transactions: normalizedTransactions,
+    openingBalance,
+    closingBalance,
+  };
 }
 
 /**
@@ -532,7 +567,7 @@ All Transactions:
 
   for (const t of transactions) {
     const sign = t.isCredit ? "+" : "-";
-    ctx += `${fmt(new Date(t.date))} | ${t.description} | ${sign}${currency.symbol}${t.amount.toLocaleString()} | ${t.type} | category: ${t.category.id}\n`;
+    ctx += `${fmt(new Date(t.date))} | ${t.description} | ${sign}${currency.symbol}${t.amount.toLocaleString()} | ${t.type} | source: ${t.sourceType} | category: ${t.category.id}\n`;
   }
 
   return ctx;
@@ -651,6 +686,9 @@ async function parseCCStatement(
           const billsCategory = Category.fromId('bills')!;
           const seenCC = new Set<string>();
 
+          // Local currency for this statement (default to INR for Indian cards)
+          const localCurrency = { code: 'INR', symbol: '₹', name: 'Indian Rupee' };
+
           const txns = parsed.transactions.map((t) => {
             // Determine direction based on transaction type
             // credit = money coming in, debit = money going out
@@ -669,6 +707,12 @@ async function parseCCStatement(
 
             // Determine category - CC payments go to bills
             const category = isCCPayment(t.description) ? billsCategory : otherCategory;
+
+            // Determine international transaction details
+            const isInternational = t.originalCurrencyCode !== undefined;
+            const originalCurrency = t.originalCurrencyCode
+              ? getCurrencyByCode(t.originalCurrencyCode)
+              : undefined;
 
             return new Transaction(
               uuidv4(),
@@ -689,8 +733,10 @@ async function parseCCStatement(
               ccResult?.statement.cardIssuer,
               ccResult?.statement.cardLastFour,
               t.cardHolder,
-              t.currency,
+              localCurrency,
+              originalCurrency,
               t.originalAmount,
+              isInternational,
             );
           }).filter((t) => !isNaN(t.date.getTime()) && t.amount !== 0)
             .filter((t) => {
@@ -755,6 +801,24 @@ async function parseCCStatement(
       lateFee: stmt.lateFee,
       otherCharges: stmt.otherCharges,
       addonCards: stmt.addonCards,
+      // New fields
+      isPaid: false,
+      apr: stmt.apr,
+      monthlyInterestRate: stmt.monthlyInterestRate,
+      minimumPaymentPercent: stmt.minimumPaymentPercent,
+      minimumPaymentFloor: stmt.minimumPaymentFloor,
+      cashbackEarned: stmt.cashbackEarned,
+      rewardPoints: stmt.rewardPoints ? {
+        openingBalance: stmt.rewardPoints.openingBalance,
+        earned: stmt.rewardPoints.earned,
+        redeemed: stmt.rewardPoints.redeemed,
+        expired: stmt.rewardPoints.expired,
+        closingBalance: stmt.rewardPoints.closingBalance,
+        expiringNext: stmt.rewardPoints.expiringNext,
+        expiringNextDate: stmt.rewardPoints.expiringNextDate
+          ? new Date(stmt.rewardPoints.expiringNextDate)
+          : undefined,
+      } : undefined,
     });
   }
 
@@ -770,6 +834,7 @@ export interface ExtendedParseResult {
   rawText: string;
   statementType: StatementType;
   ccStatement?: CreditCardStatement;
+  verification?: VerificationReport;
 }
 
 /**
@@ -811,6 +876,7 @@ export async function parseWithLLMExtended(
   let transactions: Transaction[];
   let currency: Currency;
   let ccStatement: CreditCardStatement | undefined;
+  let verificationReport: VerificationReport | undefined;
 
   if (typeResult.statementType === 'credit_card' && typeResult.confidence >= 0.5) {
     // Credit card statement
@@ -840,18 +906,62 @@ export async function parseWithLLMExtended(
       throw new Error("AI could not find any transactions in the document.");
     }
 
+    // Run verification engine
+    onProgress?.("Verifying parsed transactions...");
+    const parsedTransactions: ParsedTransaction[] = result.transactions.map((t) => ({
+      date: t.date as string,
+      description: t.description as string,
+      amount: Math.abs(t.amount as number),
+      type: (t.type === 'credit' ? 'credit' : 'debit') as 'credit' | 'debit',
+      currency: result.currency?.code,
+    }));
+
+    const meta: StatementMeta = {
+      openingBalance: result.openingBalance,
+      closingBalance: result.closingBalance,
+      currency: result.currency?.code,
+    };
+
+    verificationReport = verifyStatement(rawText, parsedTransactions, meta);
+
+    debugLog('[Verification] Report:', {
+      verified: verificationReport.verified.length,
+      rejected: verificationReport.rejected.length,
+      duplicates: verificationReport.duplicates.length,
+      reconciliation: verificationReport.reconciliation,
+      overallConfidence: verificationReport.overallConfidence,
+    });
+
+    // Enforce strict reconciliation only when both balances are present.
+    const hasBalanceInputs =
+      meta.openingBalance !== undefined && meta.closingBalance !== undefined;
+
+    if (!hasBalanceInputs) {
+      debugLog(
+        '[Verification] Skipping strict reconciliation (missing opening/closing balance)'
+      );
+    } else if (!verificationReport.reconciliation.passed) {
+      const diff = verificationReport.reconciliation.difference?.toFixed(2) ?? 'unknown';
+      throw new Error(
+        `Statement reconciliation failed. Opening + Credits - Debits ≠ Closing. Difference: ${diff}. ` +
+        `Please try re-uploading or check statement quality.`
+      );
+    }
+
     const otherCategory = Category.fromId(Category.DEFAULT_ID)!;
     const seenBank = new Set<string>();
-    transactions = result.transactions.map((t) => new Transaction(
+
+    // Use verified transactions only
+    transactions = verificationReport.verified.map((t) => new Transaction(
       uuidv4(),
-      new Date(t.date as string),
-      t.description as string,
-      Math.abs(t.amount as number),
+      new Date(t.date),
+      t.description,
+      Math.abs(t.amount),
       t.type as TransactionType,
       otherCategory,
       undefined, // balance
       undefined, // merchant
-      t.description as string, // originalText
+      t.description, // originalText
       undefined, // budgetMonth
       undefined, // categoryConfidence
       undefined, // needsReview
@@ -888,5 +998,7 @@ export async function parseWithLLMExtended(
     rawText,
     statementType: typeResult.statementType === 'credit_card' ? 'credit_card' : 'bank',
     ccStatement,
+    verification: verificationReport,
   };
 }
+

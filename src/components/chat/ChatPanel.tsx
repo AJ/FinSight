@@ -181,20 +181,26 @@ Guidelines:
         const reader = stream.getReader();
         const decoder = new TextDecoder();
         let full = '';
+        let buffer = '';
 
         while (true) {
           const { done, value } = await reader.read();
           if (done) break;
 
           const chunk = decoder.decode(value, { stream: true });
+          buffer += chunk;
 
           if (llmProvider === 'lmstudio') {
-            // LM Studio uses SSE format: "data: {...}\n\n"
-            const lines = chunk.split('\n').filter((l) => l.trim());
+            // LM Studio uses SSE format: process complete events and keep partials buffered.
+            const events = buffer.split('\n\n');
+            buffer = events.pop() ?? '';
 
-            for (const line of lines) {
-              if (line.startsWith('data: ')) {
-                const data = line.slice(6);
+            for (const event of events) {
+              const lines = event.split('\n').filter((l) => l.trim());
+              for (const line of lines) {
+                const trimmed = line.trim();
+                if (!trimmed.startsWith('data:')) continue;
+                const data = trimmed.slice(5).trimStart();
                 if (data === '[DONE]') continue;
 
                 try {
@@ -210,10 +216,12 @@ Guidelines:
               }
             }
           } else {
-            // Ollama uses NDJSON format: {"message":{"content":"..."}}
-            const lines = chunk.split('\n').filter((l) => l.trim());
+            // Ollama uses NDJSON format: process complete lines and keep partial line buffered.
+            const lines = buffer.split('\n');
+            buffer = lines.pop() ?? '';
 
             for (const line of lines) {
+              if (!line.trim()) continue;
               try {
                 const parsed = JSON.parse(line);
                 if (parsed.message?.content) {
@@ -223,6 +231,39 @@ Guidelines:
               } catch {
                 /* skip malformed lines */
               }
+            }
+          }
+        }
+
+        // Flush any remaining buffered frame at end-of-stream.
+        if (buffer.trim()) {
+          if (llmProvider === 'lmstudio') {
+            const lines = buffer.split('\n').filter((l) => l.trim());
+            for (const line of lines) {
+              const trimmed = line.trim();
+              if (!trimmed.startsWith('data:')) continue;
+              const data = trimmed.slice(5).trimStart();
+              if (data === '[DONE]') continue;
+              try {
+                const parsed = JSON.parse(data);
+                const content = parsed.choices?.[0]?.delta?.content;
+                if (content) {
+                  full += content;
+                  updateMessage(assistantId, full);
+                }
+              } catch {
+                /* skip malformed lines */
+              }
+            }
+          } else {
+            try {
+              const parsed = JSON.parse(buffer.trim());
+              if (parsed.message?.content) {
+                full += parsed.message.content;
+                updateMessage(assistantId, full);
+              }
+            } catch {
+              /* skip malformed trailing frame */
             }
           }
         }
@@ -488,3 +529,5 @@ Guidelines:
     </div>
   );
 }
+
+

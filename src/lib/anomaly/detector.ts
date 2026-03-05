@@ -91,6 +91,92 @@ function hoursBetween(d1: Date | string, d2: Date | string): number {
   return Math.abs(date1.getTime() - date2.getTime()) / msPerHour;
 }
 
+interface FrequencyCounts {
+  within24h: number;
+  within7d: number;
+}
+
+interface PrecomputedIndexes {
+  amountBuckets: Map<number, Transaction[]>;
+  frequencyCountsByTxnId: Map<string, FrequencyCounts>;
+}
+
+function toAmountBucketKey(amount: number): number {
+  return Math.round(Math.abs(amount) * 100);
+}
+
+function computeWindowCountsById(
+  entries: Array<{ id: string; time: number }>,
+  windowMs: number
+): Map<string, number> {
+  const counts = new Map<string, number>();
+  if (entries.length === 0) return counts;
+
+  let left = 0;
+  let right = -1;
+
+  for (let i = 0; i < entries.length; i++) {
+    const currentTime = entries[i].time;
+
+    if (right < i) right = i;
+
+    while (left < entries.length && currentTime - entries[left].time > windowMs) {
+      left++;
+    }
+
+    while (
+      right + 1 < entries.length &&
+      entries[right + 1].time - currentTime <= windowMs
+    ) {
+      right++;
+    }
+
+    counts.set(entries[i].id, right - left + 1);
+  }
+
+  return counts;
+}
+
+function buildIndexes(transactions: Transaction[]): PrecomputedIndexes {
+  const expenses = transactions.filter((t) => t.isExpense);
+
+  const amountBuckets = new Map<number, Transaction[]>();
+  for (const txn of expenses) {
+    const key = toAmountBucketKey(txn.amount);
+    const bucket = amountBuckets.get(key);
+    if (bucket) bucket.push(txn);
+    else amountBuckets.set(key, [txn]);
+  }
+
+  const byMerchant = new Map<string, Array<{ id: string; time: number }>>();
+  for (const txn of expenses) {
+    const merchant = extractMerchant(txn.description);
+    const time =
+      (txn.date instanceof Date ? txn.date : new Date(txn.date)).getTime();
+    const list = byMerchant.get(merchant);
+    if (list) list.push({ id: txn.id, time });
+    else byMerchant.set(merchant, [{ id: txn.id, time }]);
+  }
+
+  const frequencyCountsByTxnId = new Map<string, FrequencyCounts>();
+  const dayMs = 24 * 60 * 60 * 1000;
+
+  for (const merchantEntries of byMerchant.values()) {
+    merchantEntries.sort((a, b) => a.time - b.time);
+    const counts24h = computeWindowCountsById(merchantEntries, dayMs);
+    const counts7d = computeWindowCountsById(merchantEntries, 7 * dayMs);
+
+    for (const entry of merchantEntries) {
+      frequencyCountsByTxnId.set(entry.id, {
+        within24h: counts24h.get(entry.id) ?? 1,
+        within7d: counts7d.get(entry.id) ?? 1,
+      });
+    }
+  }
+
+  return { amountBuckets, frequencyCountsByTxnId };
+}
+
 /**
  * Extract merchant name from description (simplified)
  * Takes first few words, removes common prefixes
@@ -136,14 +222,24 @@ export function detectAmountAnomaly(
  */
 export function detectDuplicate(
   txn: Transaction,
-  allTransactions: Transaction[]
+  allTransactions: Transaction[],
+  indexes?: PrecomputedIndexes
 ): AnomalyDetail | null {
   if (!txn.isExpense) return null;
 
   const txnDate = txn.date instanceof Date ? txn.date : new Date(txn.date);
+  const amountKey = toAmountBucketKey(txn.amount);
 
-  const candidates = allTransactions.filter((t) => {
-    if (t.id === txn.id || !t.isExpense) return false;
+  const candidatePool = indexes
+    ? [
+        ...(indexes.amountBuckets.get(amountKey - 1) ?? []),
+        ...(indexes.amountBuckets.get(amountKey) ?? []),
+        ...(indexes.amountBuckets.get(amountKey + 1) ?? []),
+      ]
+    : allTransactions.filter((t) => t.isExpense);
+
+  const candidates = candidatePool.filter((t) => {
+    if (t.id === txn.id) return false;
 
     // Exact amount match (±$0.01)
     if (Math.abs(Math.abs(t.amount) - Math.abs(txn.amount)) > 0.01) return false;
@@ -169,9 +265,33 @@ export function detectDuplicate(
  */
 export function detectFrequencyAnomaly(
   txn: Transaction,
-  allTransactions: Transaction[]
+  allTransactions: Transaction[],
+  indexes?: PrecomputedIndexes
 ): AnomalyDetail | null {
   if (!txn.isExpense) return null;
+
+  if (indexes) {
+    const counts = indexes.frequencyCountsByTxnId.get(txn.id);
+    if (!counts) return null;
+
+    if (counts.within24h >= ANOMALY_CONFIG.frequencyThreshold24h) {
+      return {
+        type: 'unusual_frequency',
+        frequencyCount: counts.within24h,
+        frequencyPeriod: FrequencyPeriod.TwentyFourHours,
+      };
+    }
+
+    if (counts.within7d >= ANOMALY_CONFIG.frequencyThreshold7d) {
+      return {
+        type: 'unusual_frequency',
+        frequencyCount: counts.within7d,
+        frequencyPeriod: FrequencyPeriod.SevenDays,
+      };
+    }
+
+    return null;
+  }
 
   const txnDate = txn.date instanceof Date ? txn.date : new Date(txn.date);
   const merchant = extractMerchant(txn.description);
@@ -184,7 +304,6 @@ export function detectFrequencyAnomaly(
     return extractMerchant(t.description) === merchant;
   }).length;
 
-  // Check 24h threshold (include current transaction)
   if (count24h + 1 >= ANOMALY_CONFIG.frequencyThreshold24h) {
     return {
       type: 'unusual_frequency',
@@ -201,7 +320,6 @@ export function detectFrequencyAnomaly(
     return extractMerchant(t.description) === merchant;
   }).length;
 
-  // Check 7d threshold (include current transaction)
   if (count7d + 1 >= ANOMALY_CONFIG.frequencyThreshold7d) {
     return {
       type: 'unusual_frequency',
@@ -212,13 +330,13 @@ export function detectFrequencyAnomaly(
 
   return null;
 }
-
 /**
  * Run full anomaly detection on all transactions
  * Returns updated transactions with anomaly flags
  */
 export function detectAnomalies(transactions: Transaction[]): Transaction[] {
   const categoryStats = calculateCategoryStats(transactions);
+  const indexes = buildIndexes(transactions);
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const { Transaction: TxnClass } = require('@/types');
 
@@ -230,11 +348,11 @@ export function detectAnomalies(transactions: Transaction[]): Transaction[] {
     if (amountAnomaly) anomalies.push(amountAnomaly);
 
     // Check for duplicate
-    const duplicateAnomaly = detectDuplicate(txn, transactions);
+    const duplicateAnomaly = detectDuplicate(txn, transactions, indexes);
     if (duplicateAnomaly) anomalies.push(duplicateAnomaly);
 
     // Check for frequency anomaly
-    const frequencyAnomaly = detectFrequencyAnomaly(txn, transactions);
+    const frequencyAnomaly = detectFrequencyAnomaly(txn, transactions, indexes);
     if (frequencyAnomaly) anomalies.push(frequencyAnomaly);
 
     // No anomalies detected - clear flags
@@ -258,8 +376,10 @@ export function detectAnomalies(transactions: Transaction[]): Transaction[] {
         txn.cardIssuer,
         txn.cardLastFour,
         txn.cardHolder,
-        txn.currency,
+        txn.localCurrency,
+        txn.originalCurrency,
         txn.originalAmount,
+        txn.isInternational,
         undefined, // isAnomaly
         undefined, // anomalyTypes
         undefined, // anomalyDetails
@@ -303,8 +423,10 @@ export function detectAnomalies(transactions: Transaction[]): Transaction[] {
       txn.cardIssuer,
       txn.cardLastFour,
       txn.cardHolder,
-      txn.currency,
+      txn.localCurrency,
+      txn.originalCurrency,
       txn.originalAmount,
+      txn.isInternational,
       true, // isAnomaly
       anomalyTypes,
       anomalyDetails,
@@ -312,3 +434,4 @@ export function detectAnomalies(transactions: Transaction[]): Transaction[] {
     );
   });
 }
+

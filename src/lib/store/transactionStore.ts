@@ -40,8 +40,10 @@ function rehydrateTransactions(txns: Transaction[]): Transaction[] {
         t.cardIssuer,
         t.cardLastFour,
         t.cardHolder,
-        t.currency,
+        t.localCurrency,
+        t.originalCurrency,
         t.originalAmount,
+        t.isInternational,
         t.isAnomaly,
         t.anomalyTypes,
         t.anomalyDetails,
@@ -69,8 +71,10 @@ function rehydrateTransactions(txns: Transaction[]): Transaction[] {
       json.cardIssuer,
       json.cardLastFour,
       json.cardHolder,
-      json.currency,
+      json.localCurrency,
+      json.originalCurrency,
       json.originalAmount,
+      json.isInternational,
       json.isAnomaly,
       json.anomalyTypes,
       json.anomalyDetails,
@@ -133,6 +137,19 @@ export const useTransactionStore = create<TransactionStore>()(
         set((state) => ({
           transactions: state.transactions.map((txn) => {
             if (txn.id !== id) return txn;
+
+            // Accept either Category instance or category ID string from callers.
+            const resolvedCategory = (() => {
+              const incoming = updates.category as unknown;
+              if (typeof incoming === 'string') {
+                return Category.fromId(incoming) ?? txn.category;
+              }
+              if (incoming instanceof Category) {
+                return incoming;
+              }
+              return txn.category;
+            })();
+
             // Create new Transaction with updates
             return new Transaction(
               updates.id ?? txn.id,
@@ -140,7 +157,7 @@ export const useTransactionStore = create<TransactionStore>()(
               updates.description ?? txn.description,
               updates.amount ?? txn.amount,
               updates.type ?? txn.type,
-              updates.category ?? txn.category,
+              resolvedCategory,
               updates.balance ?? txn.balance,
               updates.merchant ?? txn.merchant,
               updates.originalText ?? txn.originalText,
@@ -153,8 +170,10 @@ export const useTransactionStore = create<TransactionStore>()(
               updates.cardIssuer ?? txn.cardIssuer,
               updates.cardLastFour ?? txn.cardLastFour,
               updates.cardHolder ?? txn.cardHolder,
-              updates.currency ?? txn.currency,
+              updates.localCurrency ?? txn.localCurrency,
+              updates.originalCurrency ?? txn.originalCurrency,
               updates.originalAmount ?? txn.originalAmount,
+              updates.isInternational ?? txn.isInternational,
               updates.isAnomaly ?? txn.isAnomaly,
               updates.anomalyTypes ?? txn.anomalyTypes,
               updates.anomalyDetails ?? txn.anomalyDetails,
@@ -244,8 +263,10 @@ export const useTransactionStore = create<TransactionStore>()(
               txn.cardIssuer,
               txn.cardLastFour,
               txn.cardHolder,
-              txn.currency,
+              txn.localCurrency,
+              txn.originalCurrency,
               txn.originalAmount,
+              txn.isInternational,
               txn.isAnomaly,
               txn.anomalyTypes,
               txn.anomalyDetails,
@@ -338,8 +359,10 @@ export const useTransactionStore = create<TransactionStore>()(
               txn.cardIssuer,
               txn.cardLastFour,
               txn.cardHolder,
-              txn.currency,
+              txn.localCurrency,
+              txn.originalCurrency,
               txn.originalAmount,
+              txn.isInternational,
               txn.isAnomaly,
               txn.anomalyTypes,
               txn.anomalyDetails,
@@ -371,8 +394,10 @@ export const useTransactionStore = create<TransactionStore>()(
               txn.cardIssuer,
               txn.cardLastFour,
               txn.cardHolder,
-              txn.currency,
+              txn.localCurrency,
+              txn.originalCurrency,
               txn.originalAmount,
+              txn.isInternational,
               txn.isAnomaly,
               txn.anomalyTypes,
               txn.anomalyDetails,
@@ -409,3 +434,4 @@ export const useTransactionStore = create<TransactionStore>()(
     }
   )
 );
+

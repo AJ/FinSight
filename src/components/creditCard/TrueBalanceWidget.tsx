@@ -9,20 +9,33 @@ import { useCreditCardStore } from "@/lib/store/creditCardStore";
 import { useSettingsStore } from "@/lib/store/settingsStore";
 import { formatCurrency } from "@/lib/currencyFormatter";
 
+interface TrueBalanceWidgetProps {
+  /** Variant: 'true' shows bank-CC, 'total' shows sum of CC dues only */
+  variant?: "true" | "total";
+  /** Compact mode hides breakdown details */
+  compact?: boolean;
+}
+
 /**
  * True Balance Widget
  *
  * Shows the real "available" balance by subtracting CC outstanding from bank balance.
  * This gives users an accurate picture of their financial position.
+ *
+ * In 'total' variant, shows just the sum of all CC outstanding amounts.
+ * In compact mode, shows a simplified KPI-style card.
  */
-export function TrueBalanceWidget() {
+export function TrueBalanceWidget({ variant = "true", compact = false }: TrueBalanceWidgetProps) {
   const transactions = useTransactionStore((state) => state.transactions);
   const getTotalOutstanding = useCreditCardStore((state) => state.getTotalOutstanding);
+  const getAllUniqueCards = useCreditCardStore((state) => state.getAllUniqueCards);
+  const getMostRecentStatement = useCreditCardStore((state) => state.getMostRecentStatement);
   const currency = useSettingsStore((state) => state.currency);
 
-  const { bankBalance, ccOutstanding, trueBalance } = useMemo(() => {
+  const ccOutstanding = getTotalOutstanding();
+
+  const { bankBalance, trueBalance, breakdown } = useMemo(() => {
     // Calculate bank balance from non-CC transactions
-    // Include income/expense but exclude transfers (CC payments)
     const bankIncome = transactions
       .filter((t) => t.sourceType !== "credit_card" && t.isIncome)
       .reduce((sum, t) => sum + t.amount, 0);
@@ -33,18 +46,89 @@ export function TrueBalanceWidget() {
 
     const bankBalance = bankIncome - bankExpenses;
 
-    // Get total CC outstanding from most recent statements
-    const ccOutstanding = getTotalOutstanding();
-
     // True balance = bank balance - CC outstanding
     const trueBalance = bankBalance - ccOutstanding;
 
-    return { bankBalance, ccOutstanding, trueBalance };
-  }, [transactions, getTotalOutstanding]);
+    // Get breakdown for total variant
+    const cards = getAllUniqueCards();
+    const breakdown: string[] = [];
+    for (const card of cards) {
+      const recent = getMostRecentStatement(card.cardIssuer, card.cardLastFour);
+      if (recent && recent.totalDue > 0) {
+        breakdown.push(formatCurrency(recent.totalDue, currency));
+      }
+    }
+
+    return { bankBalance, trueBalance, breakdown };
+  }, [transactions, ccOutstanding, currency, getAllUniqueCards, getMostRecentStatement]);
 
   // Don't show if no CC data
   if (ccOutstanding === 0) {
     return null;
+  }
+
+  // Compact mode: Simple KPI card
+  if (compact) {
+    if (variant === "total") {
+      return (
+        <Card>
+          <CardContent className="p-4">
+            <div className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wide">
+              Total Balance
+            </div>
+            <div className="text-2xl font-bold mt-1.5">
+              {formatCurrency(ccOutstanding, currency)}
+            </div>
+            {breakdown.length > 1 && (
+              <div className="text-xs text-muted-foreground mt-1">
+                {breakdown.join(" + ")}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      );
+    }
+
+    // True balance compact
+    return (
+      <Card>
+        <CardContent className="p-4">
+          <div className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wide">
+            True Balance
+          </div>
+          <div className={`text-2xl font-bold mt-1.5 ${trueBalance < 0 ? "text-destructive" : "text-success"}`}>
+            {formatCurrency(trueBalance, currency)}
+          </div>
+          <div className="text-xs text-muted-foreground mt-1">
+            Bank {formatCurrency(bankBalance, currency)} · CC -{formatCurrency(ccOutstanding, currency)}
+          </div>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  // Full mode
+  if (variant === "total") {
+    return (
+      <Card>
+        <CardHeader className="pb-2">
+          <CardTitle className="flex items-center gap-2 text-base">
+            <CreditCard className="w-4 h-4 text-primary" />
+            Total Balance
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <div className="font-mono text-2xl font-bold">
+            {formatCurrency(ccOutstanding, currency)}
+          </div>
+          {breakdown.length > 1 && (
+            <div className="text-sm text-muted-foreground">
+              {breakdown.join(" + ")}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+    );
   }
 
   return (

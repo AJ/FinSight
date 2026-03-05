@@ -2,6 +2,8 @@
  * Credit Card Bill Analyzer - Type Definitions
  */
 
+import { Currency } from '@/types';
+
 // Statement type enumeration
 export type StatementType = 'bank' | 'credit_card';
 
@@ -39,6 +41,27 @@ export interface CreditCardStatement {
   lateFee?: number;
   otherCharges?: number;
   addonCards?: AddonCard[];
+  // Payment status (Feature 1)
+  isPaid: boolean;
+  paidDate?: Date;
+  paidAmount?: number;
+  // APR & Min Payment (Feature 2)
+  apr?: number;
+  monthlyInterestRate?: number;
+  minimumPaymentPercent?: number;
+  minimumPaymentFloor?: number;
+  // Cashback (Feature 6)
+  cashbackEarned?: number;
+  // Reward Points (Feature 7)
+  rewardPoints?: {
+    openingBalance: number;
+    earned: number;
+    redeemed: number;
+    expired: number;
+    closingBalance: number;
+    expiringNext?: number;
+    expiringNextDate?: Date;
+  };
 }
 
 // Extension fields for Transaction interface (to be merged)
@@ -48,8 +71,10 @@ export interface CCTransactionExtension {
   cardIssuer?: string;
   cardLastFour?: string;
   cardHolder?: string;
-  currency?: string;
+  localCurrency?: Currency;
+  originalCurrency?: Currency;
   originalAmount?: number;
+  isInternational?: boolean;
   transactionType?: 'purchase' | 'payment' | 'refund' | 'interest' | 'fee';
 }
 
@@ -104,17 +129,32 @@ export interface CCExtractionResult {
     lateFee?: number;
     otherCharges?: number;
     addonCards?: AddonCard[];
+    // New extraction fields
+    apr?: number;
+    monthlyInterestRate?: number;
+    minimumPaymentPercent?: number;
+    minimumPaymentFloor?: number;
+    cashbackEarned?: number;
+    rewardPoints?: {
+      openingBalance: number;
+      earned: number;
+      redeemed: number;
+      expired: number;
+      closingBalance: number;
+      expiringNext?: number;
+      expiringNextDate?: string;
+    };
   };
   transactions: CCExtractedTransaction[];
 }
 
-// Transaction extracted from CC statement
+// Transaction extracted from CC statement (LLM output format)
 export interface CCExtractedTransaction {
   date: string;
   description: string;
   amount: number;
-  currency?: string;
-  originalAmount?: number;
+  originalCurrencyCode?: string;  // Currency code for international transactions (e.g., "USD")
+  originalAmount?: number;        // Amount in original currency
   transactionType?: 'purchase' | 'payment' | 'refund' | 'interest' | 'fee';
   cardHolder?: string;
 }
@@ -181,4 +221,125 @@ export interface ComparisonMetric {
   change: number;
   changePercent: number;
   direction: 'up' | 'down' | 'same';
+}
+
+// ─────────────────────────────────────────────────────────────
+// Feature 3: Interest Calculator Types
+// ─────────────────────────────────────────────────────────────
+
+export interface InterestProjection {
+  cardIssuer: string;
+  cardLastFour: string;
+  currentBalance: number;
+  apr: number;
+  minimumDue: number;
+  minimumPayoff: {
+    monthsToPayoff: number;
+    totalInterest: number;
+    totalPaid: number;
+  };
+  fixedPaymentScenarios: {
+    monthlyPayment: number;
+    monthsToPayoff: number;
+    totalInterest: number;
+    totalPaid: number;
+  }[];
+  fullPaySavings: number;
+}
+
+// ─────────────────────────────────────────────────────────────
+// Feature 4: Payment Strategy Types
+// ─────────────────────────────────────────────────────────────
+
+export type PaymentStrategy = 'avalanche' | 'snowball';
+
+export interface CardPaymentRecommendation {
+  cardIssuer: string;
+  cardLastFour: string;
+  balance: number;
+  apr: number;
+  recommendedPayment: number;
+  priority: number;
+  reason: string;
+}
+
+export interface PaymentRecommendation {
+  strategy: PaymentStrategy;
+  totalDebt: number;
+  availableForPayment: number;
+  cardPayments: CardPaymentRecommendation[];
+  projectedSavings: number;
+  debtFreeDate: Date;
+}
+
+// ─────────────────────────────────────────────────────────────
+// Feature 5: Revolving Balance Detection Types
+// ─────────────────────────────────────────────────────────────
+
+export interface RevolvingBalanceStatus {
+  cardIssuer: string;
+  cardLastFour: string;
+  isRevolving: boolean;
+  paysMinimumOnly: boolean;
+  balanceIncreasing: boolean;
+  averageBalance: number;
+  balanceTrend: number;
+  consecutiveMonthsRevolving: number;
+  riskLevel: 'none' | 'low' | 'medium' | 'high';
+  warnings: string[];
+}
+
+export interface DebtTrapAnalysis {
+  cards: RevolvingBalanceStatus[];
+  totalRevolvingDebt: number;
+  overallRiskLevel: 'none' | 'low' | 'medium' | 'high' | 'critical';
+  recommendations: string[];
+}
+
+// ─────────────────────────────────────────────────────────────
+// Feature 6: Cashback Tracking Types
+// ─────────────────────────────────────────────────────────────
+
+export interface CashbackSummary {
+  cardIssuer: string;
+  cardLastFour: string;
+  totalCashback: number;
+  cashbackByPeriod: {
+    period: string;
+    cashback: number;
+  }[];
+  averageCashbackRate: number;
+}
+
+export interface CashbackAnalysis {
+  totalCashbackAllCards: number;
+  byCard: CashbackSummary[];
+  bestCard: { issuer: string; lastFour: string; rate: number } | null;
+}
+
+// ─────────────────────────────────────────────────────────────
+// Feature 7: Reward Points Tracking Types
+// ─────────────────────────────────────────────────────────────
+
+export interface RewardPointsSummary {
+  cardIssuer: string;
+  cardLastFour: string;
+  currentBalance: number;
+  totalEarned: number;
+  totalRedeemed: number;
+  totalExpired: number;
+  earningRate: number;
+  estimatedValue: number;
+}
+
+export interface RewardPointsAnalysis {
+  totalPointsAllCards: number;
+  estimatedTotalValue: number;
+  byCard: RewardPointsSummary[];
+  expiringSoon: {
+    cardIssuer: string;
+    cardLastFour: string;
+    points: number;
+    expiryDate: Date;
+  }[];
 }

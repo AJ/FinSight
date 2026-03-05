@@ -4,6 +4,7 @@ import { CategorizedBy } from './CategorizedBy';
 import { SourceType } from './SourceType';
 import { AnomalyType } from './AnomalyType';
 import { AnomalyDetails } from './AnomalyDetails';
+import { Currency } from '@/types';
 
 /**
  * JSON representation of a Transaction for serialization.
@@ -28,8 +29,10 @@ export interface TransactionJSON {
   cardIssuer?: string;
   cardLastFour?: string;
   cardHolder?: string;
-  currency?: string;
-  originalAmount?: number;
+  localCurrency: Currency;       // Currency of the account/card (always set)
+  originalCurrency?: Currency;    // Original currency for international transactions
+  originalAmount?: number;        // Amount in original currency (for international)
+  isInternational: boolean;       // True if this is an international transaction
   isAnomaly?: boolean;
   anomalyTypes?: AnomalyType[];
   anomalyDetails?: AnomalyDetails;
@@ -60,8 +63,10 @@ export class Transaction {
     public readonly cardIssuer?: string,
     public readonly cardLastFour?: string,
     public readonly cardHolder?: string,
-    public readonly currency?: string,
+    public readonly localCurrency: Currency = { code: 'INR', symbol: '₹', name: 'Indian Rupee' },
+    public readonly originalCurrency?: Currency,
     public readonly originalAmount?: number,
+    public readonly isInternational: boolean = false,
     public isAnomaly?: boolean,
     public anomalyTypes?: AnomalyType[],
     public anomalyDetails?: AnomalyDetails,
@@ -112,8 +117,10 @@ export class Transaction {
       cardIssuer: this.cardIssuer,
       cardLastFour: this.cardLastFour,
       cardHolder: this.cardHolder,
-      currency: this.currency,
+      localCurrency: this.localCurrency,
+      originalCurrency: this.originalCurrency,
       originalAmount: this.originalAmount,
+      isInternational: this.isInternational,
       isAnomaly: this.isAnomaly,
       anomalyTypes: this.anomalyTypes,
       anomalyDetails: this.anomalyDetails,
@@ -144,8 +151,10 @@ export class Transaction {
       json.cardIssuer,
       json.cardLastFour,
       json.cardHolder,
-      json.currency,
+      json.localCurrency ?? { code: 'INR', symbol: '₹', name: 'Indian Rupee' },
+      json.originalCurrency,
       json.originalAmount,
+      json.isInternational ?? false,
       json.isAnomaly,
       json.anomalyTypes,
       json.anomalyDetails,

@@ -78,10 +78,10 @@ export function getGroupKey(txn: Transaction, dimension: GroupingDimension): str
       return ">10000";
 
     case "country":
-      if (!txn.currency || txn.currency === "INR") {
+      if (!txn.isInternational || !txn.originalCurrency) {
         return "India";
       }
-      return `International (${txn.currency})`;
+      return `International (${txn.originalCurrency.code})`;
 
     case "cardHolder":
       if (txn.cardHolder) {

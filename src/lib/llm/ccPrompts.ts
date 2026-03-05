@@ -73,13 +73,27 @@ STATEMENT-LEVEL INFORMATION TO EXTRACT:
 16. lateFee: Late payment fee (if any, else 0)
 17. otherCharges: Other fees/charges (if any, else 0)
 18. addonCards: Array of addon/supplementary card holders if present
+19. apr: Annual Percentage Rate as decimal (e.g., 0.408 for 40.8%). Look for "interest rate", "finance charges", "APR", "monthly interest rate"
+20. monthlyInterestRate: Monthly interest rate as decimal (e.g., 0.034 for 3.4%)
+21. minimumPaymentPercent: Minimum payment as % of outstanding (e.g., 0.05 for 5%). Look for "5% of outstanding"
+22. minimumPaymentFloor: Minimum absolute payment amount (e.g., 200 if "min ₹200")
+23. cashbackEarned: Total cashback earned this period. Look for "cashback earned", "cash back", "total cashback"
+24. rewardPoints: Object containing reward points summary:
+    - openingBalance: Points at start of statement period
+    - earned: Points earned this period
+    - redeemed: Points redeemed this period
+    - expired: Points that expired this period
+    - closingBalance: Current points balance
+    - expiringNext: Points expiring in next 30-90 days
+    - expiringNextDate: Expiry date for expiring points (YYYY-MM-DD)
+    Look for sections like "Reward Points Summary", "Points Balance", "Points Earned", "Points Redeemed"
 
 TRANSACTIONS TO EXTRACT:
 For each transaction, extract:
 - date: Transaction date in YYYY-MM-DD format
 - description: Merchant name or transaction description
 - amount: Amount in the card's native currency (e.g., INR for Indian cards)
-- currency: Original currency if international (e.g., "USD", "EUR"), omit if domestic
+- originalCurrencyCode: Original currency code if international (e.g., "USD", "EUR"), omit if domestic
 - originalAmount: Amount in original currency if international, omit if domestic
 - transactionType: One of "purchase", "payment", "refund", "cashback", "interest", "fee"
   - Use "cashback" for any cash back, cashback, cash_back, or CB entries (credits to the card)
@@ -144,7 +158,21 @@ Return ONLY valid JSON with this structure:
     "otherCharges": 0,
     "addonCards": [
       { "cardHolderName": "Jane Doe" }
-    ]
+    ],
+    "apr": 0.408,
+    "monthlyInterestRate": 0.034,
+    "minimumPaymentPercent": 0.05,
+    "minimumPaymentFloor": 200,
+    "cashbackEarned": 250.00,
+    "rewardPoints": {
+      "openingBalance": 5000,
+      "earned": 1250,
+      "redeemed": 0,
+      "expired": 0,
+      "closingBalance": 6250,
+      "expiringNext": 500,
+      "expiringNextDate": "2024-03-31"
+    }
   },
   "transactions": [
     {

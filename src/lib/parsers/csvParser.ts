@@ -79,7 +79,7 @@ export async function parseCSV(file: File): Promise<CSVParseResult> {
           // 4. Parse each row
           const transactions: Transaction[] = [];
           for (const row of rows) {
-            const txn = parseRow(row, mapping);
+            const txn = parseRow(row, mapping, dateOrder);
             if (txn) transactions.push(txn);
           }
 
@@ -277,11 +277,12 @@ function cleanAmount(raw: string | undefined | null): number | null {
 function parseRow(
   row: Record<string, string>,
   mapping: ColumnMapping,
+  dateOrder: "DMY" | "MDY",
 ): Transaction | null {
   try {
     // --- Date ---
     const rawDate = row[mapping.dateCol!];
-    const date = parseDate(rawDate);
+    const date = parseDate(rawDate, dateOrder);
     if (!date) return null;
 
     // --- Description ---
@@ -373,3 +374,5 @@ function parseRow(
     return null;
   }
 }
+
+

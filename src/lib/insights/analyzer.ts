@@ -6,6 +6,7 @@
 import { Transaction } from '@/types';
 import { TransactionAnalytics } from './types';
 import { format, subMonths } from 'date-fns';
+import { debugLog } from '@/lib/utils/debug';
 
 /**
  * Ensure a value is a proper Date object.
@@ -252,10 +253,10 @@ function calculateThreeMonthAvg(
  * Main function to compute all analytics from transactions.
  */
 export function getTransactionAnalytics(transactions: Transaction[]): TransactionAnalytics {
-  console.log('[Analyzer] Computing analytics for', transactions.length, 'transactions');
+  debugLog('[Analyzer] Computing analytics for', transactions.length, 'transactions');
 
   if (transactions.length === 0) {
-    console.log('[Analyzer] No transactions, returning empty analytics');
+    debugLog('[Analyzer] No transactions, returning empty analytics');
     return {
       byMonth: {},
       byCategory: {},
@@ -280,10 +281,10 @@ export function getTransactionAnalytics(transactions: Transaction[]): Transactio
   const topMerchants = getTopMerchants(transactions);
   const topCategories = getTopCategories(transactions, byCategory);
 
-  console.log('[Analyzer] byMonth:', byMonth);
-  console.log('[Analyzer] byCategory:', byCategory);
-  console.log('[Analyzer] topCategories:', topCategories);
-  console.log('[Analyzer] anomalies:', anomalies);
+  debugLog('[Analyzer] byMonth:', byMonth);
+  debugLog('[Analyzer] byCategory:', byCategory);
+  debugLog('[Analyzer] topCategories:', topCategories);
+  debugLog('[Analyzer] anomalies:', anomalies);
 
   const currentMonthKey = getCurrentMonthKey();
   const previousMonthKey = getPreviousMonthKey();

@@ -7,6 +7,7 @@ import { getBrowserClient } from '@/lib/llm/index';
 import { Insight, InsightsGenerationOptions, TransactionAnalytics } from './types';
 import { buildInsightsPrompt, parseInsightsResponse } from './prompts';
 import { Currency } from '@/types';
+import { debugLog, debugSensitive } from '@/lib/utils/debug';
 
 /**
  * Generate spending insights from transaction analytics.
@@ -19,14 +20,13 @@ export async function generateInsights(
   const currency: Currency = options.currency || { code: 'USD', symbol: '$', name: 'US Dollar' };
   const prompt = buildInsightsPrompt(analytics, currency);
 
-  console.log('[Insights] ========== GENERATION START ==========');
-  console.log('[Insights] Currency:', currency);
-  console.log('[Insights] Provider:', options.provider);
-  console.log('[Insights] Model:', options.model);
-  console.log('[Insights] Base URL:', options.baseUrl);
-  console.log('[Insights] PROMPT:');
-  console.log(prompt);
-  console.log('[Insights] =======================================');
+  debugLog('[Insights] ========== GENERATION START ==========');
+  debugLog('[Insights] Currency:', currency);
+  debugLog('[Insights] Provider:', options.provider);
+  debugLog('[Insights] Model:', options.model);
+  debugLog('[Insights] Base URL:', options.baseUrl);
+  debugSensitive('Insights PROMPT', prompt);
+  debugLog('[Insights] =======================================');
 
   try {
     // Use low temperature for consistent JSON output
@@ -37,16 +37,15 @@ export async function generateInsights(
       { temperature: 0.3 }
     );
 
-    console.log('[Insights] ========== LLM RESPONSE ==========');
-    console.log('[Insights] Response length:', response.length);
-    console.log('[Insights] Full response:');
-    console.log(response);
-    console.log('[Insights] ===================================');
+    debugLog('[Insights] ========== LLM RESPONSE ==========');
+    debugLog('[Insights] Response length:', response.length);
+    debugSensitive('Insights Full response', response);
+    debugLog('[Insights] ===================================');
 
     const parsed = parseInsightsResponse(response);
 
-    console.log('[Insights] Parsed insights count:', parsed.insights.length);
-    console.log('[Insights] Parsed insights:', JSON.stringify(parsed.insights, null, 2));
+    debugLog('[Insights] Parsed insights count:', parsed.insights.length);
+    debugSensitive('Insights Parsed', parsed.insights);
 
     // Add unique IDs to each insight
     const insights: Insight[] = parsed.insights.map((insight, index) => ({
@@ -59,7 +58,7 @@ export async function generateInsights(
       data: insight.data,
     }));
 
-    console.log('[Insights] ========== GENERATION COMPLETE ==========');
+    debugLog('[Insights] ========== GENERATION COMPLETE ==========');
 
     return insights;
   } catch (error) {
