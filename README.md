@@ -28,6 +28,32 @@ Upload a PDF / CSV / Excel bank or credit card statement → AI extracts and cat
 
 ## Quick Start
 
+### Prerequisites:
+#### 1. Node JS
+You need to have Node JS and NPM installed on your system. Download or install from the official [NodeJS](https://nodejs.org/) website
+```
+# Windows
+Download a pre-built binary from [NodeJS Downloads](https://nodejs.org/en/download)
+
+OR
+
+Install using Docker
+
+# macOS
+# Download and install Homebrew
+curl -o- https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh | bash
+# Download and install Node.js:
+brew install node@24
+
+# Linux
+# Download and install Homebrew
+  curl -o- https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh | bash
+# Download and install Node.js:
+  brew install node@24
+
+```
+
+#### 2. LLM Provider
 Choose your LLM provider: **Ollama** or **LM Studio**. Both work equally well.
 
 ---

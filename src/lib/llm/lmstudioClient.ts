@@ -51,7 +51,7 @@ export async function generate(
       stream: false,
       // Note: LM Studio doesn't support response_format: { type: "json_object" }
       // The prompt must instruct the model to return JSON
-      temperature: options?.temperature ?? 0.05,
+      temperature: options?.temperature ?? 0.7,
       max_tokens: options?.max_tokens ?? 4096,
     }),
   });
