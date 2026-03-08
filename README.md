@@ -154,8 +154,11 @@ Clone the repository
 # Install dependencies
 npm install
 
-# Start the dev server
-npm run dev
+# Build the code
+npm run build
+
+# Start the application server
+npm start
 ```
 
 Open [http://localhost:3000](http://localhost:3000).
