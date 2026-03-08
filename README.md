@@ -32,7 +32,7 @@ Upload a PDF / CSV / Excel bank or credit card statement → AI extracts and cat
 #### 1. Node JS
 You need to have Node JS and NPM installed on your system. Download or install from the official [NodeJS](https://nodejs.org/) website
 
-# Windows
+#### Windows
 ```
 Download a pre-built binary from [NodeJS Downloads](https://nodejs.org/en/download)
 
@@ -55,7 +55,7 @@ node -v # Should print "v24.14.0".
 npm -v # Should print "11.9.0".
 ```
 
-# macOS
+#### macOS
 ```
 # Download and install Homebrew
 curl -o- https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh | bash
@@ -63,7 +63,7 @@ curl -o- https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh | ba
 brew install node@24
 ```
 
-# Linux
+#### Linux
 ```
 # Download and install Homebrew
   curl -o- https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh | bash
@@ -142,6 +142,11 @@ Download from [lmstudio.ai](https://lmstudio.ai)
 > LM Studio runs on `http://localhost:1234` by default.
 
 ---
+### Run the App
+Clone the repository
+```
+> git clone https://github.com/AJ/FinSight.git
+```
 
 ### Run the App
 
@@ -223,11 +228,12 @@ Browser
 | `gemma3:4b` | 4B | Fast | Very good | Balanced |
 | `llama3.2:3b` | 3B | Fast | Very good | Balanced |
 | `mistral` | 7B | Medium | Excellent | Best accuracy |
-| `llama3.1:8b` | 8B | Medium | Excellent | Best accuracy |
+| `llama3.1:8b` | 8B | Medium | Excellent | Quick Parsing |
 | `qwen2.5:7b` | 7B | Medium | Excellent | Best accuracy |
 | `deepseek-r1:1.5b` | 1.5B | Fast | Good | Reasoning |
+| `qwen3-30b-a3b-thinking-2507` | 30B | Medium | Best Accuracy | Best Accuracy |
 
-> **Tip:** Start with a small model for speed. If parsing isn't accurate enough, switch to a larger one in Settings.
+> **Tip:** Start with a small model for speed. If parsing isn't accurate enough, switch to a larger model in the Settings or from the upload form.
 
 ---
 
@@ -323,6 +329,7 @@ http://<machine-ip>:11434
 ```bash
 # LM Studio doesn't have a command-line option for this.
 # Run it on the same machine as the app, or use a tunneling solution.
+# You can also access it on the LAN with the machine's IP address
 # In Settings, use:
 http://<machine-ip>:1234
 ```
@@ -341,7 +348,8 @@ http://<machine-ip>:1234
 By default, the app only logs debug information in development mode. To enable verbose logging (including LLM prompts and responses) in production:
 
 ```bash
-DEBUG_LOGGING=true npm run dev
+DEBUG_LOGGING=true
+npm run dev
 ```
 
 This is useful for:
