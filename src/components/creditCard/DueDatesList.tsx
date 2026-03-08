@@ -217,7 +217,7 @@ export function DueDatesList({ compact = false }: DueDatesListProps) {
           return (
             <div
               key={cardKey}
-              className={`flex items-center justify-between p-2 rounded-lg ${isPaid ? 'bg-green-50 dark:bg-green-950/20' : 'bg-muted/30'}`}
+              className={`flex items-center justify-between p-2 rounded-lg ${isPaid ? 'bg-muted/30 hover:bg-muted/50':'bg-muted/10 hover:bg-muted/20'}`}
             >
               <div className="space-y-0.5 flex-1">
                 <div className="flex items-center gap-2">
