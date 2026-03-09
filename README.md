@@ -26,6 +26,9 @@ Upload a PDF / CSV / Excel bank or credit card statement → AI extracts and cat
 
 ---
 
+## Installation & Demo Video
+[![Watch the Installation & Demo video](https://img.youtube.com/vi/VGUWBQ5t5dc/maxresdefault.jpg)](https://youtu.be/VGUWBQ5t5dc)
+
 ## Quick Start
 
 ### Prerequisites:
@@ -145,7 +148,7 @@ Download from [lmstudio.ai](https://lmstudio.ai)
 ### Run the App
 Clone the repository
 ```
-> git clone https://github.com/AJ/FinSight.git
+git clone https://github.com/AJ/FinSight.git
 ```
 
 ### Run the App
