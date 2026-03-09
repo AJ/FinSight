@@ -27,7 +27,7 @@ Upload a PDF / CSV / Excel bank or credit card statement → AI extracts and cat
 ---
 
 ## Installation & Demo Video
-[![Watch the Installation & Demo video](https://img.youtube.com/vi/VGUWBQ5t5dc/maxresdefault.jpg)](https://youtu.be/VGUWBQ5t5dc)
+[![Watch the Installation & Demo video](https://img.youtube.com/vi/VGUWBQ5t5dc/hqdefault.jpg)](https://youtu.be/VGUWBQ5t5dc)
 
 ## Quick Start
 
