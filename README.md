@@ -402,6 +402,20 @@ Not currently — this app is designed for local-only inference. No API keys nee
 **Q: My PDF isn't parsing correctly.**
 Try a larger model (e.g. `mistral` or `llama3.1:8b`). Scanned/image PDFs won't work — the PDF must contain selectable text.
 
+** Q: How fast is parsing? How long does it take?**
+Speed depends on two things: which model you use and your hardware.
+
+Model size: a 1B model parses a typical statement in seconds. A 7B model
+takes longer but gives better categorization accuracy. Start small and
+switch up if accuracy is insufficient.
+
+Hardware: a system with a dedicated GPU runs inference significantly faster than
+CPU-only. On Apple Silicon, GPU acceleration is automatic. On Linux/Windows,
+Ollama and LM Studio both support GPU offloading for NVIDIA/AMD cards.
+
+If parsing feels slow, try a smaller model before assuming it's a hardware
+problem.
+
 ---
 
 ## License
