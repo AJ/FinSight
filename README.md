@@ -26,8 +26,55 @@ Upload a PDF / CSV / Excel bank or credit card statement → AI extracts and cat
 
 ---
 
+## Installation & Demo Video
+[![Watch the Installation & Demo video](https://img.youtube.com/vi/VGUWBQ5t5dc/hqdefault.jpg)](https://youtu.be/VGUWBQ5t5dc)
+
 ## Quick Start
 
+### Prerequisites:
+#### 1. Node JS
+You need to have Node JS and NPM installed on your system. Download or install from the official [NodeJS](https://nodejs.org/) website
+
+#### Windows
+```
+Download a pre-built binary from [NodeJS Downloads](https://nodejs.org/en/download)
+
+OR
+
+Install using Docker
+# Docker has specific installation instructions for each operating system.
+# Please refer to the official documentation at https://docker.com/get-started/
+
+# Pull the Node.js Docker image:
+docker pull node:24-alpine
+
+# Create a Node.js container and start a Shell session:
+docker run -it --rm --entrypoint sh node:24-alpine
+
+# Verify the Node.js version:
+node -v # Should print "v24.14.0".
+
+# Verify npm version:
+npm -v # Should print "11.9.0".
+```
+
+#### macOS
+```
+# Download and install Homebrew
+curl -o- https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh | bash
+# Download and install Node.js:
+brew install node@24
+```
+
+#### Linux
+```
+# Download and install Homebrew
+  curl -o- https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh | bash
+# Download and install Node.js:
+  brew install node@24
+```
+
+#### 2. LLM Provider
 Choose your LLM provider: **Ollama** or **LM Studio**. Both work equally well.
 
 ---
@@ -98,6 +145,11 @@ Download from [lmstudio.ai](https://lmstudio.ai)
 > LM Studio runs on `http://localhost:1234` by default.
 
 ---
+### Run the App
+Clone the repository
+```
+git clone https://github.com/AJ/FinSight.git
+```
 
 ### Run the App
 
@@ -105,8 +157,11 @@ Download from [lmstudio.ai](https://lmstudio.ai)
 # Install dependencies
 npm install
 
-# Start the dev server
-npm run dev
+# Build the code
+npm run build
+
+# Start the application server
+npm start
 ```
 
 Open [http://localhost:3000](http://localhost:3000).
@@ -179,11 +234,12 @@ Browser
 | `gemma3:4b` | 4B | Fast | Very good | Balanced |
 | `llama3.2:3b` | 3B | Fast | Very good | Balanced |
 | `mistral` | 7B | Medium | Excellent | Best accuracy |
-| `llama3.1:8b` | 8B | Medium | Excellent | Best accuracy |
+| `llama3.1:8b` | 8B | Medium | Excellent | Quick Parsing |
 | `qwen2.5:7b` | 7B | Medium | Excellent | Best accuracy |
 | `deepseek-r1:1.5b` | 1.5B | Fast | Good | Reasoning |
+| `qwen3-30b-a3b-thinking-2507` | 30B | Medium | Best Accuracy | Best Accuracy |
 
-> **Tip:** Start with a small model for speed. If parsing isn't accurate enough, switch to a larger one in Settings.
+> **Tip:** Start with a small model for speed. If parsing isn't accurate enough, switch to a larger model in the Settings or from the upload form.
 
 ---
 
@@ -279,6 +335,7 @@ http://<machine-ip>:11434
 ```bash
 # LM Studio doesn't have a command-line option for this.
 # Run it on the same machine as the app, or use a tunneling solution.
+# You can also access it on the LAN with the machine's IP address
 # In Settings, use:
 http://<machine-ip>:1234
 ```
@@ -297,7 +354,8 @@ http://<machine-ip>:1234
 By default, the app only logs debug information in development mode. To enable verbose logging (including LLM prompts and responses) in production:
 
 ```bash
-DEBUG_LOGGING=true npm run dev
+DEBUG_LOGGING=true
+npm run dev
 ```
 
 This is useful for:
@@ -343,6 +401,20 @@ Not currently — this app is designed for local-only inference. No API keys nee
 
 **Q: My PDF isn't parsing correctly.**
 Try a larger model (e.g. `mistral` or `llama3.1:8b`). Scanned/image PDFs won't work — the PDF must contain selectable text.
+
+** Q: How fast is parsing? How long does it take?**
+Speed depends on two things: which model you use and your hardware.
+
+Model size: a 1B model parses a typical statement in seconds. A 7B model
+takes longer but gives better categorization accuracy. Start small and
+switch up if accuracy is insufficient.
+
+Hardware: a system with a dedicated GPU runs inference significantly faster than
+CPU-only. On Apple Silicon, GPU acceleration is automatic. On Linux/Windows,
+Ollama and LM Studio both support GPU offloading for NVIDIA/AMD cards.
+
+If parsing feels slow, try a smaller model before assuming it's a hardware
+problem.
 
 ---
 
