@@ -42,8 +42,7 @@ yarn-error.log*
 
 # screenshots
 screenshots/
-docs/
-claude.md
-CLAUDE.md
 mockups/
 .claude/
+public/2026*.png
+public/test*

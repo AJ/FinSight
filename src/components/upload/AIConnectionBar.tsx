@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
-import { useSettingsStore } from '@/lib/store/settingsStore';
+import { useSettingsStore, validateLlmServerUrl, isRemoteUrlConfirmed, confirmRemoteUrl } from '@/lib/store/settingsStore';
 import { checkLLMStatus } from '@/lib/parsers/llmParser';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -14,6 +14,14 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
+import {
   Loader2,
   CheckCircle2,
   XCircle,
@@ -21,6 +29,7 @@ import {
   Sparkles,
   ChevronDown,
   ChevronUp,
+  AlertTriangle,
 } from 'lucide-react';
 
 interface AIConnectionBarProps {
@@ -41,9 +50,35 @@ export function AIConnectionBar({ onStatusChange }: AIConnectionBarProps) {
   const [isConnecting, setIsConnecting] = useState(false);
   const [status, setStatus] = useState<'idle' | 'connected' | 'failed'>('idle');
   const [expanded, setExpanded] = useState(false);
+  
+  // Remote URL warning state
+  const [pendingUrl, setPendingUrl] = useState<string | null>(null);
+  const [showRemoteWarning, setShowRemoteWarning] = useState(false);
+  const [dontShowAgain, setDontShowAgain] = useState(false);
 
   const connect = useCallback(
     async (url: string, silent = false) => {
+      // Validate URL and check for remote connection
+      const validation = validateLlmServerUrl(url);
+      
+      if (!validation.valid) {
+        setStatus('failed');
+        setModels([]);
+        onStatusChange?.(false, null);
+        return;
+      }
+      
+      // Show warning for remote URLs (unless already confirmed or don't show again)
+      if (validation.isRemote && !silent) {
+        const alreadyConfirmed = isRemoteUrlConfirmed(url);
+        if (!alreadyConfirmed) {
+          setPendingUrl(url);
+          setShowRemoteWarning(true);
+          return;
+        }
+      }
+      
+      // Proceed with connection
       if (!silent) setIsConnecting(true);
 
       try {
@@ -72,6 +107,25 @@ export function AIConnectionBar({ onStatusChange }: AIConnectionBarProps) {
     },
     [llmModel, llmProvider, setOllamaUrl, setLLMModel, onStatusChange]
   );
+
+  // Handle remote URL warning confirmation
+  const handleRemoteUrlConfirm = useCallback(() => {
+    if (dontShowAgain && pendingUrl) {
+      confirmRemoteUrl(pendingUrl);
+    }
+    setShowRemoteWarning(false);
+    if (pendingUrl) {
+      connect(pendingUrl, false);
+      setPendingUrl(null);
+    }
+  }, [dontShowAgain, pendingUrl, connect]);
+
+  // Handle remote URL warning cancel
+  const handleRemoteUrlCancel = useCallback(() => {
+    setShowRemoteWarning(false);
+    setPendingUrl(null);
+    setStatus('idle');
+  }, []);
 
   // Auto-connect on mount
   useEffect(() => {
@@ -113,7 +167,7 @@ export function AIConnectionBar({ onStatusChange }: AIConnectionBarProps) {
         <Button
           variant="ghost"
           size="sm"
-          className="h-8 text-xs text-muted-foreground px-2"
+          className="h-8 px-2"
           onClick={() => setExpanded(true)}
         >
           <ChevronDown className="w-3 h-3" />
@@ -270,6 +324,55 @@ export function AIConnectionBar({ onStatusChange }: AIConnectionBarProps) {
           )}
         </div>
       )}
+
+      {/* Remote URL Warning Dialog */}
+      <Dialog open={showRemoteWarning} onOpenChange={setShowRemoteWarning}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <AlertTriangle className="w-5 h-5 text-amber-500" />
+              Remote Server Warning
+            </DialogTitle>
+            <DialogDescription className="space-y-3 pt-4">
+              <p>
+                You&apos;re connecting to a remote server (<strong>{pendingUrl}</strong>).
+              </p>
+              <p>
+                This is NOT your local machine. Your bank statements and financial data 
+                will be sent to this server for AI processing.
+              </p>
+              <p className="text-sm text-muted-foreground">
+                <strong>Only proceed if:</strong>
+              </p>
+              <ul className="list-disc list-inside text-sm space-y-1 text-muted-foreground">
+                <li>You own/control this server</li>
+                <li>You trust the server administrator</li>
+                <li>The server is on your private network</li>
+              </ul>
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="flex-col sm:flex-row gap-2">
+            <Button variant="outline" onClick={handleRemoteUrlCancel}>
+              Cancel
+            </Button>
+            <div className="flex items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                id="dont-show-again"
+                checked={dontShowAgain}
+                onChange={(e) => setDontShowAgain(e.target.checked)}
+                className="h-4 w-4"
+              />
+              <label htmlFor="dont-show-again" className="text-muted-foreground">
+                Don&apos;t show again for this URL
+              </label>
+            </div>
+            <Button onClick={handleRemoteUrlConfirm}>
+              I Trust This Server
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
