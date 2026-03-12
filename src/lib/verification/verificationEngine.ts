@@ -41,12 +41,6 @@ export interface VerificationReport {
     computedClosing?: number
     difference?: number
   }
-  balanceVerification?: {
-    passed: boolean
-    expectedNetChange: number
-    computedNetChange: number
-    difference: number
-  }
   overallConfidence: number
 }
 
@@ -93,45 +87,9 @@ export function verifyStatement(
 
   const reconciliation = reconcile(verified, meta)
 
-  // Balance verification: check if sum of transactions matches statement change
-  const hasBalanceInputs =
-    meta.openingBalance !== undefined && meta.closingBalance !== undefined;
-
-  let balanceVerification: VerificationReport['balanceVerification'];
-
-  if (hasBalanceInputs) {
-    const totalDebits = verified
-      .filter(t => t.type === 'debit')
-      .reduce((s, t) => s + t.amount, 0);
-
-    const totalCredits = verified
-      .filter(t => t.type === 'credit')
-      .reduce((s, t) => s + t.amount, 0);
-
-    const computedNetChange = totalCredits - totalDebits;
-    const expectedNetChange = (meta.closingBalance ?? 0) - (meta.openingBalance ?? 0);
-    const difference = Math.abs(computedNetChange - expectedNetChange);
-
-    balanceVerification = {
-      passed: difference <= AMOUNT_TOLERANCE,
-      expectedNetChange,
-      computedNetChange,
-      difference,
-    };
-
-    if (!balanceVerification.passed) {
-      console.warn(
-        `[Verification] Balance mismatch: expected ${expectedNetChange.toFixed(2)}, ` +
-        `computed ${computedNetChange.toFixed(2)}, difference ${difference.toFixed(2)}. ` +
-        `Transactions may be missing or incorrect.`
-      );
-    }
-  }
-
   const overallConfidence = computeOverallConfidence(
     verified,
-    reconciliation,
-    balanceVerification
+    reconciliation
   )
 
   return {
@@ -139,7 +97,6 @@ export function verifyStatement(
     rejected,
     duplicates,
     reconciliation,
-    balanceVerification,
     overallConfidence
   }
 }
@@ -342,8 +299,7 @@ function createSignature(
 
 function computeOverallConfidence(
   verified: VerifiedTransaction[],
-  reconciliation: { passed: boolean },
-  balanceVerification?: { passed: boolean }
+  reconciliation: { passed: boolean }
 ): number {
   if (verified.length === 0) return 0
 
@@ -352,8 +308,7 @@ function computeOverallConfidence(
     verified.length
 
   const reconciliationBonus = reconciliation.passed ? 15 : 0
-  const balanceBonus = balanceVerification?.passed ? 15 : 0
 
-  return Math.round(avg + reconciliationBonus + balanceBonus)
+  return Math.round(avg + reconciliationBonus)
 }
 
