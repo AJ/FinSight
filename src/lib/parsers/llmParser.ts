@@ -2,7 +2,7 @@ import { ParsedStatement, Currency, LLMStatus, TransactionType, Transaction, Cat
 import { v4 as uuidv4 } from "uuid";
 import { useSettingsStore } from "@/lib/store/settingsStore";
 import { getBrowserClient } from "@/lib/llm/index";
-import { LLMProvider } from "@/lib/llm/types";
+import { LLMProvider, LLMClient } from "@/lib/llm/types";
 import { debugLog } from "@/lib/utils/debug";
 import { getTransactionSignature } from "@/lib/transactionUtils";
 import {
@@ -27,6 +27,7 @@ import {
   VerificationReport,
 } from "@/lib/verification/verificationEngine";
 import { getCurrencyByCode } from "@/lib/currencyFormatter";
+import { normalizeTransactionType } from "@/lib/utils/transactionType";
 
 /* ============================================================
    LLM-POWERED PARSER
@@ -37,6 +38,32 @@ import { getCurrencyByCode } from "@/lib/currencyFormatter";
 function getLLMSettings() {
   const { llmProvider, ollamaUrl, llmModel } = useSettingsStore.getState();
   return { provider: llmProvider, url: ollamaUrl, model: llmModel };
+}
+
+async function resolveModelOrThrow(
+  provider: LLMProvider,
+  url: string,
+  configuredModel?: string,
+): Promise<string> {
+  const normalizedModel = typeof configuredModel === 'string'
+    ? configuredModel.trim()
+    : '';
+
+  if (normalizedModel.length > 0) {
+    return normalizedModel;
+  }
+
+  const client = getBrowserClient(provider);
+  const models = await client.listModels(url);
+  const selectedModel = models[0];
+
+  if (!selectedModel) {
+    throw new Error(
+      "No AI model available. Pull/load a model first (e.g. ollama pull llama3.2)",
+    );
+  }
+
+  return selectedModel;
 }
 
 /* ============================================================
@@ -252,19 +279,7 @@ export async function parseWithLLM(
   // 2 — Send to LLM (directly from browser)
   onProgress?.("AI is analysing your statement — this may take a moment...");
 
-  const client = getBrowserClient(provider);
-
-  // Resolve model
-  let selectedModel = model ?? undefined;
-  if (!selectedModel) {
-    const models = await client.listModels(url);
-    selectedModel = models[0];
-  }
-  if (!selectedModel) {
-    throw new Error(
-      "No AI model available. Pull a model first (e.g. ollama pull llama3.2)",
-    );
-  }
+  const selectedModel = await resolveModelOrThrow(provider, url, model ?? undefined);
 
   const result = await parseLLMDirect(provider, url, selectedModel, rawText);
 
@@ -337,8 +352,8 @@ export async function parseWithLLM(
  */
 export async function checkLLMStatus(url?: string, provider?: LLMProvider): Promise<LLMStatus> {
   const settings = useSettingsStore.getState();
-  const llmUrl = url ?? settings.ollamaUrl;
-  const llmProvider = provider ?? settings.llmProvider;
+  const llmUrl = url || settings.ollamaUrl;
+  const llmProvider = provider || settings.llmProvider;
   const client = getBrowserClient(llmProvider);
   return client.checkStatus(llmUrl);
 }
@@ -435,142 +450,185 @@ function safeParseJSON(raw: string): Record<string, unknown> | null {
   return null;
 }
 
-async function parseLLMDirect(
+export async function parseLLMDirect(
   provider: LLMProvider,
   baseUrl: string,
   model: string,
   text: string,
+  customClient?: LLMClient,
 ): Promise<{
   currency: Record<string, string> | null;
   transactions: Record<string, unknown>[];
   openingBalance?: number;
   closingBalance?: number;
+  failedChunks: string[];
 }> {
-  const MAX_CHUNK_CHARS = 12000;
-  const chunks = splitTextIntoChunks(text, MAX_CHUNK_CHARS);
-  const client = getBrowserClient(provider);
+  type NormalizedLLMTransaction = {
+    date: string;
+    description: string;
+    amount: number;
+    type: 'credit' | 'debit';
+  };
 
+  const parseAmount = (value: unknown): number | null => {
+    if (typeof value === 'number') {
+      return Number.isFinite(value) ? value : null;
+    }
+    if (typeof value === 'string') {
+      const cleaned = value.replace(/[^\d.-]/g, '');
+      if (!cleaned) return null;
+      const parsed = Number.parseFloat(cleaned);
+      return Number.isFinite(parsed) ? parsed : null;
+    }
+    return null;
+  };
+
+  const normalizeType = (value: unknown): 'credit' | 'debit' | null => {
+    // Use shared utility for standard types
+    const standard = normalizeTransactionType(value);
+    if (standard) return standard;
+    
+    // Also accept LLM-specific variations
+    const raw = String(value || '').trim().toLowerCase();
+    if (!raw) return null;
+
+    const compact = raw.replace(/[\s_-]+/g, '');
+    if (
+      compact === 'cr' ||
+      compact === 'in' ||
+      compact === 'moneyin' ||
+      compact === 'deposit' ||
+      compact === 'refund' ||
+      compact === 'received'
+    ) {
+      return 'credit';
+    }
+    if (
+      compact === 'dr' ||
+      compact === 'out' ||
+      compact === 'moneyout' ||
+      compact === 'withdrawal' ||
+      compact === 'payment' ||
+      compact === 'sent'
+    ) {
+      return 'debit';
+    }
+    return null;
+  };
+
+  const normalizeLLMTransaction = (rawTxn: Record<string, unknown>): NormalizedLLMTransaction | null => {
+    const date = String(rawTxn.date || '').trim();
+    const description = String(rawTxn.description || '').trim();
+    const amount = parseAmount(rawTxn.amount);
+    const type = normalizeType(rawTxn.type);
+
+    if (!date || !description || amount === null || type === null || amount === 0) {
+      return null;
+    }
+
+    return {
+      date,
+      description,
+      amount: Math.abs(amount),
+      type,
+    };
+  };
+
+  const client = customClient || getBrowserClient(provider);
   const allTransactions: Record<string, unknown>[] = [];
+  const failedChunks: string[] = [];
   let currency: Record<string, string> | null = null;
   let openingBalance: number | undefined;
   let closingBalance: number | undefined;
 
-  for (let i = 0; i < chunks.length; i++) {
+  // Recursive function to process text with retry
+  // If a chunk fails, it splits it in half and tries again (up to maxDepth)
+  const processChunkWithRetry = async (
+    chunkText: string,
+    depth: number = 0,
+    chunkId: string
+  ): Promise<void> => {
+    const MAX_DEPTH = 2; // Allow splitting once or twice (1/2, 1/4 size)
+
     const prompt =
-      PARSE_PROMPT + chunks[i] + "\n---\n\nExtract all transactions as JSON:";
+      PARSE_PROMPT + chunkText + "\n---\n\nExtract all transactions as JSON:";
 
-    let raw: string;
     try {
-      raw = await client.generate(baseUrl, model, prompt, {
-        temperature: 0.7,
+      const raw = await client.generate(baseUrl, model, prompt, {
+        temperature: 0.05,
       });
-    } catch (err) {
-      console.error(`[LLM Parse] Chunk ${i + 1} failed:`, err);
-      continue;
-    }
 
-    const parsed = safeParseJSON(raw);
-    if (parsed) {
-      if (Array.isArray(parsed.transactions)) {
-        allTransactions.push(
-          ...(parsed.transactions as Record<string, unknown>[]),
-        );
+      const parsed = safeParseJSON(raw);
+      if (parsed) {
+        if (Array.isArray(parsed.transactions)) {
+          allTransactions.push(
+            ...(parsed.transactions as Record<string, unknown>[]),
+          );
+        }
+        if (parsed.currency && !currency) {
+          currency = parsed.currency as Record<string, string>;
+        }
+        if (
+          openingBalance === undefined &&
+          typeof parsed.openingBalance === 'number' &&
+          Number.isFinite(parsed.openingBalance)
+        ) {
+          openingBalance = parsed.openingBalance;
+        }
+        if (
+          typeof parsed.closingBalance === 'number' &&
+          Number.isFinite(parsed.closingBalance)
+        ) {
+          closingBalance = parsed.closingBalance;
+        }
+      } else {
+        // Valid JSON not found, treat as failure to trigger retry/split
+        throw new Error("Invalid JSON response");
       }
-      if (parsed.currency && !currency) {
-        currency = parsed.currency as Record<string, string>;
-      }
-      // Capture balances from any chunk:
-      // opening = first valid value seen, closing = last valid value seen.
-      if (
-        openingBalance === undefined &&
-        typeof parsed.openingBalance === 'number' &&
-        Number.isFinite(parsed.openingBalance)
-      ) {
-        openingBalance = parsed.openingBalance;
-      }
-      if (
-        typeof parsed.closingBalance === 'number' &&
-        Number.isFinite(parsed.closingBalance)
-      ) {
-        closingBalance = parsed.closingBalance;
+    } catch (err) {
+      console.error(`[LLM Parse] Chunk ${chunkId} failed (depth ${depth}):`, err);
+
+      if (depth < MAX_DEPTH && chunkText.length > 500) {
+        debugLog(`[LLM Parse] Retrying chunk ${chunkId} by splitting...`);
+        // Split in half at the nearest newline
+        const midpoint = Math.floor(chunkText.length / 2);
+        const splitIndex = chunkText.lastIndexOf('\n', midpoint);
+        
+        // If no newline found near middle, force split
+        const safeSplitIndex = splitIndex > 0 ? splitIndex : midpoint;
+
+        const part1 = chunkText.slice(0, safeSplitIndex);
+        const part2 = chunkText.slice(safeSplitIndex);
+
+        await processChunkWithRetry(part1, depth + 1, `${chunkId}.1`);
+        await processChunkWithRetry(part2, depth + 1, `${chunkId}.2`);
+      } else {
+        // Final failure
+        debugLog(`[LLM Parse] Chunk ${chunkId} permanently failed.`);
+        failedChunks.push(`Chunk ${chunkId} (${chunkText.slice(0, 30)}...)`);
       }
     }
+  };
+
+  const MAX_CHUNK_CHARS = 12000;
+  const initialChunks = splitTextIntoChunks(text, MAX_CHUNK_CHARS);
+
+  for (let i = 0; i < initialChunks.length; i++) {
+    await processChunkWithRetry(initialChunks[i], 0, `${i + 1}`);
   }
 
-  // Deduplicate
-  const seen = new Set<string>();
-  const validTransactions = allTransactions.filter(
-    (t: Record<string, unknown>) => {
-      if (!t.date || !t.description || typeof t.amount !== "number")
-        return false;
-      if (t.type !== TransactionType.Credit && t.type !== TransactionType.Debit) return false;
-      if (t.amount === 0) return false;
-
-      const key = `${t.date}|${String(t.description).substring(0, 30)}|${Math.abs(t.amount as number)}`;
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    },
-  );
-
-  const normalizedTransactions = validTransactions.map((t) => ({
-    ...t,
-    amount: Math.abs(t.amount as number),
-  }));
+  // Keep all normalized rows for verification (do not pre-dedupe here).
+  const normalizedTransactions = allTransactions
+    .map((t) => normalizeLLMTransaction(t))
+    .filter((t): t is NormalizedLLMTransaction => t !== null);
 
   return {
     currency,
     transactions: normalizedTransactions,
     openingBalance,
     closingBalance,
+    failedChunks,
   };
-}
-
-/**
- * Build a context string from parsed transactions for use in chat.
- */
-export function buildChatContext(
-  transactions: Transaction[],
-  currency: Currency,
-  fileName: string,
-): string {
-  if (transactions.length === 0) return "No transactions loaded.";
-
-  const credits = transactions.filter((t) => t.isCredit);
-  const debits = transactions.filter((t) => t.isDebit);
-
-  const totalCredits = credits.reduce((s, t) => s + t.amount, 0);
-  const totalDebits = debits.reduce((s, t) => s + t.amount, 0);
-
-  const dates = transactions
-    .map((t) => new Date(t.date))
-    .filter((d) => !isNaN(d.getTime()))
-    .sort((a, b) => a.getTime() - b.getTime());
-
-  const fmt = (d: Date) =>
-    d.toLocaleDateString("en-GB", {
-      day: "2-digit",
-      month: "short",
-      year: "numeric",
-    });
-
-  let ctx = `Bank Statement — "${fileName}"
-Period: ${fmt(dates[0])} to ${fmt(dates[dates.length - 1])}
-Currency: ${currency.name} (${currency.symbol}) [${currency.code}]
-Total Transactions: ${transactions.length}
-Total Credits: ${currency.symbol}${totalCredits.toLocaleString()}
-Total Debits: ${currency.symbol}${totalDebits.toLocaleString()}
-Net: ${currency.symbol}${(totalCredits - totalDebits).toLocaleString()}
-
-All Transactions:
-`;
-
-  for (const t of transactions) {
-    const sign = t.isCredit ? "+" : "-";
-    ctx += `${fmt(new Date(t.date))} | ${t.description} | ${sign}${currency.symbol}${t.amount.toLocaleString()} | ${t.type} | source: ${t.sourceType} | category: ${t.category.id}\n`;
-  }
-
-  return ctx;
 }
 
 /* ── Two-Pass Parsing for Statement Type Detection ─────────── */
@@ -579,30 +637,188 @@ const CC_PAYMENT_KEYWORDS = [
   'credit card', 'cc payment', 'card payment',
   'hdfc card', 'icici card', 'axis card', 'sbi card',
   'kotak card', 'citi card', 'amex card', 'idfc card',
+  'tele-transfer', 'tele transfer', 'neft-hdfc', 'neft-icici',
+  'neft-axis', 'neft-sbi', 'neft-kotak', 'billdesk*hdfc',
+  'billdesk*icici', 'billdesk*axis', 'autopay cc',
 ];
 
 const CC_ISSUERS = [
   'hdfc', 'icici', 'axis', 'sbi', 'kotak', 'citi',
   'amex', 'idfc', 'au bank', 'bob', 'canara', 'pnb',
+  'hsbc', 'standard chartered', 'scb', 'rbl', 'yes bank',
 ];
 
 /**
  * Detect if a transaction is a credit card payment
  */
-function isCCPayment(description: string): boolean {
+export function isCCPayment(description: string, type?: TransactionType): boolean {
   const lower = description.toLowerCase();
+
+  // Special handling for BillDesk: 
+  // - If it's a CREDIT (money in), it's likely a CC bill payment being reflected.
+  // - If it's a DEBIT (money out) WITHOUT a specific bank name, it could be a utility bill.
+  if (lower.includes('billdesk')) {
+    if (type === TransactionType.Credit) return true;
+    // For debits, only count as CC payment if it mentions an issuer
+    if (CC_ISSUERS.some(issuer => lower.includes(issuer))) return true;
+    return false;
+  }
 
   // Check for CC payment keywords
   if (CC_PAYMENT_KEYWORDS.some(kw => lower.includes(kw))) {
     return true;
   }
 
-  // Check for issuer + card pattern
-  if (CC_ISSUERS.some(issuer => lower.includes(issuer)) && lower.includes('card')) {
+  // Flexible matches
+  if (lower.includes('autopay') && lower.includes('cc')) {
     return true;
   }
 
+  // Check for issuer + card/payment pattern
+  if (CC_ISSUERS.some(issuer => lower.includes(issuer))) {
+    if (lower.includes('card') || lower.includes('payment') || lower.includes('bill')) {
+      return true;
+    }
+  }
+
   return false;
+}
+
+function normalizeCCDescription(description: string): string {
+  return description
+    .toLowerCase()
+    .replace(/[^\w\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function getCCWeakKey(txn: Transaction): string {
+  const dateKey = txn.date.toISOString().split('T')[0];
+  const descKey = normalizeCCDescription(txn.description).slice(0, 40);
+  const amountKey = Math.abs(txn.amount).toFixed(2);
+  return `${dateKey}|${amountKey}|${txn.type}|${descKey}`;
+}
+
+function getAmountSearchVariants(amount: number): string[] {
+  const absAmount = Math.abs(amount);
+  const variants = [
+    absAmount.toFixed(2),
+    absAmount.toFixed(0),
+    absAmount.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
+    absAmount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
+    absAmount.toLocaleString('en-IN', { maximumFractionDigits: 0 }),
+    absAmount.toLocaleString('en-US', { maximumFractionDigits: 0 }),
+  ];
+  return [...new Set(variants.filter((v) => v.length > 0))];
+}
+
+function getDateSearchVariants(date: Date): string[] {
+  const d = date.getDate().toString().padStart(2, '0');
+  const m = (date.getMonth() + 1).toString().padStart(2, '0');
+  const y = date.getFullYear().toString();
+
+  const variants = [
+    `${y}-${m}-${d}`,
+    `${d}-${m}-${y}`,
+    `${d}/${m}/${y}`,
+    `${m}/${d}/${y}`,
+    `${d}.${m}.${y}`,
+  ];
+
+  return [...new Set(variants)];
+}
+
+function getDescriptionAnchorToken(description: string): string {
+  const tokens = normalizeCCDescription(description)
+    .split(' ')
+    .filter((t) => t.length >= 4);
+  return tokens[0] || '';
+}
+
+function findCCEvidenceAnchors(rawText: string, txn: Transaction): number[] {
+  const amountVariants = getAmountSearchVariants(txn.amount);
+  const dateVariants = getDateSearchVariants(txn.date);
+  const descToken = getDescriptionAnchorToken(txn.description);
+  const anchors: number[] = [];
+
+  const lowerRaw = rawText.toLowerCase();
+
+  for (const amount of amountVariants) {
+    let searchFrom = 0;
+
+    while (searchFrom < rawText.length) {
+      const idx = rawText.indexOf(amount, searchFrom);
+      if (idx === -1) break;
+
+      const windowStart = Math.max(0, idx - 120);
+      const windowEnd = Math.min(rawText.length, idx + 120);
+      const windowText = rawText.slice(windowStart, windowEnd);
+      const windowLower = lowerRaw.slice(windowStart, windowEnd);
+
+      const hasDate = dateVariants.some((dv) => windowText.includes(dv));
+      const hasDescription = descToken ? windowLower.includes(descToken) : true;
+
+      if (hasDate && hasDescription) {
+        anchors.push(idx);
+      }
+
+      searchFrom = idx + Math.max(1, amount.length);
+    }
+  }
+
+  return [...new Set(anchors)].sort((a, b) => a - b);
+}
+
+function dedupeCCTransactionsWithAnchors(
+  transactions: Transaction[],
+  rawText: string
+): Transaction[] {
+  const unique: Transaction[] = [];
+  const seenAnchored = new Set<string>();
+  const occurrenceByWeakKey = new Map<string, number>();
+  const anchorsByWeakKey = new Map<string, number[]>();
+
+  for (const txn of transactions) {
+    const weakKey = getCCWeakKey(txn);
+    const occurrence = occurrenceByWeakKey.get(weakKey) || 0;
+    occurrenceByWeakKey.set(weakKey, occurrence + 1);
+
+    let anchors = anchorsByWeakKey.get(weakKey);
+    if (!anchors) {
+      anchors = findCCEvidenceAnchors(rawText, txn);
+      anchorsByWeakKey.set(weakKey, anchors);
+    }
+
+    // If no row-level anchors found, preserve the row to avoid false transaction loss.
+    if (anchors.length === 0) {
+      unique.push(txn);
+      continue;
+    }
+
+    // Single-anchor duplicates are likely chunk-overlap repeats of the same row.
+    if (anchors.length === 1 && occurrence > 0) {
+      debugLog('[LLMParser] Dropping probable duplicate CC row:', txn.description);
+      continue;
+    }
+
+    // If we have more extracted rows than detected anchors, keep extras (loss-averse behavior).
+    if (occurrence >= anchors.length) {
+      unique.push(txn);
+      continue;
+    }
+
+    const anchorBucket = Math.floor(anchors[occurrence] / 8);
+    const anchoredKey = `${weakKey}|${anchorBucket}`;
+    if (seenAnchored.has(anchoredKey)) {
+      debugLog('[LLMParser] Dropping anchored duplicate CC row:', txn.description);
+      continue;
+    }
+
+    seenAnchored.add(anchoredKey);
+    unique.push(txn);
+  }
+
+  return unique;
 }
 
 /**
@@ -620,7 +836,7 @@ async function detectStatementType(
 
   try {
     const raw = await client.generate(baseUrl, model, prompt, {
-      temperature: 0.7,
+      temperature: 0.05,
     });
     return parseTypeDetectionResult(raw);
   } catch (err) {
@@ -637,25 +853,30 @@ async function parseCCStatement(
   baseUrl: string,
   model: string,
   text: string,
+  customClient?: LLMClient,
 ): Promise<{
   statement: CreditCardStatement | null;
   transactions: Transaction[];
+  failedChunks: string[];
 }> {
-  const client = getBrowserClient(provider);
+  const client = customClient || getBrowserClient(provider);
   const MAX_CHUNK_CHARS = 12000;
-  const chunks = splitTextIntoChunks(text, MAX_CHUNK_CHARS);
-
+  
   let ccResult: CCExtractionResult | null = null;
   const allTransactions: Transaction[] = [];
+  const failedChunks: string[] = [];
 
-  // First chunk: extract statement info + transactions
-  // Subsequent chunks: just extract transactions
-  for (let i = 0; i < chunks.length; i++) {
-    const prompt = CC_EXTRACTION_PROMPT + chunks[i] + "\n---\n\nExtract as JSON:";
+  const processChunkWithRetry = async (
+    chunkText: string,
+    depth: number = 0,
+    chunkId: string
+  ): Promise<void> => {
+    const MAX_DEPTH = 2;
+    const prompt = CC_EXTRACTION_PROMPT + chunkText + "\n---\n\nExtract as JSON:";
 
     try {
       const raw = await client.generate(baseUrl, model, prompt, {
-        temperature: 0.7,
+        temperature: 0.05,
       });
 
       const parsed = parseCCExtractionResult(raw);
@@ -667,52 +888,39 @@ async function parseCCStatement(
 
         // Accumulate transactions
         if (Array.isArray(parsed.transactions)) {
-          // Credit types: refund, cashback (money coming IN to the card)
-          // Handle variations: cashback, cash back, cash_back, cb
-          const isCreditType = (tType: string | undefined) => {
-            if (!tType) return false;
-            const normalized = tType.toLowerCase().replace(/[_\s]/g, '');
-            return normalized === 'refund' || normalized === 'cashback' || normalized === 'cb';
-          };
-
-          // Payment type: paying off credit card debt (should be transfer)
-          const isPaymentType = (tType: string | undefined) => {
-            if (!tType) return false;
-            const normalized = tType.toLowerCase().replace(/[_\s]/g, '');
-            return normalized === 'payment';
-          };
-
           const otherCategory = Category.fromId(Category.DEFAULT_ID)!;
           const billsCategory = Category.fromId('bills')!;
-          const seenCC = new Set<string>();
+          const settingsCurrency = useSettingsStore.getState().currency;
 
-          // Local currency for this statement (default to INR for Indian cards)
-          const localCurrency = { code: 'INR', symbol: '₹', name: 'Indian Rupee' };
+          const resolveCurrency = (code: string | undefined, fallback: Currency): Currency => {
+            const normalizedCode = String(code || '').trim().toUpperCase();
+            if (!normalizedCode) return fallback;
+            return getCurrencyByCode(normalizedCode) || fallback;
+          };
 
           const txns = parsed.transactions.map((t) => {
             // Determine direction based on transaction type
             // credit = money coming in, debit = money going out
             let txnType: TransactionType;
 
-            if (isPaymentType(t.transactionType)) {
-              // CC payment received = credit (money coming in to pay off debt)
-              txnType = TransactionType.Credit;
-            } else if (isCreditType(t.transactionType)) {
-              // Refund/cashback = credit (money returned)
+            if (t.transactionType === 'payment' || t.transactionType === 'refund' || t.transactionType === 'cashback') {
               txnType = TransactionType.Credit;
             } else {
-              // Purchase/fee/interest = debit (charge added)
               txnType = TransactionType.Debit;
             }
 
             // Determine category - CC payments go to bills
-            const category = isCCPayment(t.description) ? billsCategory : otherCategory;
+            const category = isCCPayment(t.description, txnType) ? billsCategory : otherCategory;
 
-            // Determine international transaction details
-            const isInternational = t.originalCurrencyCode !== undefined;
-            const originalCurrency = t.originalCurrencyCode
-              ? getCurrencyByCode(t.originalCurrencyCode)
+            // Determine transaction currency details
+            const localCurrency = resolveCurrency(t.localCurrency, settingsCurrency);
+            const originalCurrencyCode = String(t.originalCurrency || '').trim().toUpperCase();
+            const originalCurrency = originalCurrencyCode
+              ? getCurrencyByCode(originalCurrencyCode)
               : undefined;
+            const isInternational = typeof t.isInternationalTransaction === 'boolean'
+              ? t.isInternationalTransaction
+              : Boolean(originalCurrencyCode || t.originalAmount !== undefined);
 
             return new Transaction(
               uuidv4(),
@@ -738,46 +946,56 @@ async function parseCCStatement(
               t.originalAmount,
               isInternational,
             );
-          }).filter((t) => !isNaN(t.date.getTime()) && t.amount !== 0)
-            .filter((t) => {
-              const sig = getTransactionSignature(t);
-              if (seenCC.has(sig)) {
-                debugLog('[LLMParser] Duplicate CC transaction filtered:', t.description);
-                return false;
-              }
-              seenCC.add(sig);
-              return true;
-            });
+          }).filter((t) => !isNaN(t.date.getTime()) && t.amount !== 0);
 
           allTransactions.push(...txns);
         }
+      } else {
+         throw new Error("Invalid JSON response");
       }
     } catch (err) {
-      console.error(`[CC Parse] Chunk ${i + 1} failed:`, err);
+      console.error(`[CC Parse] Chunk ${chunkId} failed (depth ${depth}):`, err);
+
+      if (depth < MAX_DEPTH && chunkText.length > 500) {
+        debugLog(`[CC Parse] Retrying chunk ${chunkId} by splitting...`);
+        const midpoint = Math.floor(chunkText.length / 2);
+        const splitIndex = chunkText.lastIndexOf('\n', midpoint);
+        const safeSplitIndex = splitIndex > 0 ? splitIndex : midpoint;
+
+        const part1 = chunkText.slice(0, safeSplitIndex);
+        const part2 = chunkText.slice(safeSplitIndex);
+
+        await processChunkWithRetry(part1, depth + 1, `${chunkId}.1`);
+        await processChunkWithRetry(part2, depth + 1, `${chunkId}.2`);
+      } else {
+        debugLog(`[CC Parse] Chunk ${chunkId} permanently failed.`);
+        failedChunks.push(`Chunk ${chunkId} (${chunkText.slice(0, 30)}...)`);
+      }
     }
+  };
+
+  const initialChunks = splitTextIntoChunks(text, MAX_CHUNK_CHARS);
+
+  for (let i = 0; i < initialChunks.length; i++) {
+    await processChunkWithRetry(initialChunks[i], 0, `${i + 1}`);
   }
 
-  // Deduplicate transactions
-  const seen = new Set<string>();
-  const uniqueTransactions = allTransactions.filter((t) => {
-    const key = `${t.date.toISOString()}|${t.description.substring(0, 30)}|${Math.abs(t.amount)}`;
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
+  // Deduplicate only with stronger row-level evidence from statement text.
+  const uniqueTransactions = dedupeCCTransactionsWithAnchors(allTransactions, text);
 
   // Classify CC payments - update category to 'bills'
   const billsCategory = Category.fromId('bills')!;
   for (const txn of uniqueTransactions) {
-    if (isCCPayment(txn.description)) {
+    if (isCCPayment(txn.description, txn.type)) {
       txn.category = billsCategory;
     }
   }
 
   // Build CreditCardStatement object
   let ccStatement: CreditCardStatement | null = null;
-  if (ccResult) {
-    const stmt = ccResult.statement;
+  const finalCCResult = ccResult as CCExtractionResult | null;
+  if (finalCCResult) {
+    const stmt = finalCCResult.statement;
     ccStatement = createCreditCardStatement({
       fileName: '', // Will be set by caller
       parseDate: new Date(),
@@ -822,7 +1040,19 @@ async function parseCCStatement(
     });
   }
 
-  return { statement: ccStatement, transactions: uniqueTransactions };
+  return { statement: ccStatement, transactions: uniqueTransactions, failedChunks };
+}
+
+export function detectCurrencyFromText(text: string): string | null {
+  const codeMatch = text.match(/\b(INR|USD|EUR|GBP|JPY|AUD|CAD)\b/);
+  if (codeMatch) return codeMatch[1];
+
+  if (text.includes("₹") || text.includes("Rupee")) return "INR";
+  if (text.includes("$") || text.includes("Dollar")) return "USD";
+  if (text.includes("€") || text.includes("Euro")) return "EUR";
+  if (text.includes("£") || text.includes("Pound")) return "GBP";
+
+  return null;
 }
 
 /**
@@ -861,9 +1091,11 @@ export async function parseWithLLMExtended(
     );
   }
 
+  const selectedModel = await resolveModelOrThrow(provider, url, model ?? undefined);
+
   // 2 — Pass 1: Detect statement type
   onProgress?.("Detecting statement type...");
-  const typeResult = await detectStatementType(provider, url, model || '', rawText);
+  const typeResult = await detectStatementType(provider, url, selectedModel, rawText);
   debugLog('[Parser] Type detection result:', typeResult);
 
   // Determine format
@@ -877,21 +1109,21 @@ export async function parseWithLLMExtended(
   let currency: Currency;
   let ccStatement: CreditCardStatement | undefined;
   let verificationReport: VerificationReport | undefined;
+  let failedChunks: string[] = [];
+
+  const settingsCurrency = useSettingsStore.getState().currency;
 
   if (typeResult.statementType === 'credit_card' && typeResult.confidence >= 0.5) {
     // Credit card statement
     onProgress?.("Parsing credit card statement...");
 
-    const ccResult = await parseCCStatement(provider, url, model || '', rawText);
+    const ccResult = await parseCCStatement(provider, url, selectedModel, rawText);
     transactions = ccResult.transactions;
     ccStatement = ccResult.statement ?? undefined;
+    failedChunks = ccResult.failedChunks;
 
-    // Default currency for CC statements in India
-    currency = {
-      code: 'INR',
-      symbol: '₹',
-      name: 'Indian Rupee',
-    };
+    // Prefer detected local currency from CC transactions; fallback to user settings currency.
+    currency = transactions.find((t) => t.localCurrency)?.localCurrency || settingsCurrency;
 
     if (ccStatement) {
       ccStatement.fileName = file.name;
@@ -900,7 +1132,8 @@ export async function parseWithLLMExtended(
     // Bank statement (or unknown - default to bank)
     onProgress?.("Parsing bank statement...");
 
-    const result = await parseLLMDirect(provider, url, model || '', rawText);
+    const result = await parseLLMDirect(provider, url, selectedModel, rawText);
+    failedChunks = result.failedChunks;
 
     if (!result.transactions || result.transactions.length === 0) {
       throw new Error("AI could not find any transactions in the document.");
@@ -949,8 +1182,6 @@ export async function parseWithLLMExtended(
     }
 
     const otherCategory = Category.fromId(Category.DEFAULT_ID)!;
-    const seenBank = new Set<string>();
-
     // Use verified transactions only
     transactions = verificationReport.verified.map((t) => new Transaction(
       uuidv4(),
@@ -967,22 +1198,15 @@ export async function parseWithLLMExtended(
       undefined, // needsReview
       undefined, // categorizedBy
       SourceType.Bank,
-    )).filter((t) => !isNaN(t.date.getTime()) && t.amount !== 0)
-      .filter((t) => {
-        const sig = getTransactionSignature(t);
-        if (seenBank.has(sig)) {
-          debugLog('[LLMParser] Duplicate bank transaction filtered:', t.description);
-          return false;
-        }
-        seenBank.add(sig);
-        return true;
-      });
+    )).filter((t) => !isNaN(t.date.getTime()) && t.amount !== 0);
 
-    currency = {
-      code: result.currency?.code || "INR",
-      symbol: result.currency?.symbol || "₹",
-      name: result.currency?.name || "Indian Rupee",
-    };
+    // Resolve currency: LLM > Regex > Settings
+    let resolvedCode = result.currency?.code;
+    if (!resolvedCode) {
+      resolvedCode = detectCurrencyFromText(rawText) || settingsCurrency.code;
+    }
+    
+    currency = getCurrencyByCode(resolvedCode) || settingsCurrency;
   }
 
   onProgress?.(`Found ${transactions.length} transactions!`);
@@ -993,6 +1217,7 @@ export async function parseWithLLMExtended(
       format,
       fileName: file.name,
       parseDate: new Date(),
+      failedChunks,
     },
     currency,
     rawText,
