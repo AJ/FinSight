@@ -1,6 +1,6 @@
 import { getServerClient } from '@/lib/llm/index';
 import { LLMProvider } from '@/lib/llm/types';
-import { validateOllamaUrl } from '@/lib/store/settingsStore';
+import { validateLlmServerUrl } from '@/lib/store/settingsStore';
 import { checkRateLimit, getClientIdentifier, LLM_RATE_LIMIT } from '@/lib/middleware/rateLimit';
 import { debugError } from '@/lib/utils/debug';
 
@@ -21,7 +21,7 @@ export async function POST(request: Request) {
     const llmProvider = (provider as LLMProvider) || 'ollama';
 
     // Validate URL to prevent SSRF
-    const validation = validateOllamaUrl(urlParam);
+    const validation = validateLlmServerUrl(urlParam);
     if (!validation.valid) {
       return new Response(
         JSON.stringify({ error: validation.error || 'Invalid URL' }),

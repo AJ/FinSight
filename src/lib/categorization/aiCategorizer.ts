@@ -13,6 +13,7 @@ export interface CategorizationResult {
   id: string;
   category: string;
   confidence: number;
+  source: "ai" | "keyword";
 }
 
 export interface CategorizationProgress {
@@ -84,7 +85,7 @@ export async function categorizeTransactions(
       id: t.id,
       description: t.description,
       amount: t.amount,
-      type: t.isIncome ? 'income' as const : 'expense' as const,
+      type: t.type as "credit" | "debit",
     }));
 
     const prompt = buildCategorizationPrompt(batchData);
@@ -104,7 +105,10 @@ export async function categorizeTransactions(
       for (const txn of batch) {
         const result = results.find((r) => r.id === txn.id);
         if (result) {
-          allResults.push(result);
+          allResults.push({
+            ...result,
+            source: "ai",
+          });
         } else {
           // Fallback: use keyword matching
           const fallbackCategory = categorizeByKeywords(txn);
@@ -112,6 +116,7 @@ export async function categorizeTransactions(
             id: txn.id,
             category: fallbackCategory,
             confidence: 0.3,
+          source: "keyword",
           });
         }
       }
@@ -124,7 +129,8 @@ export async function categorizeTransactions(
           id: txn.id,
           category: fallbackCategory,
           confidence: 0.3,
-        });
+          source: "keyword",
+          });
       }
     }
   }
@@ -202,7 +208,7 @@ export function applyCategorizationResults(
       txn.budgetMonth,
       result.confidence,
       needsReview,
-      result.confidence >= 0.3 ? CategorizedBy.AI : CategorizedBy.Keyword,
+      result.source === "ai" ? CategorizedBy.AI : CategorizedBy.Keyword,
       txn.sourceType,
       txn.statementId,
       txn.cardIssuer,
@@ -235,3 +241,5 @@ export function getCategoryInfo(categoryId: string): {
     color: category?.color || "#6b7280",
   };
 }
+
+

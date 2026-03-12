@@ -4,10 +4,8 @@ import { ChatMessage } from '@/types';
 
 interface ChatStore {
   messages: ChatMessage[];
-  statementContext: string | null;
   selectedModel: string | null;
 
-  setContext: (context: string) => void;
   addMessage: (msg: ChatMessage) => void;
   updateMessage: (id: string, content: string) => void;
   setModel: (model: string) => void;
@@ -19,10 +17,7 @@ export const useChatStore = create<ChatStore>()(
   persist(
     (set) => ({
       messages: [],
-      statementContext: null,
       selectedModel: null,
-
-      setContext: (context) => set({ statementContext: context }),
 
       addMessage: (msg) =>
         set((state) => ({ messages: [...state.messages, msg] })),
@@ -38,8 +33,7 @@ export const useChatStore = create<ChatStore>()(
 
       clearMessages: () => set({ messages: [] }),
 
-      clearAll: () =>
-        set({ messages: [], statementContext: null, selectedModel: null }),
+      clearAll: () => set({ messages: [], selectedModel: null }),
     }),
     {
       name: 'chat-storage',
@@ -47,3 +41,4 @@ export const useChatStore = create<ChatStore>()(
     }
   )
 );
+

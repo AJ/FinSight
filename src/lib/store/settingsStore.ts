@@ -4,39 +4,22 @@ import { Currency, Settings } from "@/types";
 import { LLMProvider, DEFAULT_URLS } from "@/lib/llm/types";
 
 /* ============================================================
-   SSRF Prevention: URL Validation
-   Blocks private/internal IP ranges and cloud metadata endpoints
+   URL Validation for LLM Server Connections (Ollama, LM Studio)
+   
+   Note: These tools may not support authentication.
+   This validation warns users when connecting to remote hosts
+   to prevent accidental connections to the wrong server.
    ============================================================ */
-
-// Private IP ranges (RFC 1918 + link-local + cloud metadata)
-const PRIVATE_IP_PATTERNS = [
-  /^10\./,                          // 10.0.0.0/8
-  /^172\.(1[6-9]|2[0-9]|3[0-1])\./, // 172.16.0.0/12
-  /^192\.168\./,                    // 192.168.0.0/16
-  /^169\.254\./,                    // 169.254.0.0/16 (link-local / cloud metadata)
-  /^127\./,                         // 127.0.0.0/8 (loopback - but we allow localhost)
-  /^0\.0\.0\.0/,                    // 0.0.0.0/8
-  /^224\./,                         // Multicast
-  /^240\./,                         // Reserved
-];
-
-const BLOCKED_HOSTS = [
-  'metadata.google.internal',
-  'metadata',
-  'localhost.localdomain',
-];
-
-function isPrivateIP(ip: string): boolean {
-  return PRIVATE_IP_PATTERNS.some(pattern => pattern.test(ip));
-}
 
 export interface URLValidationResult {
   valid: boolean;
   sanitized: string;
   error?: string;
+  warning?: string;
+  isRemote: boolean;
 }
 
-export function validateOllamaUrl(inputUrl: string): URLValidationResult {
+export function validateLlmServerUrl(inputUrl: string): URLValidationResult {
   try {
     // Normalize: ensure protocol, remove trailing slash
     let url = inputUrl.trim();
@@ -49,30 +32,83 @@ export function validateOllamaUrl(inputUrl: string): URLValidationResult {
 
     // Only allow http/https
     if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-      return { valid: false, sanitized: '', error: 'Only HTTP and HTTPS protocols are allowed' };
+      return { 
+        valid: false, 
+        sanitized: '', 
+        error: 'Only HTTP and HTTPS protocols are allowed',
+        isRemote: false,
+      };
     }
 
     const hostname = parsed.hostname.toLowerCase();
 
-    // Block known dangerous hosts
-    if (BLOCKED_HOSTS.some(blocked => hostname === blocked || hostname.endsWith('.' + blocked))) {
-      return { valid: false, sanitized: '', error: 'This host is not allowed' };
+    // Check if this is a local/loopback connection
+    const isLocal = 
+      hostname === 'localhost' || 
+      hostname === '[::1]' || 
+      hostname.startsWith('127.') ||
+      hostname === '0.0.0.0';
+
+    // Warn for non-localhost connections
+    let warning: string | undefined;
+    if (!isLocal) {
+      warning = 
+        `Connecting to remote host (${hostname}). ` +
+        `Ensure you trust this server - your financial data will be sent to it. ` +
+        `If your LLM server requires authentication, configure it in the server settings.`;
     }
 
-    // Allow localhost variants for local development
-    if (hostname === 'localhost' || hostname === '[::1]' || hostname === '0.0.0.0') {
-      return { valid: true, sanitized: url };
-    }
-
-    // Check for private IP ranges
-    if (isPrivateIP(hostname)) {
-      return { valid: false, sanitized: '', error: 'Private IP addresses are not allowed' };
-    }
-
-    return { valid: true, sanitized: url };
+    return { 
+      valid: true, 
+      sanitized: url,
+      warning,
+      isRemote: !isLocal,
+    };
   } catch {
-    return { valid: false, sanitized: '', error: 'Invalid URL format' };
+    return { 
+      valid: false, 
+      sanitized: '', 
+      error: 'Invalid URL format',
+      isRemote: false,
+    };
   }
+}
+
+/**
+ * Get confirmed remote URLs from localStorage
+ * These are URLs the user has explicitly confirmed they trust
+ */
+export function getConfirmedRemoteUrls(): Set<string> {
+  try {
+    const stored = localStorage.getItem('confirmedRemoteLlmUrls');
+    if (!stored) return new Set();
+    const urls = JSON.parse(stored) as string[];
+    return new Set(urls);
+  } catch {
+    return new Set();
+  }
+}
+
+/**
+ * Add a URL to the confirmed remote URLs list
+ */
+export function confirmRemoteUrl(url: string): void {
+  try {
+    const confirmed = getConfirmedRemoteUrls();
+    confirmed.add(url);
+    localStorage.setItem('confirmedRemoteLlmUrls', JSON.stringify([...confirmed]));
+  } catch {
+    // localStorage might be unavailable or full
+    console.warn('[SettingsStore] Could not save confirmed remote URL');
+  }
+}
+
+/**
+ * Check if a URL has been confirmed by the user
+ */
+export function isRemoteUrlConfirmed(url: string): boolean {
+  const confirmed = getConfirmedRemoteUrls();
+  return confirmed.has(url);
 }
 
 const availableCurrencies: Currency[] = [
@@ -126,7 +162,7 @@ interface SettingsStore extends Settings {
 export const useSettingsStore = create<SettingsStore>()(
   persist(
     (set) => ({
-      currency: { code: "USD", symbol: "$", name: "US Dollar" },
+      currency: { code: "INR", symbol: "₹", name: "Indian Rupee" },
       dateFormat: "auto",
       theme: "light",
 
@@ -145,7 +181,7 @@ export const useSettingsStore = create<SettingsStore>()(
         llmModel: null, // Clear model selection when switching providers
       }),
       setOllamaUrl: (url) => {
-        const result = validateOllamaUrl(url);
+        const result = validateLlmServerUrl(url);
         if (result.valid) {
           set({ ollamaUrl: result.sanitized });
         } else {
@@ -170,3 +206,4 @@ export const useSettingsStore = create<SettingsStore>()(
     },
   ),
 );
+

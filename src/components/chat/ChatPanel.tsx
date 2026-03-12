@@ -16,6 +16,9 @@ import { MarkdownRenderer } from '@/components/chat/MarkdownRenderer';
 import { TypingIndicator } from '@/components/chat/TypingIndicator';
 import { useChatStore } from '@/lib/store/chatStore';
 import { useSettingsStore } from '@/lib/store/settingsStore';
+import { useTransactionStore } from '@/lib/store/transactionStore';
+import { buildChatContextForQuestion } from '@/lib/chat/contextBuilder';
+import { buildChatOptimizationPlan } from '@/lib/llm/chatOptimization';
 import { ChatMessage } from '@/types';
 import {
   Bot,
@@ -61,7 +64,6 @@ const SUGGESTIONS = [
 export function ChatPanel() {
   const {
     messages,
-    statementContext,
     selectedModel: chatModel,
     addMessage,
     updateMessage,
@@ -71,6 +73,8 @@ export function ChatPanel() {
   const ollamaUrl = useSettingsStore((state) => state.ollamaUrl);
   const llmProvider = useSettingsStore((state) => state.llmProvider);
   const settingsModel = useSettingsStore((state) => state.llmModel);
+  const currency = useSettingsStore((state) => state.currency);
+  const transactions = useTransactionStore((state) => state.transactions);
   const activeModel = settingsModel || chatModel;
 
   const [input, setInput] = useState('');
@@ -156,7 +160,14 @@ export function ChatPanel() {
           return;
         }
 
+        const optimizationPlan = buildChatOptimizationPlan(llmProvider, text, messages);
+
         // Build messages for LLM
+        const statementContext = buildChatContextForQuestion(transactions, currency, text, {
+          topK: optimizationPlan.contextTopK,
+          maxChars: optimizationPlan.contextMaxChars,
+        });
+
         const systemPrompt = `You are a helpful financial assistant. You have access to the user's bank statement data below. Answer questions accurately and concisely.
 
 ${statementContext || 'No statement data available yet.'}
@@ -169,7 +180,7 @@ Guidelines:
 
         const chatMessages = [
           { role: 'system', content: systemPrompt },
-          ...messages.slice(-10).map((m) => ({
+          ...messages.slice(-optimizationPlan.historyWindow).map((m) => ({
             role: m.role,
             content: m.content,
           })),
@@ -177,7 +188,7 @@ Guidelines:
         ];
 
         // Stream directly from browser → LLM
-        const stream = await client.chatStream(ollamaUrl, selectedModel, chatMessages);
+        const stream = await client.chatStream(ollamaUrl, selectedModel, chatMessages, optimizationPlan.requestOptions);
         const reader = stream.getReader();
         const decoder = new TextDecoder();
         let full = '';
@@ -289,7 +300,8 @@ Guidelines:
       input,
       isStreaming,
       messages,
-      statementContext,
+      transactions,
+      currency,
       activeModel,
       ollamaUrl,
       llmProvider,
@@ -305,7 +317,7 @@ Guidelines:
     }
   };
 
-  const hasContext = !!statementContext;
+  const hasContext = transactions.length > 0;
 
   /* ------------------------------------------------------------------ */
   /*  Render                                                            */

@@ -73,6 +73,7 @@ export interface ParsedStatement {
   format: StatementFormat;
   fileName: string;
   parseDate: Date;
+  failedChunks?: string[];
 }
 
 // Chat types

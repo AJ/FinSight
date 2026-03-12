@@ -27,17 +27,20 @@ Category guidance:
 - "bills": Credit card payments, loan payments, EMI, bill payments
 - "insurance": Insurance premium payments`;
 
+import { normalizeTransactionType } from '@/lib/utils/transactionType';
 
 /**
  * Build the user prompt with transaction data.
  */
+export type CategorizationTxnType = "credit" | "debit" | "income" | "expense";
+
 export function buildCategorizationPrompt(
-  transactions: { id: string; description: string; amount: number; type: "income" | "expense" }[]
+  transactions: { id: string; description: string; amount: number; type: CategorizationTxnType }[]
 ): string {
   const txnList = transactions
     .map(
       (t) =>
-        `{"id": "${t.id}", "description": "${escapeJson(t.description)}", "amount": ${t.amount}, "direction": "${t.type === "income" ? "credit" : "debit"}"}`
+        `{"id": "${t.id}", "description": "${escapeJson(t.description)}", "amount": ${t.amount}, "direction": "${normalizeTransactionType(t.type) ?? 'debit'}"}`
     )
     .join(",\n  ");
 
@@ -236,3 +239,4 @@ export function normalizeCategoryId(categoryId: string): string {
   console.log(`[Categorize] Unknown category "${categoryId}", using "other"`);
   return "other";
 }
+

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getServerClient } from '@/lib/llm/index';
-import { validateOllamaUrl } from '@/lib/store/settingsStore';
+import { LLMProvider } from '@/lib/llm/types';
+import { validateLlmServerUrl } from '@/lib/store/settingsStore';
 import { checkRateLimit, getClientIdentifier, STRICT_RATE_LIMIT } from '@/lib/middleware/rateLimit';
 import { debugLog, debugSensitive, debugError } from '@/lib/utils/debug';
 import { TransactionAnalytics } from '@/lib/insights/types';
@@ -43,17 +44,10 @@ export async function POST(request: NextRequest) {
       transactionCount: analytics?.totalTransactions,
     });
 
-    if (!model) {
-      return NextResponse.json(
-        { error: 'No model specified' },
-        { status: 400 }
-      );
-    }
-
     // Validate URL to prevent SSRF
     const defaultUrl = 'http://localhost:11434';
     const urlParam = baseUrl || defaultUrl;
-    const validation = validateOllamaUrl(urlParam);
+    const validation = validateLlmServerUrl(urlParam);
     if (!validation.valid) {
       return NextResponse.json(
         { error: validation.error || 'Invalid URL' },
@@ -67,13 +61,46 @@ export async function POST(request: NextRequest) {
     debugSensitive('Insights Prompt', prompt);
 
     // Get the server-side client
-    const client = getServerClient(provider);
+    const llmProvider = (provider as LLMProvider) || 'ollama';
+    const client = getServerClient(llmProvider);
+
+    // Resolve model (use requested model, else first available)
+    let selectedModel =
+      typeof model === 'string' && model.trim().length > 0
+        ? model.trim()
+        : undefined;
+
+    if (!selectedModel) {
+      const models = await client.listModels(safeUrl);
+      
+      // Filter out coding/specialized models, prefer general-purpose
+      const suitableModels = models.filter(m => {
+        const name = m.toLowerCase();
+        return !name.includes('code') && !name.includes('coder');
+      });
+      
+      selectedModel = suitableModels[0] || models[0];
+      
+      if (selectedModel) {
+        console.warn(
+          `[Insights] No model specified. Auto-selected: "${selectedModel}". ` +
+          `This should not happen - client should always send a model.`
+        );
+      }
+    }
+
+    if (!selectedModel) {
+      return NextResponse.json(
+        { error: 'No AI model available. Load/pull a model first.' },
+        { status: 500 }
+      );
+    }
 
     debugLog('[Insights] Calling LLM...');
 
     // Generate insights
-    const response = await client.generate(safeUrl, model, prompt, {
-      temperature: 0.3,
+    const response = await client.generate(safeUrl, selectedModel, prompt, {
+      temperature: 0.05,
     });
 
     debugLog(`[Insights] Response received (${response.length} chars)`);
@@ -151,13 +178,13 @@ No markdown. Only JSON.`;
     .map(([day, data]) => `${dayNames[Number(day)]}: ${symbol}${data.total.toFixed(0)} (${data.count} txns)`)
     .join('\n');
 
-  // Filter out transfers from category breakdown
+  // Defensive filter: spending composition should never include income or transfers
   const topCategoriesSummary = (analytics.topCategories || [])
-    .filter((c) => c.category !== 'transfer')
+    .filter((c) => c.category !== 'transfer' && c.category !== 'income')
     .map((c) => `${c.category}: ${symbol}${c.total.toFixed(0)} (${c.percentage}%)`)
     .join('\n');
 
-  const transferInfo = (analytics.topCategories || []).find((c) => c.category === 'transfer');
+  const transferInfo = analytics.byCategory?.transfer;
 
   const anomaliesSummary = (analytics.anomalies || []).length > 0
     ? analytics.anomalies.map((a) => `${a.description}: ${symbol}${a.amount.toFixed(0)}`).join('\n')
@@ -190,7 +217,7 @@ Savings Rate: ${savingsRate}%
 
 ${transferInfo ? `NOTE: ${symbol}${transferInfo.total.toFixed(0)} in transfers (moving money between accounts, not spending)` : ''}
 
-=== SPENDING CATEGORIES (excluding transfers) ===
+=== SPENDING CATEGORIES (excluding income and transfers) ===
 ${topCategoriesSummary || 'No expense categories'}
 
 === SPENDING BY DAY ===
@@ -254,3 +281,4 @@ function normalizeInsight(insight: Partial<InsightResponse>): InsightResponse {
     category: insight.category || undefined,
   };
 }
+

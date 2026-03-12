@@ -52,6 +52,10 @@ export async function generate(
   prompt: string,
   options?: Record<string, unknown>,
 ): Promise<string> {
+  const modelOptions = { ...(options || {}) };
+  const keepAlive = typeof modelOptions.keep_alive === 'string' ? String(modelOptions.keep_alive) : '10m';
+  delete modelOptions.keep_alive;
+
   const res = await fetch(`${baseUrl}/api/generate`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -60,10 +64,11 @@ export async function generate(
       prompt,
       stream: false,
       format: "json",
+      keep_alive: keepAlive,
       options: {
         num_ctx: 16384,
         temperature: 0.05,
-        ...options,
+        ...modelOptions,
       },
     }),
   });
@@ -85,6 +90,10 @@ export async function chatStream(
   messages: { role: string; content: string }[],
   options?: Record<string, unknown>,
 ): Promise<ReadableStream<Uint8Array>> {
+  const modelOptions = { ...(options || {}) };
+  const keepAlive = typeof modelOptions.keep_alive === 'string' ? String(modelOptions.keep_alive) : '10m';
+  delete modelOptions.keep_alive;
+
   const res = await fetch(`${baseUrl}/api/chat`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -92,10 +101,11 @@ export async function chatStream(
       model,
       messages,
       stream: true,
+      keep_alive: keepAlive,
       options: {
         num_ctx: 8192,
         temperature: 0.7,
-        ...options,
+        ...modelOptions,
       },
     }),
   });

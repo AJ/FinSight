@@ -72,12 +72,17 @@ function TransactionsPageContent() {
   const [filterNeedsReview, setFilterNeedsReview] = useState<boolean>(false);
   const [isCategorizing, setIsCategorizing] = useState(false);
 
+  // Count active anomalies
+  const activeAnomalyCount = useMemo(() => {
+    return transactions.filter((t) => t.isAnomaly && !t.anomalyDismissed).length;
+  }, [transactions]);
+
   // Sync filter with URL params
   useEffect(() => {
-    if (searchParams.get("anomaly") === "true" && !filterAnomaly) {
+    if (searchParams.get("anomaly") === "true" && !filterAnomaly && activeAnomalyCount > 0) {
       setFilterAnomaly(true);
     }
-  }, [searchParams, filterAnomaly]);
+  }, [searchParams, filterAnomaly, activeAnomalyCount]);
 
   const filteredTransactions = useMemo(() => {
     return transactions
@@ -106,11 +111,6 @@ function TransactionsPageContent() {
         return dateB.getTime() - dateA.getTime();
       });
   }, [transactions, searchTerm, filterCategory, filterType, filterSource, filterAnomaly, filterNeedsReview]);
-
-  // Count active anomalies
-  const activeAnomalyCount = useMemo(() => {
-    return transactions.filter((t) => t.isAnomaly && !t.anomalyDismissed).length;
-  }, [transactions]);
 
   // Auto-clear anomaly filter when no anomalies remain
   useEffect(() => {
@@ -177,7 +177,7 @@ function TransactionsPageContent() {
           category: result.category,
           categoryConfidence: result.confidence,
           needsReview,
-          categorizedBy: result.confidence >= 0.3 ? CategorizedBy.AI : CategorizedBy.Keyword,
+          categorizedBy: result.source === "ai" ? CategorizedBy.AI : CategorizedBy.Keyword,
         });
       }
 

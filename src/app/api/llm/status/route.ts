@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getServerClient } from '@/lib/llm/index';
 import { LLMProvider } from '@/lib/llm/types';
-import { validateOllamaUrl } from '@/lib/store/settingsStore';
+import { validateLlmServerUrl } from '@/lib/store/settingsStore';
 import { checkRateLimit, getClientIdentifier, LLM_RATE_LIMIT } from '@/lib/middleware/rateLimit';
 
 export const dynamic = 'force-dynamic';
@@ -22,7 +22,7 @@ export async function GET(request: NextRequest) {
   const provider = (request.nextUrl.searchParams.get('provider') || 'ollama') as LLMProvider;
 
   // Validate URL to prevent SSRF
-  const validation = validateOllamaUrl(urlParam);
+  const validation = validateLlmServerUrl(urlParam);
   if (!validation.valid) {
     return NextResponse.json({
       connected: false,

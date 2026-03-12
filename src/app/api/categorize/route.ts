@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getServerClient } from "@/lib/llm/index";
 import { LLMProvider } from "@/lib/llm/types";
-import { validateOllamaUrl } from "@/lib/store/settingsStore";
+import { validateLlmServerUrl } from "@/lib/store/settingsStore";
 import { checkRateLimit, getClientIdentifier, STRICT_RATE_LIMIT } from "@/lib/middleware/rateLimit";
 import { debugLog, debugSensitive, debugError } from "@/lib/utils/debug";
 import {
@@ -9,6 +9,7 @@ import {
   parseCategorizationResponse,
 } from "@/lib/categorization/prompts";
 import { categorizeByKeywords } from "@/lib/categorization/aiCategorizer";
+import { normalizeTransactionTypeStrict } from '@/lib/utils/transactionType';
 
 const BATCH_SIZE = 20;
 
@@ -16,13 +17,14 @@ interface TransactionInput {
   id: string;
   description: string;
   amount: number;
-  type: "income" | "expense";
+  type: "credit" | "debit";
 }
 
 interface CategorizationResult {
   id: string;
   category: string;
   confidence: number;
+  source: "ai" | "keyword";
 }
 
 export async function POST(request: NextRequest) {
@@ -62,10 +64,39 @@ export async function POST(request: NextRequest) {
     }
 
     const llmProvider = (provider as LLMProvider) || "ollama";
+    
+    // Normalize transactions with validation
+    const normalizedTransactions: TransactionInput[] = [];
+    const rejectedTransactions: Array<{ txn: unknown; reason: string }> = [];
+
+    for (const txn of transactions) {
+      try {
+        normalizedTransactions.push({
+          id: String(txn.id),
+          description: String(txn.description || ""),
+          amount: typeof txn.amount === "number" ? txn.amount : Number(txn.amount) || 0,
+          type: normalizeTransactionTypeStrict(txn.type),
+        });
+      } catch (error) {
+        rejectedTransactions.push({
+          txn,
+          reason: error instanceof Error ? error.message : "Unknown error",
+        });
+      }
+    }
+
+    // Log rejected transactions
+    if (rejectedTransactions.length > 0) {
+      console.warn(
+        `[Categorize] Rejected ${rejectedTransactions.length}/${transactions.length} transactions with invalid types:`,
+        rejectedTransactions
+      );
+    }
+
     const urlParam = (baseUrl as string) || "http://localhost:11434";
 
     // Validate URL to prevent SSRF
-    const validation = validateOllamaUrl(urlParam);
+    const validation = validateLlmServerUrl(urlParam);
     if (!validation.valid) {
       return NextResponse.json(
         { error: validation.error || "Invalid URL" },
@@ -95,11 +126,11 @@ export async function POST(request: NextRequest) {
     const results: CategorizationResult[] = [];
     const batches: TransactionInput[][] = [];
 
-    for (let i = 0; i < transactions.length; i += BATCH_SIZE) {
-      batches.push(transactions.slice(i, i + BATCH_SIZE));
+    for (let i = 0; i < normalizedTransactions.length; i += BATCH_SIZE) {
+      batches.push(normalizedTransactions.slice(i, i + BATCH_SIZE));
     }
 
-    debugLog(`[Categorize] Processing ${transactions.length} transactions in ${batches.length} batch(es)`);
+    debugLog(`[Categorize] Processing ${normalizedTransactions.length} transactions in ${batches.length} batch(es)`);
 
     for (let i = 0; i < batches.length; i++) {
       const batch = batches[i];
@@ -123,7 +154,10 @@ export async function POST(request: NextRequest) {
         for (const txn of batch) {
           const result = batchResults.find((r) => r.id === txn.id);
           if (result) {
-            results.push(result);
+            results.push({
+              ...result,
+              source: "ai",
+            });
           } else {
             // Fallback
             const fallbackCat = categorizeByKeywords(txn);
@@ -132,6 +166,7 @@ export async function POST(request: NextRequest) {
               id: txn.id,
               category: fallbackCat,
               confidence: 0.3,
+              source: "keyword",
             });
           }
         }
@@ -141,8 +176,9 @@ export async function POST(request: NextRequest) {
         for (const txn of batch) {
           results.push({
             id: txn.id,
-            category: categorizeByKeywords(txn as TransactionInput),
+            category: categorizeByKeywords(txn),
             confidence: 0.3,
+            source: "keyword",
           });
         }
       }

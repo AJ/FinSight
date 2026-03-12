@@ -34,7 +34,7 @@ export async function generateInsights(
       options.baseUrl,
       options.model,
       prompt,
-      { temperature: 0.3 }
+      { temperature: 0.05 }
     );
 
     debugLog('[Insights] ========== LLM RESPONSE ==========');

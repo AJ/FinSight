@@ -229,9 +229,10 @@ export function CreditCardsGrid() {
   const getAllUniqueCards = useCreditCardStore((state) => state.getAllUniqueCards);
   const getMostRecentStatement = useCreditCardStore((state) => state.getMostRecentStatement);
   // Subscribe to statements to trigger re-renders when they change (e.g., isPaid updates)
-  const statements = useCreditCardStore((state) => state.statements);
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const _statements = useCreditCardStore((state) => state.statements);
 
-  const uniqueCards = useMemo(() => getAllUniqueCards(), [getAllUniqueCards, statements]);
+  const uniqueCards = useMemo(() => getAllUniqueCards(), [getAllUniqueCards]);
 
   if (uniqueCards.length === 0) {
     return null;

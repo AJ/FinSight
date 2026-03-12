@@ -7,7 +7,6 @@ import { parseCSV } from "@/lib/parsers/csvParser";
 import { parseXLS } from "@/lib/parsers/xlsParser";
 import {
   checkLLMStatus,
-  buildChatContext,
   parseWithLLMExtended,
   isPasswordError,
 } from "@/lib/parsers/llmParser";
@@ -20,6 +19,7 @@ import { LLMStatus, ParsedStatement, Currency, Transaction, Category } from "@/t
 import { useRouter } from "next/navigation";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { CheckCircle2, XCircle, Loader2 } from "lucide-react";
+import { toast } from "sonner";
 
 const MAX_PASSWORD_ATTEMPTS = 3;
 
@@ -41,9 +41,7 @@ export function FileProcessor({ onSuccess }: FileProcessorProps) {
   const [pendingFile, setPendingFile] = useState<File | null>(null);
 
   const setCurrency = useSettingsStore((state) => state.setCurrency);
-  const currency = useSettingsStore((state) => state.currency);
   const llmModel = useSettingsStore((state) => state.llmModel);
-  const setContext = useChatStore((state) => state.setContext);
   const setModel = useChatStore((state) => state.setModel);
   const addCCStatement = useCreditCardStore((state) => state.addStatement);
   const router = useRouter();
@@ -57,11 +55,22 @@ export function FileProcessor({ onSuccess }: FileProcessorProps) {
   const processParsedStatement = useCallback((
     parsed: ParsedStatement,
     detectedCurrency: Currency | null,
-    fileName: string,
   ) => {
     if (parsed.transactions.length === 0) {
       throw new Error(
         "No transactions found. Check if the file format is supported or try enabling AI parsing in Settings.",
+      );
+    }
+
+    // Warn about failed chunks
+    if (parsed.failedChunks && parsed.failedChunks.length > 0) {
+      toast.warning(`Parsing incomplete: ${parsed.failedChunks.length} sections failed`, {
+        description: "Some transactions are missing. See browser console (F12) for details.",
+        duration: 10000,
+      });
+      console.warn(
+        `[Parser] ${parsed.failedChunks.length} chunks failed to parse. Transactions from these sections are missing:`,
+        parsed.failedChunks
       );
     }
 
@@ -109,11 +118,6 @@ export function FileProcessor({ onSuccess }: FileProcessorProps) {
       JSON.stringify(categorized),
     );
 
-    // Build chat context
-    const activeCurrency = detectedCurrency || currency;
-    const chatCtx = buildChatContext(categorized, activeCurrency, fileName);
-    setContext(chatCtx);
-
     // Store the model used for chat
     const activeModel = llmModel || llmStatus?.selectedModel;
     if (activeModel) {
@@ -134,7 +138,7 @@ export function FileProcessor({ onSuccess }: FileProcessorProps) {
     onSuccess?.();
 
     setTimeout(() => router.push("/review"), 1000);
-  }, [setCurrency, currency, llmModel, llmStatus?.selectedModel, setContext, setModel, onSuccess, router]);
+  }, [setCurrency, llmModel, llmStatus?.selectedModel, setModel, onSuccess, router]);
 
   // Process a file with optional password (for PDFs)
   const processFile = useCallback(async (file: File, password?: string) => {
@@ -170,7 +174,7 @@ export function FileProcessor({ onSuccess }: FileProcessorProps) {
       );
     }
 
-    processParsedStatement(parsed, detectedCurrency, file.name);
+    processParsedStatement(parsed, detectedCurrency);
   }, [processParsedStatement, addCCStatement]);
 
   // Handle password submission - retry with password
@@ -316,3 +320,4 @@ export function FileProcessor({ onSuccess }: FileProcessorProps) {
     </div>
   );
 }
+

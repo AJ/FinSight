@@ -153,11 +153,39 @@ export interface CCExtractedTransaction {
   date: string;
   description: string;
   amount: number;
-  originalCurrencyCode?: string;  // Currency code for international transactions (e.g., "USD")
-  originalAmount?: number;        // Amount in original currency
-  transactionType?: 'purchase' | 'payment' | 'refund' | 'interest' | 'fee';
+  localCurrency?: string;        // ISO code of card/local statement currency (e.g., "INR")
+  originalCurrency?: string;     // Original ISO currency code for international transactions (e.g., "USD")
+  originalAmount?: number;       // Amount in original currency
+  isInternationalTransaction?: boolean;
+  transactionType?: LLMTransactionType;
   cardHolder?: string;
 }
+
+/**
+ * Transaction types as extracted by LLM from statements.
+ * These represent the actual transaction type from the statement.
+ * Applicable to both bank and credit card statements.
+ */
+export type LLMTransactionType = 
+  // Money coming in (credits)
+  | 'deposit'       // Cash/cheque deposit
+  | 'transfer_in'   // Incoming transfer (NEFT/IMPS/UPI in)
+  | 'refund'        // Merchant refund
+  | 'interest'      // Interest credited (bank) / charged (CC)
+  | 'cashback'      // Cashback earned
+  | 'rewards'       // Points/miles redemption
+  
+  // Money going out (debits)
+  | 'purchase'      // Regular purchase/charge
+  | 'payment'       // Payment made (CC payment / bill payment)
+  | 'withdrawal'    // ATM/cash withdrawal
+  | 'transfer_out'  // Outgoing transfer (NEFT/IMPS/UPI out)
+  | 'fee'           // Any fee (late, annual, forex, maintenance)
+  | 'charge'        // General charge
+  
+  // Edge cases
+  | 'adjustment'    // Billing adjustment/correction
+  | 'reversal';     // Transaction reversal
 
 // Due date item for display
 export interface DueDateItem {
@@ -343,3 +371,4 @@ export interface RewardPointsAnalysis {
     expiryDate: Date;
   }[];
 }
+

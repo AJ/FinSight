@@ -202,18 +202,22 @@ export function getTopMerchants(transactions: Transaction[], limit: number = 5):
  * Get top categories by spending percentage.
  */
 export function getTopCategories(
-  transactions: Transaction[],
   byCategory: Record<string, { total: number; count: number; avg: number }>,
   limit: number = 5
 ): Array<{ category: string; total: number; percentage: number }> {
-  const expenses = transactions.filter((t) => t.isExpense);
-  const totalExpenses = expenses.reduce((sum, t) => sum + Math.abs(t.amount), 0);
+  const SPENDING_EXCLUDED_CATEGORY_IDS = new Set(['income', 'transfer']);
+
+  const spendingCategories = Object.entries(byCategory).filter(
+    ([category]) => !SPENDING_EXCLUDED_CATEGORY_IDS.has(category)
+  );
+
+  const totalExpenses = spendingCategories.reduce((sum, [, data]) => sum + data.total, 0);
 
   if (totalExpenses === 0) {
     return [];
   }
 
-  return Object.entries(byCategory)
+  return spendingCategories
     .map(([category, data]) => ({
       category,
       total: data.total,
@@ -275,11 +279,12 @@ export function getTransactionAnalytics(transactions: Transaction[]): Transactio
 
   const byMonth = groupByMonth(transactions);
   const byCategory = groupByCategory(transactions);
+  const spendingByCategory = groupByCategory(transactions.filter((t) => t.isExpense));
   const byCategoryByMonth = groupByCategoryByMonth(transactions);
   const byDayOfWeek = groupByDayOfWeek(transactions);
   const anomalies = detectAnomalies(transactions);
   const topMerchants = getTopMerchants(transactions);
-  const topCategories = getTopCategories(transactions, byCategory);
+  const topCategories = getTopCategories(spendingByCategory);
 
   debugLog('[Analyzer] byMonth:', byMonth);
   debugLog('[Analyzer] byCategory:', byCategory);
@@ -315,3 +320,4 @@ export function getTransactionAnalytics(transactions: Transaction[]): Transactio
     dateRange,
   };
 }
+

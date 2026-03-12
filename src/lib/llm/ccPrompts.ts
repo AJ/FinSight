@@ -92,8 +92,10 @@ TRANSACTIONS TO EXTRACT:
 For each transaction, extract:
 - date: Transaction date in YYYY-MM-DD format
 - description: Merchant name or transaction description
-- amount: Amount in the card's native currency (e.g., INR for Indian cards)
-- originalCurrencyCode: Original currency code if international (e.g., "USD", "EUR"), omit if domestic
+- amount: Amount in the card's local currency
+- localCurrency: ISO code for local/card currency (e.g., "INR", "USD")
+- isInternationalTransaction: true if international/forex transaction, else false
+- originalCurrency: ISO code of original foreign currency if international (e.g., "USD", "EUR"), omit if domestic
 - originalAmount: Amount in original currency if international, omit if domestic
 - transactionType: One of "purchase", "payment", "refund", "cashback", "interest", "fee"
   - Use "cashback" for any cash back, cashback, cash_back, or CB entries (credits to the card)
@@ -179,13 +181,17 @@ Return ONLY valid JSON with this structure:
       "date": "2024-01-15",
       "description": "AMAZON INDIA",
       "amount": 2500.00,
+      "localCurrency": "INR",
+      "isInternationalTransaction": false,
       "transactionType": "purchase"
     },
     {
       "date": "2024-01-20",
       "description": "AIRBNB * HOST",
       "amount": 7500.00,
-      "currency": "USD",
+      "localCurrency": "INR",
+      "isInternationalTransaction": true,
+      "originalCurrency": "USD",
       "originalAmount": 89.00,
       "transactionType": "purchase"
     }
@@ -204,25 +210,42 @@ CREDIT CARD STATEMENT TEXT:
  * Parse type detection result from LLM response
  */
 export function parseTypeDetectionResult(raw: string): TypeDetectionResult {
+  const normalizeStatementType = (value: unknown): TypeDetectionResult['statementType'] => {
+    const normalized = String(value || '').trim().toLowerCase().replace(/[\s_-]+/g, '');
+
+    if (normalized === 'creditcard' || normalized === 'cc' || normalized === 'card') {
+      return 'credit_card';
+    }
+    if (normalized === 'bank' || normalized === 'bankstatement' || normalized === 'checking' || normalized === 'savings') {
+      return 'bank';
+    }
+    return 'unknown';
+  };
+
+  const normalizeConfidence = (value: unknown): number => {
+    const parsed = typeof value === 'number' ? value : Number.parseFloat(String(value || ''));
+    if (!Number.isFinite(parsed)) return 0;
+    return Math.max(0, Math.min(1, parsed));
+  };
+
+  const buildResult = (payload: Record<string, unknown>): TypeDetectionResult => ({
+    statementType: normalizeStatementType(payload.type),
+    confidence: normalizeConfidence(payload.confidence),
+  });
+
   try {
     // Try direct parse
-    const parsed = JSON.parse(raw);
-    if (parsed.type && typeof parsed.confidence === 'number') {
-      return {
-        statementType: parsed.type,
-        confidence: parsed.confidence,
-      };
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    if ('type' in parsed && 'confidence' in parsed) {
+      return buildResult(parsed);
     }
   } catch {
     // Try extracting JSON from response
     const match = raw.match(/\{[^{}]*"type"[^{}]*"confidence"[^{}]*\}/);
     if (match) {
       try {
-        const parsed = JSON.parse(match[0]);
-        return {
-          statementType: parsed.type,
-          confidence: parsed.confidence,
-        };
+        const parsed = JSON.parse(match[0]) as Record<string, unknown>;
+        return buildResult(parsed);
       } catch {
         // Continue to default
       }
@@ -279,6 +302,9 @@ export function parseCCExtractionResult(raw: string): CCExtractionResult | null 
  * Validate CC extraction result has required fields
  */
 export function validateCCExtractionResult(result: CCExtractionResult): boolean {
+  // Check statement object exists
+  if (!result || !result.statement) return false;
+  
   const { statement } = result;
 
   // Check required statement fields
@@ -303,3 +329,4 @@ export function getTextForDetection(text: string, maxChars: number = 3000): stri
   // and summary info that helps identify statement type
   return text.substring(0, maxChars);
 }
+
