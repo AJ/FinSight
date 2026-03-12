@@ -93,7 +93,8 @@ export function CreditCardDisplay({
   const aprDisplay = apr ? `${(apr * 100).toFixed(1)}% p.a.` : "not in stmt";
 
   // Rewards or Cashback display
-  const rewardsDisplay = statement.rewardPoints
+  
+  const rewardsDisplay = statement.rewardPoints && statement.rewardPoints.closingBalance != null
     ? `${statement.rewardPoints.closingBalance.toLocaleString()} pts`
     : statement.cashbackEarned
     ? formatCurrency(statement.cashbackEarned, currency)

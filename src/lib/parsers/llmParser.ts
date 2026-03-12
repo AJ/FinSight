@@ -462,7 +462,7 @@ async function parseLLMDirect(
     let raw: string;
     try {
       raw = await client.generate(baseUrl, model, prompt, {
-        temperature: 0.05,
+        temperature: 0.7,
       });
     } catch (err) {
       console.error(`[LLM Parse] Chunk ${i + 1} failed:`, err);
@@ -620,7 +620,7 @@ async function detectStatementType(
 
   try {
     const raw = await client.generate(baseUrl, model, prompt, {
-      temperature: 0.05,
+      temperature: 0.7,
     });
     return parseTypeDetectionResult(raw);
   } catch (err) {
@@ -655,7 +655,7 @@ async function parseCCStatement(
 
     try {
       const raw = await client.generate(baseUrl, model, prompt, {
-        temperature: 0.05,
+        temperature: 0.7,
       });
 
       const parsed = parseCCExtractionResult(raw);
