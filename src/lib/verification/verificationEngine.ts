@@ -1,10 +1,9 @@
 import { parse, isValid } from "date-fns"
+import { TransactionType as TxType } from '@/lib/utils/transactionType';
 
 //
 // TYPES
 //
-
-export type TxType = "debit" | "credit"
 
 export interface ParsedTransaction {
   id?: string
@@ -23,6 +22,7 @@ export interface StatementMeta {
 
 export interface VerifiedTransaction extends ParsedTransaction {
   confidence: number
+  evidenceAnchor?: number
   verification: {
     amountMatched: boolean
     dateMatched: boolean
@@ -40,6 +40,12 @@ export interface VerificationReport {
     passed: boolean
     computedClosing?: number
     difference?: number
+  }
+  balanceVerification?: {
+    passed: boolean
+    expectedNetChange: number
+    computedNetChange: number
+    difference: number
   }
   overallConfidence: number
 }
@@ -70,8 +76,7 @@ export function verifyStatement(
 
   for (const tx of parsed) {
     const result = verifyTransaction(tx, normalizedText)
-
-    const signature = createSignature(tx)
+    const signature = createSignature(tx, result.evidenceAnchor)
 
     if (signatureSet.has(signature)) {
       duplicates.push(tx)
@@ -88,9 +93,45 @@ export function verifyStatement(
 
   const reconciliation = reconcile(verified, meta)
 
+  // Balance verification: check if sum of transactions matches statement change
+  const hasBalanceInputs =
+    meta.openingBalance !== undefined && meta.closingBalance !== undefined;
+
+  let balanceVerification: VerificationReport['balanceVerification'];
+
+  if (hasBalanceInputs) {
+    const totalDebits = verified
+      .filter(t => t.type === 'debit')
+      .reduce((s, t) => s + t.amount, 0);
+
+    const totalCredits = verified
+      .filter(t => t.type === 'credit')
+      .reduce((s, t) => s + t.amount, 0);
+
+    const computedNetChange = totalCredits - totalDebits;
+    const expectedNetChange = (meta.closingBalance ?? 0) - (meta.openingBalance ?? 0);
+    const difference = Math.abs(computedNetChange - expectedNetChange);
+
+    balanceVerification = {
+      passed: difference <= AMOUNT_TOLERANCE,
+      expectedNetChange,
+      computedNetChange,
+      difference,
+    };
+
+    if (!balanceVerification.passed) {
+      console.warn(
+        `[Verification] Balance mismatch: expected ${expectedNetChange.toFixed(2)}, ` +
+        `computed ${computedNetChange.toFixed(2)}, difference ${difference.toFixed(2)}. ` +
+        `Transactions may be missing or incorrect.`
+      );
+    }
+  }
+
   const overallConfidence = computeOverallConfidence(
     verified,
-    reconciliation
+    reconciliation,
+    balanceVerification
   )
 
   return {
@@ -98,6 +139,7 @@ export function verifyStatement(
     rejected,
     duplicates,
     reconciliation,
+    balanceVerification,
     overallConfidence
   }
 }
@@ -114,7 +156,8 @@ function verifyTransaction(
   const amountMatched = matchAmount(rawText, tx.amount)
   const dateMatched = matchDate(rawText, tx.date)
   const descriptionMatched = matchDescription(rawText, tx.description)
-  const contextMatched = matchContext(rawText, tx)
+  const contextMatch = matchContext(rawText, tx)
+  const contextMatched = contextMatch.matched
   const currencyMatched = tx.currency
     ? rawText.includes(tx.currency)
     : true
@@ -130,6 +173,7 @@ function verifyTransaction(
   return {
     ...tx,
     confidence,
+    evidenceAnchor: contextMatch.anchors[0],
     verification: {
       amountMatched,
       dateMatched,
@@ -205,25 +249,39 @@ function matchDescription(raw: string, desc: string): boolean {
   return matched / words.length >= 0.6
 }
 
-function matchContext(raw: string, tx: ParsedTransaction): boolean {
+function matchContext(raw: string, tx: ParsedTransaction): {
+  matched: boolean
+  anchors: number[]
+} {
   const amountVariants = generateAmountVariants(tx.amount)
   const dateVariants = generateDateVariants(tx.date)
+  const anchors: number[] = []
 
   for (const amount of amountVariants) {
-    const idx = raw.indexOf(amount)
-    if (idx === -1) continue
+    let searchStart = 0
 
-    const window = raw.slice(
-      Math.max(0, idx - 50),
-      idx + 50
-    )
+    while (searchStart < raw.length) {
+      const idx = raw.indexOf(amount, searchStart)
+      if (idx === -1) break
 
-    if (dateVariants.some(d => window.includes(d))) {
-      return true
+      const window = raw.slice(
+        Math.max(0, idx - 80),
+        idx + 80
+      )
+
+      if (dateVariants.some(d => window.includes(d))) {
+        anchors.push(idx)
+      }
+
+      searchStart = idx + Math.max(1, amount.length)
     }
   }
 
-  return false
+  const uniqueAnchors = [...new Set(anchors)].sort((a, b) => a - b)
+  return {
+    matched: uniqueAnchors.length > 0,
+    anchors: uniqueAnchors,
+  }
 }
 
 //
@@ -269,13 +327,23 @@ function generateDateVariants(dateStr: string): string[] {
   return [...new Set([dateStr, ...variants])]
 }
 
-function createSignature(tx: ParsedTransaction): string {
-  return `${tx.date}|${tx.amount}|${tx.description.slice(0, 20)}`
+function createSignature(
+  tx: ParsedTransaction,
+  evidenceAnchor?: number
+): string {
+  const normalizedDesc = normalize(tx.description).slice(0, 40)
+  const amountKey = Number(tx.amount).toFixed(2)
+  const anchorKey = Number.isFinite(evidenceAnchor)
+    ? Math.floor((evidenceAnchor as number) / 8).toString()
+    : "na"
+
+  return `${tx.date}|${amountKey}|${tx.type}|${normalizedDesc}|${anchorKey}`
 }
 
 function computeOverallConfidence(
   verified: VerifiedTransaction[],
-  reconciliation: { passed: boolean }
+  reconciliation: { passed: boolean },
+  balanceVerification?: { passed: boolean }
 ): number {
   if (verified.length === 0) return 0
 
@@ -284,6 +352,8 @@ function computeOverallConfidence(
     verified.length
 
   const reconciliationBonus = reconciliation.passed ? 15 : 0
+  const balanceBonus = balanceVerification?.passed ? 15 : 0
 
-  return Math.round(avg + reconciliationBonus)
+  return Math.round(avg + reconciliationBonus + balanceBonus)
 }
+
