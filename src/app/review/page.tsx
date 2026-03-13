@@ -188,7 +188,7 @@ export default function ReviewPage() {
               </Button>
               <div>
                 <h1 className="text-3xl font-bold">Review Transactions</h1>
-                <p className="text-sm text-muted-foreground">
+                <p className="text-sm text-muted-foreground" suppressHydrationWarning>
                   Review and edit before importing •{" "}
                   {pendingTransactions.length} transactions
                 </p>
