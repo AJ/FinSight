@@ -79,6 +79,8 @@ export function FileUpload({ onFileSelect, isProcessing = false }: FileUploadPro
       const file = e.target.files?.[0];
       if (file) {
         validateAndSelectFile(file, onFileSelect);
+        // Reset input value so same file can be selected again
+        e.target.value = '';
       }
     },
     [onFileSelect]

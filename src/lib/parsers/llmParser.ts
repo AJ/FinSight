@@ -28,6 +28,7 @@ import {
 } from "@/lib/verification/verificationEngine";
 import { getCurrencyByCode } from "@/lib/currencyFormatter";
 import { normalizeTransactionType } from "@/lib/utils/transactionType";
+import { isValid } from "date-fns";
 
 /* ============================================================
    LLM-POWERED PARSER
@@ -1034,7 +1035,10 @@ async function parseCCStatement(
         closingBalance: stmt.rewardPoints.closingBalance,
         expiringNext: stmt.rewardPoints.expiringNext,
         expiringNextDate: stmt.rewardPoints.expiringNextDate
-          ? new Date(stmt.rewardPoints.expiringNextDate)
+          ? (() => {
+              const d = new Date(stmt.rewardPoints.expiringNextDate);
+              return isValid(d) ? d : undefined;
+            })()
           : undefined,
       } : undefined,
     });
@@ -1074,6 +1078,7 @@ export async function parseWithLLMExtended(
   file: File,
   onProgress?: (status: string) => void,
   password?: string,
+  statementType?: 'bank' | 'credit_card',  // Optional: skip auto-detection if provided
 ): Promise<ExtendedParseResult> {
   const { provider, url, model } = getLLMSettings();
   const ext = file.name.toLowerCase();
@@ -1093,10 +1098,22 @@ export async function parseWithLLMExtended(
 
   const selectedModel = await resolveModelOrThrow(provider, url, model ?? undefined);
 
-  // 2 — Pass 1: Detect statement type
-  onProgress?.("Detecting statement type...");
-  const typeResult = await detectStatementType(provider, url, selectedModel, rawText);
-  debugLog('[Parser] Type detection result:', typeResult);
+  // 2 — Pass 1: Detect statement type (or use provided type)
+  let typeResult: TypeDetectionResult;
+  
+  if (statementType) {
+    // User provided type - skip LLM detection
+    typeResult = {
+      statementType: statementType,
+      confidence: 1.0,  // User selection is definitive
+    };
+    debugLog('[Parser] Using user-provided statement type:', statementType);
+  } else {
+    // Auto-detect using LLM
+    onProgress?.("Detecting statement type...");
+    typeResult = await detectStatementType(provider, url, selectedModel, rawText);
+    debugLog('[Parser] Type detection result:', typeResult);
+  }
 
   // Determine format
   let format: "pdf" | "csv" | "xlsx" | "xls" = "pdf";

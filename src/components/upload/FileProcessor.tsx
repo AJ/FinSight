@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
+import { motion, AnimatePresence } from "framer-motion";
 import { FileUpload } from "./FileUpload";
 import { PasswordDialog } from "./PasswordDialog";
 import { parseCSV } from "@/lib/parsers/csvParser";
@@ -18,17 +19,46 @@ import { useCreditCardStore } from "@/lib/store/creditCardStore";
 import { LLMStatus, ParsedStatement, Currency, Transaction, Category } from "@/types";
 import { useRouter } from "next/navigation";
 import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Card, CardContent } from "@/components/ui/card";
 import { CheckCircle2, XCircle, Loader2 } from "lucide-react";
 import { toast } from "sonner";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Button } from "@/components/ui/button";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
+import { Label } from "@/components/ui/label";
 
 const MAX_PASSWORD_ATTEMPTS = 3;
 
 interface FileProcessorProps {
   onSuccess?: () => void;
+  onProcessingChange?: (isProcessing: boolean) => void;
 }
 
-export function FileProcessor({ onSuccess }: FileProcessorProps) {
+export function FileProcessor({ onSuccess, onProcessingChange }: FileProcessorProps) {
   const [isProcessing, setIsProcessing] = useState(false);
+  const processingStartTime = useRef<number>(0);
+  
+  // Notify parent when processing state changes
+  useEffect(() => {
+    if (isProcessing) {
+      processingStartTime.current = Date.now();
+    } else {
+      // Log processing time when done
+      if (processingStartTime.current > 0) {
+        const elapsed = ((Date.now() - processingStartTime.current) / 1000).toFixed(2);
+        console.log(`[FileProcessor] Processing completed in ${elapsed}s`);
+        processingStartTime.current = 0;
+      }
+    }
+    onProcessingChange?.(isProcessing);
+  }, [isProcessing, onProcessingChange]);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [progress, setProgress] = useState<string | null>(null);
@@ -39,6 +69,12 @@ export function FileProcessor({ onSuccess }: FileProcessorProps) {
   const [passwordError, setPasswordError] = useState<string | null>(null);
   const [passwordAttempts, setPasswordAttempts] = useState(0);
   const [pendingFile, setPendingFile] = useState<File | null>(null);
+
+  // Statement type selector state
+  const [statementTypeDialogOpen, setStatementTypeDialogOpen] = useState(false);
+  const [statementType, setStatementType] = useState<'auto' | 'bank' | 'credit_card'>('auto');
+  const [pendingTypeFile, setPendingTypeFile] = useState<File | null>(null);
+  const [pendingTypePassword, setPendingTypePassword] = useState<string | undefined>();
 
   const setCurrency = useSettingsStore((state) => state.setCurrency);
   const llmModel = useSettingsStore((state) => state.llmModel);
@@ -64,8 +100,9 @@ export function FileProcessor({ onSuccess }: FileProcessorProps) {
 
     // Warn about failed chunks
     if (parsed.failedChunks && parsed.failedChunks.length > 0) {
-      toast.warning(`Parsing incomplete: ${parsed.failedChunks.length} sections failed`, {
-        description: "Some transactions are missing. See browser console (F12) for details.",
+      toast.warning(`${parsed.failedChunks.length} sections could not be parsed`, {
+        description: "Some transactions are missing from your statement. " +
+          "Try re-uploading with a different AI model, or check the browser console for details.",
         duration: 10000,
       });
       console.warn(
@@ -127,9 +164,19 @@ export function FileProcessor({ onSuccess }: FileProcessorProps) {
     const currencyInfo = detectedCurrency
       ? ` (${detectedCurrency.code})`
       : "";
-    setSuccess(
-      `Parsed ${categorized.length} transactions${currencyInfo}! Redirecting to review…`,
-    );
+    const successMessage = `Parsed ${categorized.length} transactions${currencyInfo}! Redirecting to review…`;
+    setSuccess(successMessage);
+
+    // Show processing time toast
+    if (processingStartTime.current > 0) {
+      const elapsed = ((Date.now() - processingStartTime.current) / 1000).toFixed(2);
+      toast.success('Statement processed successfully', {
+        description: `Completed in ${elapsed} seconds`,
+        duration: 5000,
+      });
+      console.log(`[FileProcessor] Processing completed in ${elapsed}s`);
+      processingStartTime.current = 0;
+    }
 
     // Close password dialog if open
     setPasswordDialogOpen(false);
@@ -140,42 +187,81 @@ export function FileProcessor({ onSuccess }: FileProcessorProps) {
     setTimeout(() => router.push("/review"), 1000);
   }, [setCurrency, llmModel, llmStatus?.selectedModel, setModel, onSuccess, router]);
 
-  // Process a file with optional password (for PDFs)
-  const processFile = useCallback(async (file: File, password?: string) => {
+  // Process file after statement type is selected
+  const processFileWithStatementType = useCallback(async (
+    file: File,
+    selectedType: 'auto' | 'bank' | 'credit_card',
+    password?: string
+  ) => {
     const ext = file.name.toLowerCase();
-    const isPDF = ext.endsWith(".pdf");
     const isCSV = ext.endsWith(".csv");
     const isXLS = ext.endsWith(".xls") || ext.endsWith(".xlsx");
 
     let parsed: ParsedStatement;
     let detectedCurrency: Currency | null = null;
 
-    if (isPDF) {
-      const result = await parseWithLLMExtended(file, setProgress, password);
-      parsed = result.statement;
-      detectedCurrency = result.currency;
-      // Store CC statement metadata for the credit cards page
-      if (result.ccStatement) {
-        addCCStatement(result.ccStatement);
+    if (ext.endsWith(".pdf")) {
+      // Pass statement type to parser (undefined = auto-detect)
+      const statementTypeParam = selectedType === 'auto' ? undefined : selectedType;
+      try {
+        const result = await parseWithLLMExtended(file, setProgress, password, statementTypeParam);
+        parsed = result.statement;
+        detectedCurrency = result.currency;
+        // Store CC statement metadata for the credit cards page
+        if (result.ccStatement) {
+          addCCStatement(result.ccStatement);
+        }
+        processParsedStatement(parsed, detectedCurrency);
+      } catch (err) {
+        if (isPasswordError(err)) {
+          // PDF needs password - show password dialog
+          setPendingFile(file);
+          setPasswordDialogOpen(true);
+          // Also save the statement type selection for retry
+          setPendingTypeFile(file);
+          setPendingTypePassword(password);
+          setStatementType(selectedType);
+        } else {
+          // Other error
+          throw err;
+        }
       }
     } else if (isCSV) {
       setProgress("Parsing CSV...");
       const result = await parseCSV(file);
       parsed = result.statement;
       detectedCurrency = result.detectedCurrency;
+      processParsedStatement(parsed, detectedCurrency);
     } else if (isXLS) {
       setProgress("Parsing Excel file...");
       const result = await parseXLS(file);
       parsed = result.statement;
       detectedCurrency = result.detectedCurrency;
+      processParsedStatement(parsed, detectedCurrency);
     } else {
       throw new Error(
         "Unsupported file format. Please upload a PDF, CSV, XLS, or XLSX file.",
       );
     }
-
-    processParsedStatement(parsed, detectedCurrency);
   }, [processParsedStatement, addCCStatement]);
+
+  // Process a file with optional password (for PDFs)
+  const processFile = useCallback(async (file: File, password?: string) => {
+    const ext = file.name.toLowerCase();
+    const isPDF = ext.endsWith(".pdf");
+
+    // Show statement type selector for PDF files
+    if (isPDF) {
+      setPendingTypeFile(file);
+      setPendingTypePassword(password);
+      setStatementType('auto');  // Reset to auto-detect default
+      setStatementTypeDialogOpen(true);
+      return;  // Wait for user selection
+    }
+
+    // For CSV/XLS, proceed with parsing (no type selector needed yet)
+    await processFileWithStatementType(file, 'auto', password);
+  }, [processFileWithStatementType]);
 
   // Handle password submission - retry with password
   const handlePasswordSubmit = useCallback(async (password: string) => {
@@ -186,10 +272,15 @@ export function FileProcessor({ onSuccess }: FileProcessorProps) {
     setProgress("Parsing PDF with password...");
 
     try {
-      await processFile(pendingFile, password);
+      // Use the saved statement type from the type dialog (or 'auto' if coming from old flow)
+      const typeToUse = pendingTypeFile ? statementType : 'auto';
+      await processFileWithStatementType(pendingFile, typeToUse, password);
       // Success - clear password state
       setPendingFile(null);
       setPasswordAttempts(0);
+      setPendingTypeFile(null);
+      setPendingTypePassword(undefined);
+      setStatementType('auto');
     } catch (err) {
       if (isPasswordError(err)) {
         const newAttempts = passwordAttempts + 1;
@@ -199,6 +290,8 @@ export function FileProcessor({ onSuccess }: FileProcessorProps) {
           // Too many failed attempts
           setPendingFile(null);
           setPasswordAttempts(0);
+          setPendingTypeFile(null);
+          setPendingTypePassword(undefined);
           setError("Too many failed password attempts. Please try uploading again.");
         } else {
           // Show error and re-open dialog for retry
@@ -210,13 +303,15 @@ export function FileProcessor({ onSuccess }: FileProcessorProps) {
         // Other error
         setPendingFile(null);
         setPasswordAttempts(0);
+        setPendingTypeFile(null);
+        setPendingTypePassword(undefined);
         setError(err instanceof Error ? err.message : "Failed to parse PDF file");
       }
     } finally {
       setIsProcessing(false);
       setProgress(null);
     }
-  }, [pendingFile, passwordAttempts, processFile]);
+  }, [pendingFile, passwordAttempts, processFileWithStatementType, pendingTypeFile, statementType]);
 
   // Handle password dialog cancel
   const handlePasswordCancel = useCallback(() => {
@@ -224,6 +319,28 @@ export function FileProcessor({ onSuccess }: FileProcessorProps) {
     setPendingFile(null);
     setPasswordAttempts(0);
     setPasswordError(null);
+    setIsProcessing(false);
+    setProgress(null);
+    setPendingTypeFile(null);
+    setPendingTypePassword(undefined);
+  }, []);
+
+  // Handle statement type dialog continue
+  const handleStatementTypeContinue = useCallback(() => {
+    setStatementTypeDialogOpen(false);
+    if (pendingTypeFile) {
+      setIsProcessing(true);
+      processFileWithStatementType(pendingTypeFile, statementType, pendingTypePassword);
+      setPendingTypeFile(null);
+      setPendingTypePassword(undefined);
+    }
+  }, [pendingTypeFile, statementType, pendingTypePassword, processFileWithStatementType]);
+
+  // Handle statement type dialog cancel
+  const handleStatementTypeCancel = useCallback(() => {
+    setStatementTypeDialogOpen(false);
+    setPendingTypeFile(null);
+    setPendingTypePassword(undefined);
     setIsProcessing(false);
     setProgress(null);
   }, []);
@@ -247,7 +364,15 @@ export function FileProcessor({ onSuccess }: FileProcessorProps) {
         setIsProcessing(false);
         setProgress(null);
       } else {
-        setError(err instanceof Error ? err.message : "Failed to process file");
+        const errorMessage = err instanceof Error ? err.message : "Failed to process file";
+        setError(errorMessage);
+        
+        // Log processing time even on error
+        if (processingStartTime.current > 0) {
+          const elapsed = ((Date.now() - processingStartTime.current) / 1000).toFixed(2);
+          console.log(`[FileProcessor] Processing failed after ${elapsed}s: ${errorMessage}`);
+          processingStartTime.current = 0;
+        }
       }
     } finally {
       // Only clear processing if not waiting for password
@@ -260,7 +385,46 @@ export function FileProcessor({ onSuccess }: FileProcessorProps) {
 
   return (
     <div className="space-y-4">
-      <FileUpload onFileSelect={handleFileSelect} isProcessing={isProcessing} />
+      <AnimatePresence mode="wait">
+        {/* Show upload form OR processing indicator, not both */}
+        {isProcessing ? (
+          <motion.div
+            key="processing"
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: 'auto' }}
+            exit={{ opacity: 0, height: 0 }}
+            transition={{ duration: 0.3, ease: 'easeInOut' }}
+            className="overflow-hidden"
+          >
+            <Card className="bg-muted/50 border-primary/20">
+              <CardContent className="flex flex-col items-center justify-center py-12 gap-4">
+                <Loader2 className="h-12 w-12 animate-spin text-primary" />
+                <div className="text-center">
+                  <p className="text-lg font-semibold">
+                    {progress || 'Processing your statement...'}
+                  </p>
+                  {!progress && (
+                    <p className="text-sm text-muted-foreground">
+                      This may take a few moments depending on file size
+                    </p>
+                  )}
+                </div>
+              </CardContent>
+            </Card>
+          </motion.div>
+        ) : (
+          <motion.div
+            key="upload"
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: 'auto' }}
+            exit={{ opacity: 0, height: 0 }}
+            transition={{ duration: 0.3, ease: 'easeInOut' }}
+            className="overflow-hidden"
+          >
+            <FileUpload onFileSelect={handleFileSelect} isProcessing={false} />
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Password Dialog */}
       <PasswordDialog
@@ -275,22 +439,6 @@ export function FileProcessor({ onSuccess }: FileProcessorProps) {
         isProcessing={false}
         reason={passwordAttempts > 0 ? 2 : 1}
       />
-
-      {/* Progress */}
-      {progress && (
-        <Alert>
-          <Loader2 className="h-4 w-4 animate-spin" />
-          <AlertDescription>{progress}</AlertDescription>
-        </Alert>
-      )}
-
-      {/* Processing (non-LLM) */}
-      {isProcessing && !progress && (
-        <Alert>
-          <Loader2 className="h-4 w-4 animate-spin" />
-          <AlertDescription>Processing your file…</AlertDescription>
-        </Alert>
-      )}
 
       {error && (
         <Alert variant="destructive">
@@ -317,6 +465,80 @@ export function FileProcessor({ onSuccess }: FileProcessorProps) {
           </AlertDescription>
         </Alert>
       )}
+
+      {/* Statement Type Selector Dialog */}
+      <Dialog 
+        open={statementTypeDialogOpen} 
+        onOpenChange={(open) => {
+          // Prevent closing while processing
+          if (!open && isProcessing) return;
+          setStatementTypeDialogOpen(open);
+        }}
+      >
+        <DialogContent 
+          onEscapeKeyDown={(e) => {
+            // Prevent escape key while processing
+            if (isProcessing) {
+              e.preventDefault();
+              return;
+            }
+            handleStatementTypeCancel();
+          }}
+        >
+          <DialogHeader>
+            <DialogTitle>Statement Type</DialogTitle>
+            <DialogDescription>
+              How should we detect the statement type?
+            </DialogDescription>
+          </DialogHeader>
+          <RadioGroup 
+            value={statementType} 
+            onValueChange={(v) => setStatementType(v as 'auto' | 'bank' | 'credit_card')}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                e.preventDefault();
+                handleStatementTypeContinue();
+              }
+            }}
+          >
+            <div className="flex items-start space-x-2">
+              <RadioGroupItem value="auto" id="auto-detect" />
+              <Label htmlFor="auto-detect" className="flex-1">
+                <div className="font-medium">Auto-detect</div>
+                <div className="text-sm text-muted-foreground">
+                  Uses AI to identify statement type (takes 5-10 seconds)
+                </div>
+              </Label>
+            </div>
+            <div className="flex items-start space-x-2">
+              <RadioGroupItem value="bank" id="bank-statement" />
+              <Label htmlFor="bank-statement" className="flex-1">
+                <div className="font-medium">Bank Statement</div>
+                <div className="text-sm text-muted-foreground">
+                  Savings or Current account statement
+                </div>
+              </Label>
+            </div>
+            <div className="flex items-start space-x-2">
+              <RadioGroupItem value="credit_card" id="cc-statement" />
+              <Label htmlFor="cc-statement" className="flex-1">
+                <div className="font-medium">Credit Card Statement</div>
+                <div className="text-sm text-muted-foreground">
+                  Credit card billing statement
+                </div>
+              </Label>
+            </div>
+          </RadioGroup>
+          <DialogFooter>
+            <Button variant="outline" onClick={handleStatementTypeCancel}>
+              Cancel
+            </Button>
+            <Button onClick={handleStatementTypeContinue}>
+              Continue
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

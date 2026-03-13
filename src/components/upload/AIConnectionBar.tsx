@@ -35,9 +35,11 @@ import {
 interface AIConnectionBarProps {
   /** Called whenever connection status or model changes */
   onStatusChange?: (connected: boolean, model: string | null) => void;
+  /** Disable the entire bar (during processing) */
+  disabled?: boolean;
 }
 
-export function AIConnectionBar({ onStatusChange }: AIConnectionBarProps) {
+export function AIConnectionBar({ onStatusChange, disabled = false }: AIConnectionBarProps) {
   const llmProvider = useSettingsStore((s) => s.llmProvider);
   const ollamaUrl = useSettingsStore((s) => s.ollamaUrl);
   const llmModel = useSettingsStore((s) => s.llmModel);
@@ -149,6 +151,7 @@ export function AIConnectionBar({ onStatusChange }: AIConnectionBarProps) {
               setLLMModel(v);
               onStatusChange?.(true, v);
             }}
+            disabled={disabled}
           >
             <SelectTrigger className="w-auto h-8 text-xs gap-1.5 px-3">
               <Sparkles className="w-3 h-3 shrink-0" />
