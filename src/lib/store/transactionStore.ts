@@ -22,63 +22,67 @@ function rehydrateTransactions(txns: Transaction[]): Transaction[] {
     // If already a Transaction instance with isIncome getter, return as-is
     if (t instanceof Transaction) {
       return new Transaction(
-        t.id,
-        toDate(t.date),
-        t.description,
-        t.amount,
-        t.type,
-        t.category instanceof Category ? t.category : Category.fromId(typeof t.category === 'string' ? t.category : Category.DEFAULT_ID) ?? Category.fromId(Category.DEFAULT_ID)!,
-        t.balance,
-        t.merchant,
-        t.originalText,
-        t.budgetMonth,
-        t.categoryConfidence,
-        t.needsReview,
-        t.categorizedBy,
-        t.sourceType,
-        t.statementId,
-        t.cardIssuer,
-        t.cardLastFour,
-        t.cardHolder,
-        t.localCurrency,
-        t.originalCurrency,
-        t.originalAmount,
-        t.isInternational,
-        t.isAnomaly,
-        t.anomalyTypes,
-        t.anomalyDetails,
-        t.anomalyDismissed,
+        t.id, // id
+        toDate(t.date), // date
+        t.description, // description
+        t.amount, // amount
+        t.type, // type
+        t.category instanceof Category ? t.category : Category.fromId(typeof t.category === 'string' ? t.category : Category.DEFAULT_ID) ?? Category.fromId(Category.DEFAULT_ID)!, // category
+        t.balance, // balance
+        t.merchant, // merchant
+        t.originalText, // originalText
+        t.budgetMonth, // budgetMonth
+        t.categoryConfidence, // categoryConfidence
+        t.needsReview, // needsReview
+        t.categorizedBy, // categorizedBy
+        t.sourceType, // sourceType
+        t.statementId, // statementId
+        t.cardIssuer, // cardIssuer
+        t.cardLastFour, // cardLastFour
+        t.cardHolder, // cardHolder
+        t.localCurrency, // localCurrency
+        t.originalCurrency, // originalCurrency
+        t.originalAmount, // originalAmount
+        t.isInternational, // isInternational
+        t.isAnomaly, // isAnomaly
+        t.anomalyTypes, // anomalyTypes
+        t.anomalyDetails, // anomalyDetails
+        t.anomalyDismissed, // anomalyDismissed
+        t.transactionSubType, // transactionSubType
+        t.suggestedCategory, // suggestedCategory
       );
     }
     // Otherwise reconstruct from JSON-like object
     const json = t as unknown as TransactionJSON;
     return new Transaction(
-      json.id,
-      toDate(json.date as Date | string),
-      json.description,
-      json.amount,
-      json.type,
-      Category.fromId(typeof json.category === 'string' ? json.category : Category.DEFAULT_ID) ?? Category.fromId(Category.DEFAULT_ID)!,
-      json.balance,
-      json.merchant,
-      json.originalText,
-      json.budgetMonth,
-      json.categoryConfidence,
-      json.needsReview,
-      json.categorizedBy,
-      json.sourceType,
-      json.statementId,
-      json.cardIssuer,
-      json.cardLastFour,
-      json.cardHolder,
-      json.localCurrency,
-      json.originalCurrency,
-      json.originalAmount,
-      json.isInternational,
-      json.isAnomaly,
-      json.anomalyTypes,
-      json.anomalyDetails,
-      json.anomalyDismissed,
+      json.id, // id
+      toDate(json.date as Date | string), // date
+      json.description, // description
+      json.amount, // amount
+      json.type, // type
+      Category.fromId(typeof json.category === 'string' ? json.category : Category.DEFAULT_ID) ?? Category.fromId(Category.DEFAULT_ID)!, // category
+      json.balance, // balance
+      json.merchant, // merchant
+      json.originalText, // originalText
+      json.budgetMonth, // budgetMonth
+      json.categoryConfidence, // categoryConfidence
+      json.needsReview, // needsReview
+      json.categorizedBy, // categorizedBy
+      json.sourceType, // sourceType
+      json.statementId, // statementId
+      json.cardIssuer, // cardIssuer
+      json.cardLastFour, // cardLastFour
+      json.cardHolder, // cardHolder
+      json.localCurrency, // localCurrency
+      json.originalCurrency, // originalCurrency
+      json.originalAmount, // originalAmount
+      json.isInternational, // isInternational
+      json.isAnomaly, // isAnomaly
+      json.anomalyTypes, // anomalyTypes
+      json.anomalyDetails, // anomalyDetails
+      json.anomalyDismissed, // anomalyDismissed
+      json.transactionSubType, // transactionSubType
+      json.suggestedCategory, // suggestedCategory
     );
   });
 }
@@ -152,32 +156,34 @@ export const useTransactionStore = create<TransactionStore>()(
 
             // Create new Transaction with updates
             return new Transaction(
-              updates.id ?? txn.id,
-              updates.date ? toDate(updates.date) : txn.date,
-              updates.description ?? txn.description,
-              updates.amount ?? txn.amount,
-              updates.type ?? txn.type,
-              resolvedCategory,
-              updates.balance ?? txn.balance,
-              updates.merchant ?? txn.merchant,
-              updates.originalText ?? txn.originalText,
-              updates.budgetMonth ?? txn.budgetMonth,
-              updates.categoryConfidence ?? txn.categoryConfidence,
-              updates.needsReview ?? txn.needsReview,
-              updates.categorizedBy ?? txn.categorizedBy,
-              updates.sourceType ?? txn.sourceType,
-              updates.statementId ?? txn.statementId,
-              updates.cardIssuer ?? txn.cardIssuer,
-              updates.cardLastFour ?? txn.cardLastFour,
-              updates.cardHolder ?? txn.cardHolder,
-              updates.localCurrency ?? txn.localCurrency,
-              updates.originalCurrency ?? txn.originalCurrency,
-              updates.originalAmount ?? txn.originalAmount,
-              updates.isInternational ?? txn.isInternational,
-              updates.isAnomaly ?? txn.isAnomaly,
-              updates.anomalyTypes ?? txn.anomalyTypes,
-              updates.anomalyDetails ?? txn.anomalyDetails,
-              updates.anomalyDismissed ?? txn.anomalyDismissed,
+              updates.id ?? txn.id, // id
+              updates.date ? toDate(updates.date) : txn.date, // date
+              updates.description ?? txn.description, // description
+              updates.amount ?? txn.amount, // amount
+              updates.type ?? txn.type, // type
+              resolvedCategory, // category
+              updates.balance ?? txn.balance, // balance
+              updates.merchant ?? txn.merchant, // merchant
+              updates.originalText ?? txn.originalText, // originalText
+              updates.budgetMonth ?? txn.budgetMonth, // budgetMonth
+              updates.categoryConfidence ?? txn.categoryConfidence, // categoryConfidence
+              updates.needsReview ?? txn.needsReview, // needsReview
+              updates.categorizedBy ?? txn.categorizedBy, // categorizedBy
+              updates.sourceType ?? txn.sourceType, // sourceType
+              updates.statementId ?? txn.statementId, // statementId
+              updates.cardIssuer ?? txn.cardIssuer, // cardIssuer
+              updates.cardLastFour ?? txn.cardLastFour, // cardLastFour
+              updates.cardHolder ?? txn.cardHolder, // cardHolder
+              updates.localCurrency ?? txn.localCurrency, // localCurrency
+              updates.originalCurrency ?? txn.originalCurrency, // originalCurrency
+              updates.originalAmount ?? txn.originalAmount, // originalAmount
+              updates.isInternational ?? txn.isInternational, // isInternational
+              updates.isAnomaly ?? txn.isAnomaly, // isAnomaly
+              updates.anomalyTypes ?? txn.anomalyTypes, // anomalyTypes
+              updates.anomalyDetails ?? txn.anomalyDetails, // anomalyDetails
+              updates.anomalyDismissed ?? txn.anomalyDismissed, // anomalyDismissed
+              updates.transactionSubType ?? txn.transactionSubType, // transactionSubType
+              updates.suggestedCategory ?? txn.suggestedCategory, // suggestedCategory
             );
           }),
         })),
@@ -245,32 +251,34 @@ export const useTransactionStore = create<TransactionStore>()(
           transactions: state.transactions.map((txn) => {
             if (txn.id !== id) return txn;
             return new Transaction(
-              txn.id,
-              txn.date,
-              txn.description,
-              txn.amount,
-              txn.type,
-              Category.fromId(categoryId) ?? txn.category,
-              txn.balance,
-              txn.merchant,
-              txn.originalText,
-              txn.budgetMonth,
-              txn.categoryConfidence,
+              txn.id, // id
+              txn.date, // date
+              txn.description, // description
+              txn.amount, // amount
+              txn.type, // type
+              Category.fromId(categoryId) ?? txn.category, // category
+              txn.balance, // balance
+              txn.merchant, // merchant
+              txn.originalText, // originalText
+              txn.budgetMonth, // budgetMonth
+              txn.categoryConfidence, // categoryConfidence
               false, // needsReview - clear on manual change
-              categorizedBy,
-              txn.sourceType,
-              txn.statementId,
-              txn.cardIssuer,
-              txn.cardLastFour,
-              txn.cardHolder,
-              txn.localCurrency,
-              txn.originalCurrency,
-              txn.originalAmount,
-              txn.isInternational,
-              txn.isAnomaly,
-              txn.anomalyTypes,
-              txn.anomalyDetails,
-              txn.anomalyDismissed,
+              categorizedBy, // categorizedBy
+              txn.sourceType, // sourceType
+              txn.statementId, // statementId
+              txn.cardIssuer, // cardIssuer
+              txn.cardLastFour, // cardLastFour
+              txn.cardHolder, // cardHolder
+              txn.localCurrency, // localCurrency
+              txn.originalCurrency, // originalCurrency
+              txn.originalAmount, // originalAmount
+              txn.isInternational, // isInternational
+              txn.isAnomaly, // isAnomaly
+              txn.anomalyTypes, // anomalyTypes
+              txn.anomalyDetails, // anomalyDetails
+              txn.anomalyDismissed, // anomalyDismissed
+              txn.transactionSubType, // transactionSubType
+              txn.suggestedCategory, // suggestedCategory
             );
           }),
         })),
@@ -341,32 +349,34 @@ export const useTransactionStore = create<TransactionStore>()(
           transactions: state.transactions.map((txn) => {
             if (txn.id !== id) return txn;
             return new Transaction(
-              txn.id,
-              txn.date,
-              txn.description,
-              txn.amount,
-              txn.type,
-              txn.category,
-              txn.balance,
-              txn.merchant,
-              txn.originalText,
-              txn.budgetMonth,
-              txn.categoryConfidence,
-              txn.needsReview,
-              txn.categorizedBy,
-              txn.sourceType,
-              txn.statementId,
-              txn.cardIssuer,
-              txn.cardLastFour,
-              txn.cardHolder,
-              txn.localCurrency,
-              txn.originalCurrency,
-              txn.originalAmount,
-              txn.isInternational,
-              txn.isAnomaly,
-              txn.anomalyTypes,
-              txn.anomalyDetails,
+              txn.id, // id
+              txn.date, // date
+              txn.description, // description
+              txn.amount, // amount
+              txn.type, // type
+              txn.category, // category
+              txn.balance, // balance
+              txn.merchant, // merchant
+              txn.originalText, // originalText
+              txn.budgetMonth, // budgetMonth
+              txn.categoryConfidence, // categoryConfidence
+              txn.needsReview, // needsReview
+              txn.categorizedBy, // categorizedBy
+              txn.sourceType, // sourceType
+              txn.statementId, // statementId
+              txn.cardIssuer, // cardIssuer
+              txn.cardLastFour, // cardLastFour
+              txn.cardHolder, // cardHolder
+              txn.localCurrency, // localCurrency
+              txn.originalCurrency, // originalCurrency
+              txn.originalAmount, // originalAmount
+              txn.isInternational, // isInternational
+              txn.isAnomaly, // isAnomaly
+              txn.anomalyTypes, // anomalyTypes
+              txn.anomalyDetails, // anomalyDetails
               true, // anomalyDismissed
+              txn.transactionSubType, // transactionSubType
+              txn.suggestedCategory, // suggestedCategory
             );
           }),
         })),
@@ -376,32 +386,34 @@ export const useTransactionStore = create<TransactionStore>()(
           transactions: state.transactions.map((txn) => {
             if (txn.id !== id) return txn;
             return new Transaction(
-              txn.id,
-              txn.date,
-              txn.description,
-              txn.amount,
-              txn.type,
-              txn.category,
-              txn.balance,
-              txn.merchant,
-              txn.originalText,
-              txn.budgetMonth,
-              txn.categoryConfidence,
-              txn.needsReview,
-              txn.categorizedBy,
-              txn.sourceType,
-              txn.statementId,
-              txn.cardIssuer,
-              txn.cardLastFour,
-              txn.cardHolder,
-              txn.localCurrency,
-              txn.originalCurrency,
-              txn.originalAmount,
-              txn.isInternational,
-              txn.isAnomaly,
-              txn.anomalyTypes,
-              txn.anomalyDetails,
+              txn.id, // id
+              txn.date, // date
+              txn.description, // description
+              txn.amount, // amount
+              txn.type, // type
+              txn.category, // category
+              txn.balance, // balance
+              txn.merchant, // merchant
+              txn.originalText, // originalText
+              txn.budgetMonth, // budgetMonth
+              txn.categoryConfidence, // categoryConfidence
+              txn.needsReview, // needsReview
+              txn.categorizedBy, // categorizedBy
+              txn.sourceType, // sourceType
+              txn.statementId, // statementId
+              txn.cardIssuer, // cardIssuer
+              txn.cardLastFour, // cardLastFour
+              txn.cardHolder, // cardHolder
+              txn.localCurrency, // localCurrency
+              txn.originalCurrency, // originalCurrency
+              txn.originalAmount, // originalAmount
+              txn.isInternational, // isInternational
+              txn.isAnomaly, // isAnomaly
+              txn.anomalyTypes, // anomalyTypes
+              txn.anomalyDetails, // anomalyDetails
               false, // anomalyDismissed
+              txn.transactionSubType, // transactionSubType
+              txn.suggestedCategory, // suggestedCategory
             );
           }),
         })),

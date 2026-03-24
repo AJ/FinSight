@@ -1,18 +1,11 @@
-import { parse, isValid } from "date-fns"
-import { TransactionType as TxType } from '@/lib/utils/transactionType';
+import { parse, isValid, format } from "date-fns"
+import { Transaction } from '@/models/Transaction';
+import { debugLog } from '@/lib/utils/debug';
+import type { CCSummary, BankSummary } from '@/lib/parsers/extractSummary';
 
 //
 // TYPES
 //
-
-export interface ParsedTransaction {
-  id?: string
-  date: string
-  description: string
-  amount: number
-  type: TxType
-  currency?: string
-}
 
 export interface StatementMeta {
   openingBalance?: number
@@ -20,7 +13,20 @@ export interface StatementMeta {
   currency?: string
 }
 
-export interface VerifiedTransaction extends ParsedTransaction {
+// CC-specific metadata for verification
+export interface CCStatementMeta {
+  previousBalance?: number
+  totalDue?: number
+  paymentsReceived?: number
+  purchasesAndCharges?: number
+  interestCharged?: number
+  lateFee?: number
+  otherCharges?: number
+  cashbackEarned?: number
+  currency?: string
+}
+
+export interface VerifiedTransaction extends Transaction {
   confidence: number
   evidenceAnchor?: number
   verification: {
@@ -34,8 +40,8 @@ export interface VerifiedTransaction extends ParsedTransaction {
 
 export interface VerificationReport {
   verified: VerifiedTransaction[]
-  rejected: ParsedTransaction[]
-  duplicates: ParsedTransaction[]
+  rejected: Transaction[]
+  duplicates: Transaction[]
   reconciliation: {
     passed: boolean
     computedClosing?: number
@@ -44,12 +50,42 @@ export interface VerificationReport {
   overallConfidence: number
 }
 
+// CC verification report
+export interface CCVerificationReport {
+  // Approach B: Statement total verification
+  statementTotals: {
+    passed: boolean
+    expectedTotalDue: number
+    computedTotalDue: number
+    difference: number
+    formula: string  // Human-readable formula
+  }
+  
+  // Approach C: Transaction sum verification
+  transactionSums: {
+    passed: boolean
+    totalPurchases: number
+    totalPayments: number
+    totalFees: number
+    totalDebits?: number  // Added for base type comparison
+    totalCredits?: number  // Added for base type comparison
+    statementPurchases?: number
+    statementPayments?: number
+    statementFees?: number
+  }
+  
+  // Overall
+  overallConfidence: number
+  passed: boolean
+}
+
 //
 // CONFIGURATION
 //
 
-const AMOUNT_TOLERANCE = 0.01
-const MIN_CONFIDENCE_ACCEPT = 75
+const AMOUNT_TOLERANCE = 1.0         // ₹1 for balance verification (handles statement rounding)
+const MIN_CONFIDENCE_ACCEPT = 75     // 75% confidence threshold
+const CATEGORIZATION_TOLERANCE = 10  // ₹10 for categorization matches
 
 //
 // PUBLIC ENTRY
@@ -57,18 +93,18 @@ const MIN_CONFIDENCE_ACCEPT = 75
 
 export function verifyStatement(
   rawText: string,
-  parsed: ParsedTransaction[],
+  transactions: Transaction[],
   meta: StatementMeta
 ): VerificationReport {
 
   const normalizedText = normalize(rawText)
   const verified: VerifiedTransaction[] = []
-  const rejected: ParsedTransaction[] = []
-  const duplicates: ParsedTransaction[] = []
+  const rejected: Transaction[] = []
+  const duplicates: Transaction[] = []
 
   const signatureSet = new Set<string>()
 
-  for (const tx of parsed) {
+  for (const tx of transactions) {
     const result = verifyTransaction(tx, normalizedText)
     const signature = createSignature(tx, result.evidenceAnchor)
 
@@ -106,28 +142,29 @@ export function verifyStatement(
 //
 
 function verifyTransaction(
-  tx: ParsedTransaction,
+  tx: Transaction,
   rawText: string
 ): VerifiedTransaction {
 
   const amountMatched = matchAmount(rawText, tx.amount)
-  const dateMatched = matchDate(rawText, tx.date)
+  const dateMatched = matchDate(rawText, format(tx.date, 'yyyy-MM-dd'))
   const descriptionMatched = matchDescription(rawText, tx.description)
   const contextMatch = matchContext(rawText, tx)
   const contextMatched = contextMatch.matched
-  const currencyMatched = tx.currency
-    ? rawText.includes(tx.currency)
+  const typeMatched = matchType(rawText, tx)  // NEW: Verify credit/debit column
+  const currencyMatched = tx.localCurrency
+    ? rawText.includes(tx.localCurrency.code)
     : true
 
   let confidence = 0
 
-  if (amountMatched) confidence += 35
+  if (amountMatched) confidence += 30
+  if (typeMatched) confidence += 25  // Type match (credit/debit column)
   if (dateMatched) confidence += 20
-  if (descriptionMatched) confidence += 20
-  if (contextMatched) confidence += 15
+  if (descriptionMatched) confidence += 15
   if (currencyMatched) confidence += 10
 
-  return {
+  return Object.assign(Object.create(Transaction.prototype), {
     ...tx,
     confidence,
     evidenceAnchor: contextMatch.anchors[0],
@@ -136,9 +173,10 @@ function verifyTransaction(
       dateMatched,
       descriptionMatched,
       contextMatched,
-      currencyMatched
+      currencyMatched,
+      typeMatched  // NEW
     }
-  }
+  }) as VerifiedTransaction;
 }
 
 //
@@ -146,7 +184,7 @@ function verifyTransaction(
 //
 
 function reconcile(
-  transactions: ParsedTransaction[],
+  transactions: Transaction[],
   meta: StatementMeta
 ) {
 
@@ -180,6 +218,305 @@ function reconcile(
 }
 
 //
+// CC STATEMENT VERIFICATION (Approach B + C)
+//
+
+/**
+ * Verify credit card statement using two approaches:
+ * - Approach B: Statement totals (Previous + Purchases + Fees - Payments = Total Due)
+ * - Approach C: Transaction sums by type
+ */
+export function verifyCCStatement(
+  transactions: Transaction[],
+  meta: CCStatementMeta
+): CCVerificationReport {
+  // Approach B: Verify statement totals
+  const statementTotals = verifyCCStatementTotals(transactions, meta)
+  
+  // Approach C: Verify transaction sums by type
+  const transactionSums = verifyCCTransactionSums(transactions, meta)
+  
+  // Overall confidence
+  const passed = statementTotals.passed && transactionSums.passed
+  const overallConfidence = calculateCCConfidence(statementTotals, transactionSums)
+  
+  return {
+    statementTotals,
+    transactionSums,
+    overallConfidence,
+    passed
+  }
+}
+
+function verifyCCStatementTotals(
+  transactions: Transaction[],
+  meta: CCStatementMeta
+): CCVerificationReport['statementTotals'] {
+  // Use base credit/debit for balance verification
+  const totalDebits = transactions
+    .filter(t => t.type === 'debit')
+    .reduce((s, t) => s + t.amount, 0)
+
+  const totalCredits = transactions
+    .filter(t => t.type === 'credit')
+    .reduce((s, t) => s + t.amount, 0)
+
+  // Formula: Previous + Debits - Credits = Total Due
+  const computedTotalDue = meta.previousBalance !== undefined
+    ? meta.previousBalance + totalDebits - totalCredits
+    : 0
+
+  const expectedTotalDue = meta.totalDue ?? 0
+  const difference = Math.abs(computedTotalDue - expectedTotalDue)
+
+  // Log sub-type breakdown for debugging
+  const subtypeBreakdown = {
+    purchases: transactions.filter(t => t.transactionSubType === 'purchase').reduce((s, t) => s + t.amount, 0),
+    payments: transactions.filter(t => t.transactionSubType === 'payment').reduce((s, t) => s + t.amount, 0),
+    refunds: transactions.filter(t => t.transactionSubType === 'refund').reduce((s, t) => s + t.amount, 0),
+    cashback: transactions.filter(t => t.transactionSubType === 'cashback').reduce((s, t) => s + t.amount, 0),
+    fees: transactions.filter(t => t.transactionSubType === 'fee').reduce((s, t) => s + t.amount, 0),
+    interest: transactions.filter(t => t.transactionSubType === 'interest').reduce((s, t) => s + t.amount, 0),
+  }
+  debugLog('[CC Verification] Sub-type breakdown:', subtypeBreakdown)
+  debugLog('[CC Verification] Base totals:', { totalDebits, totalCredits, computedTotalDue, expectedTotalDue, difference })
+
+  const formula = meta.previousBalance !== undefined
+    ? `₹${meta.previousBalance.toFixed(2)} (Previous) + ₹${totalDebits.toFixed(2)} (Debits) - ₹${totalCredits.toFixed(2)} (Credits) = ₹${computedTotalDue.toFixed(2)}`
+    : 'Previous balance not available'
+
+  debugLog('[CC Verification] Statement Totals:', {
+    previousBalance: meta.previousBalance,
+    totalDebits,
+    totalCredits,
+    computedTotalDue,
+    expectedTotalDue,
+    difference,
+    passed: difference <= AMOUNT_TOLERANCE,
+  });
+
+  return {
+    passed: difference <= AMOUNT_TOLERANCE,
+    expectedTotalDue,
+    computedTotalDue,
+    difference,
+    formula
+  }
+}
+
+function verifyCCTransactionSums(
+  transactions: Transaction[],
+  meta: CCStatementMeta
+): CCVerificationReport['transactionSums'] {
+  // Sum transactions by sub-type (for detailed breakdown)
+  const totalPurchases = sumTransactionsBySubType(transactions, ['purchase', 'charge'])
+  const totalPayments = sumTransactionsBySubType(transactions, ['payment'])
+  const totalFees = sumTransactionsBySubType(transactions, ['fee', 'interest'])
+  
+  // Sum by base type (for statement column comparison)
+  // Statement "Payments/Credits" = ALL credits (payments + refunds + cashback)
+  // Statement "Purchases/Debit" = ALL debits (purchases + fees + interest)
+  const totalDebits = transactions
+    .filter(t => t.type === 'debit')
+    .reduce((s, t) => s + t.amount, 0)
+  const totalCredits = transactions
+    .filter(t => t.type === 'credit')
+    .reduce((s, t) => s + t.amount, 0)
+
+  // Compare to statement breakdowns using base type (matches statement column structure)
+  const purchasesMatch = meta.purchasesAndCharges !== undefined
+    ? Math.abs(totalDebits - meta.purchasesAndCharges) < CATEGORIZATION_TOLERANCE
+    : true
+
+  const paymentsMatch = meta.paymentsReceived !== undefined
+    ? Math.abs(totalCredits - meta.paymentsReceived) < CATEGORIZATION_TOLERANCE
+    : true
+
+  const feesMatch = (meta.interestCharged !== undefined || meta.lateFee !== undefined)
+    ? Math.abs(totalFees - ((meta.interestCharged ?? 0) + (meta.lateFee ?? 0))) < CATEGORIZATION_TOLERANCE
+    : true
+
+  // Log verification details
+  debugLog('[CC Verification] Transaction Sums:', {
+    totalPurchases,
+    totalPayments,
+    totalFees,
+    totalDebits,
+    totalCredits,
+    statementPurchases: meta.purchasesAndCharges,
+    statementPayments: meta.paymentsReceived,
+    statementFees: (meta.interestCharged ?? 0) + (meta.lateFee ?? 0),
+    purchasesMatch,
+    paymentsMatch,
+    feesMatch,
+    passed: purchasesMatch && paymentsMatch && feesMatch,
+  });
+
+  return {
+    passed: purchasesMatch && paymentsMatch && feesMatch,
+    totalPurchases,
+    totalPayments,
+    totalFees,
+    totalDebits,
+    totalCredits,
+    statementPurchases: meta.purchasesAndCharges,
+    statementPayments: meta.paymentsReceived,
+    statementFees: (meta.interestCharged ?? 0) + (meta.lateFee ?? 0)
+  }
+}
+
+function sumTransactionsBySubType(
+  transactions: Transaction[],
+  subTypes: string[]
+): number {
+  return transactions
+    .filter(t => t.transactionSubType && subTypes.includes(t.transactionSubType))
+    .reduce((s, t) => s + t.amount, 0)
+}
+
+function calculateCCConfidence(
+  statementTotals: CCVerificationReport['statementTotals'],
+  transactionSums: CCVerificationReport['transactionSums']
+): number {
+  let confidence = 0
+  
+  // Statement totals (50 points)
+  if (statementTotals.passed) {
+    confidence += 50
+  } else if (statementTotals.difference < 100) {
+    confidence += 25  // Partial credit for small differences
+  }
+  
+  // Transaction sums (50 points)
+  if (transactionSums.passed) {
+    confidence += 50
+  } else {
+    // Partial credit for individual matches
+    if (transactionSums.statementPurchases === undefined || 
+        Math.abs(transactionSums.totalPurchases - transactionSums.statementPurchases) < CATEGORIZATION_TOLERANCE) {
+      confidence += 17
+    }
+    if (transactionSums.statementPayments === undefined ||
+        Math.abs(transactionSums.totalPayments - transactionSums.statementPayments) < CATEGORIZATION_TOLERANCE) {
+      confidence += 17
+    }
+    if (transactionSums.statementFees === undefined ||
+        Math.abs(transactionSums.totalFees - transactionSums.statementFees) < CATEGORIZATION_TOLERANCE) {
+      confidence += 16
+    }
+  }
+  
+  return confidence
+}
+
+/**
+ * Cross-section validation for CC statements.
+ * Compares transaction totals against summary fields.
+ */
+export function validateCCCrossSection(
+  summary: CCSummary,
+  transactions: Transaction[]
+): string[] {
+  const warnings: string[] = [];
+
+  if (!summary || !Array.isArray(transactions) || transactions.length === 0) {
+    return warnings;
+  }
+
+  const totalDebit = transactions
+    .filter((t: Transaction) => t.type === 'debit')
+    .reduce((s: number, t: Transaction) => s + t.amount, 0);
+
+  const totalCredit = transactions
+    .filter((t: Transaction) => t.type === 'credit')
+    .reduce((s: number, t: Transaction) => s + t.amount, 0);
+
+  // CC debit total vs purchasesAndCharges (15% tolerance)
+  if (
+    summary.purchasesAndCharges !== null &&
+    summary.purchasesAndCharges !== undefined &&
+    summary.purchasesAndCharges > 0
+  ) {
+    const debitGap = Math.abs(totalDebit - summary.purchasesAndCharges);
+    const debitGapPct = debitGap / summary.purchasesAndCharges;
+
+    if (debitGapPct > 0.15) {
+      warnings.push(
+        `CC cross-section: transaction debits (${totalDebit.toFixed(2)}) differ from ` +
+        `summary purchasesAndCharges (${summary.purchasesAndCharges}) ` +
+        `by ${(debitGapPct * 100).toFixed(1)}% — review extraction`
+      );
+    }
+  }
+
+  // CC credit total vs paymentsReceived (15% tolerance)
+  if (
+    summary.paymentsReceived !== null &&
+    summary.paymentsReceived !== undefined &&
+    summary.paymentsReceived > 0
+  ) {
+    const creditGap = Math.abs(totalCredit - summary.paymentsReceived);
+    const creditGapPct = creditGap / summary.paymentsReceived;
+
+    if (creditGapPct > 0.15) {
+      warnings.push(
+        `CC cross-section: transaction credits (${totalCredit.toFixed(2)}) differ from ` +
+        `summary paymentsReceived (${summary.paymentsReceived}) ` +
+        `by ${(creditGapPct * 100).toFixed(1)}% — review extraction`
+      );
+    }
+  }
+
+  return warnings;
+}
+
+/**
+ * Cross-section validation for bank statements.
+ * Verifies balance equation: opening + credits - debits = closing
+ */
+export function validateBankCrossSection(
+  summary: BankSummary,
+  transactions: Transaction[]
+): string[] {
+  const warnings: string[] = [];
+
+  if (!summary || !Array.isArray(transactions) || transactions.length === 0) {
+    return warnings;
+  }
+
+  if (
+    summary.openingBalance === null ||
+    summary.openingBalance === undefined ||
+    summary.closingBalance === null ||
+    summary.closingBalance === undefined
+  ) {
+    return warnings;
+  }
+
+  const totalCredit = transactions
+    .filter((t: Transaction) => t.type === 'credit')
+    .reduce((s: number, t: Transaction) => s + t.amount, 0);
+
+  const totalDebit = transactions
+    .filter((t: Transaction) => t.type === 'debit')
+    .reduce((s: number, t: Transaction) => s + t.amount, 0);
+
+  const calculatedClosing = summary.openingBalance + totalCredit - totalDebit;
+  const diff = Math.abs(calculatedClosing - summary.closingBalance);
+
+  if (diff > 1.0) {
+    warnings.push(
+      `Bank cross-section: openingBalance(${summary.openingBalance}) + ` +
+      `credits(${totalCredit.toFixed(2)}) - debits(${totalDebit.toFixed(2)}) = ` +
+      `${calculatedClosing.toFixed(2)}, but closingBalance = ${summary.closingBalance} ` +
+      `(diff: ${diff.toFixed(2)}) — transactions may be incomplete`
+    );
+  }
+
+  return warnings;
+}
+
+//
 // MATCHING LOGIC
 //
 
@@ -206,12 +543,12 @@ function matchDescription(raw: string, desc: string): boolean {
   return matched / words.length >= 0.6
 }
 
-function matchContext(raw: string, tx: ParsedTransaction): {
+function matchContext(raw: string, tx: Transaction): {
   matched: boolean
   anchors: number[]
 } {
   const amountVariants = generateAmountVariants(tx.amount)
-  const dateVariants = generateDateVariants(tx.date)
+  const dateVariants = generateDateVariants(format(tx.date, 'yyyy-MM-dd'))
   const anchors: number[] = []
 
   for (const amount of amountVariants) {
@@ -239,6 +576,61 @@ function matchContext(raw: string, tx: ParsedTransaction): {
     matched: uniqueAnchors.length > 0,
     anchors: uniqueAnchors,
   }
+}
+
+/**
+ * Verify that the transaction type (credit/debit) matches the statement.
+ * Handles multiple statement formats:
+ * - Separate Credit/Debit columns
+ * - +/- signs
+ * - CR/DR suffix
+ * - Keywords (CREDIT, DEBIT, etc.)
+ */
+function matchType(raw: string, tx: Transaction): boolean {
+  const amountVariants = generateAmountVariants(tx.amount)
+  
+  for (const amount of amountVariants) {
+    const idx = raw.indexOf(amount)
+    if (idx === -1) continue
+
+    // Get context window around the amount
+    const windowStart = Math.max(0, idx - 150)
+    const windowEnd = Math.min(raw.length, idx + 150)
+    const contextWindow = raw.slice(windowStart, windowEnd)
+    
+    // Check for separate Credit/Debit columns
+    // Look for column headers and see which column the amount is under
+    const hasCreditHeader = /\b(CREDIT|CR|DEPOSIT|IN)\b/i.test(contextWindow)
+    const hasDebitHeader = /\b(DEBIT|DR|WITHDRAWAL|OUT|PAYMENT)\b/i.test(contextWindow)
+    
+    // Check for CR/DR suffix after amount
+    const hasCRSuffix = new RegExp(`${amount.replace(/[.,]/g, '[$&]')}\\s*(CR|CREDIT)`, 'i').test(contextWindow)
+    const hasDRSuffix = new RegExp(`${amount.replace(/[.,]/g, '[$&]')}\\s*(DR|DEBIT)`, 'i').test(contextWindow)
+    
+    // Check for +/- signs
+    const hasPlusSign = new RegExp(`[+]?${amount.replace(/[.,]/g, '[$&]')}`).test(contextWindow)
+    const hasMinusSign = new RegExp(`[-(]${amount.replace(/[.,]/g, '[$&]')}[)]?`).test(contextWindow)
+    
+    // Determine type based on evidence
+    if (tx.type === 'credit') {
+      // Credit: money coming in
+      if (hasCreditHeader && !hasDebitHeader) return true
+      if (hasCRSuffix) return true
+      if (hasPlusSign && !hasMinusSign) return true
+      if (hasDebitHeader) return false  // Explicitly in debit column
+      if (hasDRSuffix) return false  // Explicitly marked as debit
+    } else {
+      // Debit: money going out
+      if (hasDebitHeader && !hasCreditHeader) return true
+      if (hasDRSuffix) return true
+      if (hasMinusSign) return true
+      if (hasCreditHeader) return false  // Explicitly in credit column
+      if (hasCRSuffix) return false  // Explicitly marked as credit
+    }
+  }
+  
+  // If no clear evidence, assume match (don't penalize)
+  return true
 }
 
 //
@@ -285,7 +677,7 @@ function generateDateVariants(dateStr: string): string[] {
 }
 
 function createSignature(
-  tx: ParsedTransaction,
+  tx: Transaction,
   evidenceAnchor?: number
 ): string {
   const normalizedDesc = normalize(tx.description).slice(0, 40)

@@ -85,6 +85,10 @@ function fixBrokenNumbers(text: string): string {
     .replace(/₹\s*/g, '');
 }
 
+// Disabled - too fragile for production use
+// These functions are kept for reference but not called from normalizeStatementText()
+
+/*
 function removeHeadersFooters(text: string): string {
   const lines = text.split('\n');
   const patterns = [
@@ -188,3 +192,4 @@ function isTransactionStart(line: string): boolean {
   const datePattern = /^\d{1,2}[\s\-][A-Za-z]{3}|\d{1,2}\/\d{2}\/\d{2,4}|\d{1,2}-\d{2}-\d{4}|\d{1,2}\.\d{2}\.\d{4}|\d{4}-\d{2}-\d{2}|[A-Za-z]{3}\s+\d{1,2},?\s+\d{4}|\d{1,2}-[A-Za-z]{3}-\d{4}/;
   return datePattern.test(line);
 }
+*/

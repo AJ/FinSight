@@ -73,7 +73,8 @@ export function Sidebar() {
             alt="FinSight"
             width={100}
             height={24}
-            style={{ width: 'auto', height: '24px', paddingLeft: '10px' }}
+            className="pl-[10px]"
+            style={{ width: 'auto', height: '24px' }}
             priority
           />
         )}

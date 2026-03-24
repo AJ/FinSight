@@ -6,6 +6,16 @@ import { AnomalyType } from './AnomalyType';
 import { AnomalyDetails } from './AnomalyDetails';
 import { Currency } from '@/types';
 
+// All possible transaction sub-types (for LLM prompts and validation)
+export const TRANSACTION_SUB_TYPES = [
+  'purchase', 'payment', 'refund', 'interest', 'fee',
+  'deposit', 'transfer_in', 'transfer_out',
+  'cashback', 'rewards', 'withdrawal',
+  'charge', 'adjustment', 'reversal'
+] as const;
+
+export type TransactionSubType = typeof TRANSACTION_SUB_TYPES[number];
+
 /**
  * JSON representation of a Transaction for serialization.
  * Category is stored as ID string; use Transaction.fromJSON() to restore.
@@ -33,6 +43,8 @@ export interface TransactionJSON {
   originalCurrency?: Currency;    // Original currency for international transactions
   originalAmount?: number;        // Amount in original currency (for international)
   isInternational: boolean;       // True if this is an international transaction
+  transactionSubType?: TransactionSubType;
+  suggestedCategory?: string;     // LLM's category suggestion (used as initial category)
   isAnomaly?: boolean;
   anomalyTypes?: AnomalyType[];
   anomalyDetails?: AnomalyDetails;
@@ -71,6 +83,10 @@ export class Transaction {
     public anomalyTypes?: AnomalyType[],
     public anomalyDetails?: AnomalyDetails,
     public anomalyDismissed?: boolean,
+    // Transaction sub-type from LLM (e.g., "purchase", "payment", "transfer_in", "refund", "fee")
+    public readonly transactionSubType?: TransactionSubType,
+    // LLM's suggested category (used as initial category, can be overridden)
+    public readonly suggestedCategory?: string,
   ) {}
 
   // Direction getters (from TransactionType)
@@ -121,6 +137,8 @@ export class Transaction {
       originalCurrency: this.originalCurrency,
       originalAmount: this.originalAmount,
       isInternational: this.isInternational,
+      transactionSubType: this.transactionSubType,
+      suggestedCategory: this.suggestedCategory,
       isAnomaly: this.isAnomaly,
       anomalyTypes: this.anomalyTypes,
       anomalyDetails: this.anomalyDetails,
@@ -159,6 +177,8 @@ export class Transaction {
       json.anomalyTypes,
       json.anomalyDetails,
       json.anomalyDismissed,
+      json.transactionSubType,
+      json.suggestedCategory,
     );
   }
 }

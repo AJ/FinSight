@@ -349,8 +349,7 @@ IF type = "debit":
 /*
 IMPORTANT: Determine type FIRST, then subtype:
 1. FIRST determine if type is "debit" or "credit" using the rules above (+ prefix = credit, etc.)
-2. THEN assign the most appropriate subtype:
-   - "payment": You paying the card bill (HINTS: PAYMENT, PAID, PAYZAPP, UPI, NEFT, IMPS)
+2. THEN assign the most appropriate subtype:   
    - "cashback": Reward cash credited (HINTS: CASHBACK, VALUEBACK, REWARD CASH)
    - "tax" is a subtype of "debit" and indicates tax charged on a purchase. It is NOT the total amount of the transaction, but the tax component. Look for tax keywords in the description to identify this subtype (*Non exclusive HINTS*: GST, IGST, CGST, SGST, UGST, VAT, CESS, DUTY, TAX, TDS)
    - "purchase": Regular spending at merchants (most common for debits)
@@ -367,6 +366,7 @@ IMPORTANT: Determine type FIRST, then subtype:
 `
 RULE 6 - Non-Bank FEEs:
 - "FCY MARKUP FEE" is not a bank fee but a currency conversion charge, so classify it as "charge" subtype, not "fee"
+- "payment": Credit card bill payment; Look for but not exclusive to: PAYMENT, PAID, PAYZAPP, UPI, NEFT, IMPS). 
 
 RULE 7 — DATE FORMAT
 - Convert all dates to YYYY-MM-DD
@@ -646,7 +646,7 @@ END
 
 
 /* ── Direct LLM parsing (browser → Ollama) ───────────────── */
-
+/* Disabled - using multi-pass pipeline instead
 const PARSE_PROMPT = `You are an expert bank statement parser. Your job is to extract ALL financial transactions from the raw text of a bank statement.
 
 IMPORTANT RULES:
@@ -679,3 +679,4 @@ REQUIRED JSON FORMAT:
 BANK STATEMENT TEXT:
 ---
 `;
+*/

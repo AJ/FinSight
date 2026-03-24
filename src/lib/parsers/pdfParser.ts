@@ -1,4 +1,4 @@
-import { ParsedStatement, Currency, TransactionType, Transaction, Category } from "@/types";
+import { ParsedStatement, Currency, TransactionType, Transaction, Category, SourceType } from "@/types";
 import { v4 as uuidv4 } from "uuid";
 import { extractDateFromText } from "./dateParser";
 import { detectCurrencyFromText } from "./currencyDetector";
@@ -492,15 +492,34 @@ function columnBasedParse(lines: PdfLine[]): Transaction[] {
     seen.add(key);
 
     transactions.push(new Transaction(
-      uuidv4(),
-      currentTxn.date,
-      description,
-      finalAmount,
-      type,
-      Category.fromId("other")!,
-      currentTxn.balance ?? undefined,
+      uuidv4(), // id
+      currentTxn.date, // date
+      description, // description
+      finalAmount, // amount
+      type, // type
+      Category.fromId("other")!, // category
+      currentTxn.balance ?? undefined, // balance
       undefined, // merchant
-      currentTxn.lineText.substring(0, 200),
+      currentTxn.lineText.substring(0, 200), // originalText
+      undefined, // budgetMonth
+      undefined, // categoryConfidence
+      undefined, // needsReview
+      undefined, // categorizedBy
+      SourceType.Bank, // sourceType
+      undefined, // statementId
+      undefined, // cardIssuer
+      undefined, // cardLastFour
+      undefined, // cardHolder
+      undefined, // localCurrency
+      undefined, // originalCurrency
+      undefined, // originalAmount
+      false, // isInternational
+      undefined, // isAnomaly
+      undefined, // anomalyTypes
+      undefined, // anomalyDetails
+      undefined, // anomalyDismissed
+      undefined, // transactionSubType
+      undefined, // suggestedCategory
     ));
   };
 
@@ -735,15 +754,34 @@ function textBasedParse(lines: PdfLine[]): Transaction[] {
           if (!seen.has(key)) {
             seen.add(key);
             transactions.push(new Transaction(
-              uuidv4(),
-              entry.date,
-              description,
-              finalAmount,
-              type,
-              Category.fromId("other")!,
-              balance,
+              uuidv4(), // id
+              entry.date, // date
+              description, // description
+              finalAmount, // amount
+              type, // type
+              Category.fromId("other")!, // category
+              balance, // balance
               undefined, // merchant
-              entry.text.substring(0, 200),
+              entry.text.substring(0, 200), // originalText
+              undefined, // budgetMonth
+              undefined, // categoryConfidence
+              undefined, // needsReview
+              undefined, // categorizedBy
+              SourceType.Bank, // sourceType
+              undefined, // statementId
+              undefined, // cardIssuer
+              undefined, // cardLastFour
+              undefined, // cardHolder
+              undefined, // localCurrency
+              undefined, // originalCurrency
+              undefined, // originalAmount
+              false, // isInternational
+              undefined, // isAnomaly
+              undefined, // anomalyTypes
+              undefined, // anomalyDetails
+              undefined, // anomalyDismissed
+              undefined, // transactionSubType
+              undefined, // suggestedCategory
             ));
           }
         }
@@ -799,15 +837,34 @@ function textBasedParse(lines: PdfLine[]): Transaction[] {
     seen.add(key);
 
     transactions.push(new Transaction(
-      uuidv4(),
-      entry.date,
-      description,
-      amount,
-      type,
-      Category.fromId("other")!,
-      balance,
+      uuidv4(), // id
+      entry.date, // date
+      description, // description
+      amount, // amount
+      type, // type
+      Category.fromId("other")!, // category
+      balance, // balance
       undefined, // merchant
-      entry.text.substring(0, 200),
+      entry.text.substring(0, 200), // originalText
+      undefined, // budgetMonth
+      undefined, // categoryConfidence
+      undefined, // needsReview
+      undefined, // categorizedBy
+      SourceType.Bank, // sourceType
+      undefined, // statementId
+      undefined, // cardIssuer
+      undefined, // cardLastFour
+      undefined, // cardHolder
+      undefined, // localCurrency
+      undefined, // originalCurrency
+      undefined, // originalAmount
+      false, // isInternational
+      undefined, // isAnomaly
+      undefined, // anomalyTypes
+      undefined, // anomalyDetails
+      undefined, // anomalyDismissed
+      undefined, // transactionSubType
+      undefined, // suggestedCategory
     ));
   }
 
@@ -877,32 +934,34 @@ function validateWithBalance(transactions: Transaction[]): Transaction[] {
     // Correct type if balance disagrees
     if (curr.type !== expectedType) {
       result[i] = new Transaction(
-        curr.id,
-        curr.date,
-        curr.description,
-        Math.abs(curr.amount),
-        expectedType,
-        curr.category,
-        curr.balance,
-        curr.merchant,
-        curr.originalText,
-        curr.budgetMonth,
-        curr.categoryConfidence,
-        curr.needsReview,
-        curr.categorizedBy,
-        curr.sourceType,
-        curr.statementId,
-        curr.cardIssuer,
-        curr.cardLastFour,
-        curr.cardHolder,
-        curr.localCurrency,
-        curr.originalCurrency,
-        curr.originalAmount,
-        curr.isInternational,
-        curr.isAnomaly,
-        curr.anomalyTypes,
-        curr.anomalyDetails,
-        curr.anomalyDismissed,
+        curr.id, // id
+        curr.date, // date
+        curr.description, // description
+        Math.abs(curr.amount), // amount
+        expectedType, // type
+        curr.category, // category
+        curr.balance, // balance
+        curr.merchant, // merchant
+        curr.originalText, // originalText
+        curr.budgetMonth, // budgetMonth
+        curr.categoryConfidence, // categoryConfidence
+        curr.needsReview, // needsReview
+        curr.categorizedBy, // categorizedBy
+        curr.sourceType, // sourceType
+        curr.statementId, // statementId
+        curr.cardIssuer, // cardIssuer
+        curr.cardLastFour, // cardLastFour
+        curr.cardHolder, // cardHolder
+        curr.localCurrency, // localCurrency
+        curr.originalCurrency, // originalCurrency
+        curr.originalAmount, // originalAmount
+        curr.isInternational, // isInternational
+        curr.isAnomaly, // isAnomaly
+        curr.anomalyTypes, // anomalyTypes
+        curr.anomalyDetails, // anomalyDetails
+        curr.anomalyDismissed, // anomalyDismissed
+        curr.transactionSubType, // transactionSubType
+        curr.suggestedCategory, // suggestedCategory
       );
       corrected++;
     }
@@ -929,18 +988,20 @@ function validateWithBalance(transactions: Transaction[]): Transaction[] {
           result[i].needsReview,
           result[i].categorizedBy,
           result[i].sourceType,
-          result[i].statementId,
-          result[i].cardIssuer,
-          result[i].cardLastFour,
-          result[i].cardHolder,
-          result[i].localCurrency,
-          result[i].originalCurrency,
-          result[i].originalAmount,
-          result[i].isInternational,
-          result[i].isAnomaly,
-          result[i].anomalyTypes,
-          result[i].anomalyDetails,
-          result[i].anomalyDismissed,
+          result[i].statementId, // statementId
+          result[i].cardIssuer, // cardIssuer
+          result[i].cardLastFour, // cardLastFour
+          result[i].cardHolder, // cardHolder
+          result[i].localCurrency, // localCurrency
+          result[i].originalCurrency, // originalCurrency
+          result[i].originalAmount, // originalAmount
+          result[i].isInternational, // isInternational
+          result[i].isAnomaly, // isAnomaly
+          result[i].anomalyTypes, // anomalyTypes
+          result[i].anomalyDetails, // anomalyDetails
+          result[i].anomalyDismissed, // anomalyDismissed
+          result[i].transactionSubType, // transactionSubType
+          result[i].suggestedCategory, // suggestedCategory
         );
         corrected++;
       }

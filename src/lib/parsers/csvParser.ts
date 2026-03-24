@@ -1,5 +1,5 @@
 import Papa from "papaparse";
-import { Transaction, ParsedStatement, Currency, TransactionType, Category } from "@/types";
+import { Transaction, ParsedStatement, Currency, TransactionType, Category, SourceType } from "@/types";
 import { v4 as uuidv4 } from "uuid";
 import { parseDate, detectDateOrder } from "./dateParser";
 import { detectCurrencyFromText } from "./currencyDetector";
@@ -360,15 +360,34 @@ function parseRow(
     }
 
     return new Transaction(
-      uuidv4(),
-      date,
-      description,
-      amount,
-      type,
-      Category.fromId("other")!,
-      balance,
+      uuidv4(), // id
+      date, // date
+      description, // description
+      amount, // amount
+      type, // type
+      Category.fromId("other")!, // category
+      balance, // balance
       undefined, // merchant
-      JSON.stringify(row),
+      JSON.stringify(row), // originalText
+      undefined, // budgetMonth
+      undefined, // categoryConfidence
+      undefined, // needsReview
+      undefined, // categorizedBy
+      SourceType.Bank, // sourceType
+      undefined, // statementId
+      undefined, // cardIssuer
+      undefined, // cardLastFour
+      undefined, // cardHolder
+      undefined, // localCurrency
+      undefined, // originalCurrency
+      undefined, // originalAmount
+      false, // isInternational
+      undefined, // isAnomaly
+      undefined, // anomalyTypes
+      undefined, // anomalyDetails
+      undefined, // anomalyDismissed
+      undefined, // transactionSubType
+      undefined, // suggestedCategory
     );
   } catch {
     return null;

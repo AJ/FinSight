@@ -9,7 +9,7 @@ import {
   parseCategorizationResponse,
 } from "@/lib/categorization/prompts";
 import { categorizeByKeywords } from "@/lib/categorization/aiCategorizer";
-import { normalizeTransactionTypeStrict } from '@/lib/utils/transactionType';
+import { normalizeTransactionTypeStrict } from '@/models/TransactionType';
 
 const BATCH_SIZE = 20;
 

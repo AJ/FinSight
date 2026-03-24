@@ -4,7 +4,6 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Card, CardContent } from "@/components/ui/card";
 import {
   Table,
   TableBody,
@@ -22,7 +21,7 @@ import {
 } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
 import { ArrowLeft, CheckCircle, Edit2, Trash2, Download } from "lucide-react";
-import { Transaction, TransactionType, Category, CategorizedBy, SourceType } from "@/types";
+import { Transaction, TransactionJSON, TransactionType, Category } from "@/types";
 import { useTransactionStore } from "@/lib/store/transactionStore";
 import { useSettingsStore } from "@/lib/store/settingsStore";
 import { formatCurrency } from "@/lib/currencyFormatter";
@@ -30,6 +29,8 @@ import { exportTransactionsToCSV } from "@/lib/exportUtils";
 import { format } from "date-fns";
 import { DEFAULT_CATEGORIES } from "@/lib/categorization/categories";
 import { getCategoryDisplay } from "@/components/transactions/CategoryBadge";
+import { VerificationSummary } from "@/components/upload/VerificationSummary";
+import type { VerificationReport, CCVerificationReport } from "@/lib/verification/verificationEngine";
 
 // Helper to load transactions from sessionStorage
 function loadPendingTransactions(): Transaction[] {
@@ -38,39 +39,54 @@ function loadPendingTransactions(): Transaction[] {
   if (!stored) return [];
   try {
     const parsed = JSON.parse(stored);
+    const settingsCurrency = useSettingsStore.getState().currency;
     // Reconstruct Transaction instances from JSON
-    return parsed.map((t: { date: string; category: string; [key: string]: unknown }) => {
+    return parsed.map((t: TransactionJSON) => {
       return new Transaction(
-        t.id as string,
-        new Date(t.date),
-        t.description as string,
-        t.amount as number,
-        t.type as TransactionType,
-        Category.fromId(t.category) ?? Category.fromId(Category.DEFAULT_ID)!,
-        t.balance as number | undefined,
-        t.merchant as string | undefined,
-        t.originalText as string | undefined,
-        t.budgetMonth as string | undefined,
-        t.categoryConfidence as number | undefined,
-        t.needsReview as boolean | undefined,
-        t.categorizedBy as CategorizedBy | undefined,
-        t.sourceType as SourceType | undefined,
-        t.statementId as string | undefined,
-        t.cardIssuer as string | undefined,
-        t.cardLastFour as string | undefined,
-        t.cardHolder as string | undefined,
-        t.localCurrency as { code: string; symbol: string; name: string } | undefined,
-        t.originalCurrency as { code: string; symbol: string; name: string } | undefined,
-        t.originalAmount as number | undefined,
-        t.isInternational as boolean | undefined,
-        t.isAnomaly as boolean | undefined,
-        t.anomalyTypes as undefined,
-        t.anomalyDetails as undefined,
-        t.anomalyDismissed as boolean | undefined,
+        t.id, // id
+        new Date(t.date), // date
+        t.description, // description
+        Math.abs(t.amount), // amount
+        t.type, // type
+        Category.fromId(t.category) ?? Category.fromId(Category.DEFAULT_ID)!, // category
+        t.balance, // balance
+        t.merchant, // merchant
+        t.originalText, // originalText
+        t.budgetMonth, // budgetMonth
+        t.categoryConfidence, // categoryConfidence
+        t.needsReview, // needsReview
+        t.categorizedBy, // categorizedBy
+        t.sourceType, // sourceType
+        t.statementId, // statementId
+        t.cardIssuer, // cardIssuer
+        t.cardLastFour, // cardLastFour
+        t.cardHolder, // cardHolder
+        t.localCurrency ?? settingsCurrency, // localCurrency
+        t.originalCurrency, // originalCurrency
+        t.originalAmount, // originalAmount
+        t.isInternational ?? false, // isInternational
+        t.isAnomaly, // isAnomaly
+        t.anomalyTypes, // anomalyTypes
+        t.anomalyDetails, // anomalyDetails
+        t.anomalyDismissed, // anomalyDismissed
+        t.transactionSubType, // transactionSubType
+        t.suggestedCategory, // suggestedCategory
       );
     });
   } catch {
     return [];
+  }
+}
+
+// Helper to load verification report from sessionStorage
+function loadVerificationReport(): VerificationReport | CCVerificationReport | null {
+  if (typeof window === "undefined") return null;
+  const stored = sessionStorage.getItem("pendingVerificationReport");
+  if (!stored) return null;
+  try {
+    return JSON.parse(stored);
+  } catch {
+    return null;
   }
 }
 
@@ -79,6 +95,7 @@ export default function ReviewPage() {
   // null = not loaded yet, empty array = loaded but no transactions
   // Use lazy initialization to read from sessionStorage once on mount
   const [pendingTransactions, setPendingTransactions] = useState<Transaction[] | null>(() => loadPendingTransactions());
+  const [verificationReport] = useState<VerificationReport | CCVerificationReport | null>(() => loadVerificationReport());
   const [editingId, setEditingId] = useState<string | null>(null);
   const addTransactions = useTransactionStore((state) => state.addTransactions);
   const startBackgroundCategorization = useTransactionStore((state) => state.startBackgroundCategorization);
@@ -117,32 +134,34 @@ export default function ReviewPage() {
         if (t.id !== id) return t;
         // Create new Transaction with updated field
         return new Transaction(
-          field === 'id' ? (value as string) : t.id,
-          field === 'date' ? (value as Date) : t.date,
-          field === 'description' ? (value as string) : t.description,
-          field === 'amount' ? (value as number) : t.amount,
-          field === 'type' ? (value as TransactionType) : t.type,
-          field === 'category' ? (Category.fromId(value as string) || t.category) : t.category,
-          field === 'balance' ? (value as number | undefined) : t.balance,
-          field === 'merchant' ? (value as string | undefined) : t.merchant,
-          field === 'originalText' ? (value as string | undefined) : t.originalText,
-          field === 'budgetMonth' ? (value as string | undefined) : t.budgetMonth,
-          field === 'categoryConfidence' ? (value as number | undefined) : t.categoryConfidence,
-          field === 'needsReview' ? (value as boolean | undefined) : t.needsReview,
-          t.categorizedBy,
-          t.sourceType,
-          t.statementId,
-          t.cardIssuer,
-          t.cardLastFour,
-          t.cardHolder,
-          t.localCurrency,
-          t.originalCurrency,
-          t.originalAmount,
-          t.isInternational,
-          t.isAnomaly,
-          t.anomalyTypes,
-          t.anomalyDetails,
-          t.anomalyDismissed,
+          field === 'id' ? (value as string) : t.id, // id
+          field === 'date' ? (value as Date) : t.date, // date
+          field === 'description' ? (value as string) : t.description, // description
+          field === 'amount' ? (value as number) : t.amount, // amount
+          field === 'type' ? (value as TransactionType) : t.type, // type
+          field === 'category' ? (Category.fromId(value as string) || t.category) : t.category, // category
+          field === 'balance' ? (value as number | undefined) : t.balance, // balance
+          field === 'merchant' ? (value as string | undefined) : t.merchant, // merchant
+          field === 'originalText' ? (value as string | undefined) : t.originalText, // originalText
+          field === 'budgetMonth' ? (value as string | undefined) : t.budgetMonth, // budgetMonth
+          field === 'categoryConfidence' ? (value as number | undefined) : t.categoryConfidence, // categoryConfidence
+          field === 'needsReview' ? (value as boolean | undefined) : t.needsReview, // needsReview
+          t.categorizedBy, // categorizedBy
+          t.sourceType, // sourceType
+          t.statementId, // statementId
+          t.cardIssuer, // cardIssuer
+          t.cardLastFour, // cardLastFour
+          t.cardHolder, // cardHolder
+          t.localCurrency, // localCurrency
+          t.originalCurrency, // originalCurrency
+          t.originalAmount, // originalAmount
+          t.isInternational, // isInternational
+          t.isAnomaly, // isAnomaly
+          t.anomalyTypes, // anomalyTypes
+          t.anomalyDetails, // anomalyDetails
+          t.anomalyDismissed, // anomalyDismissed
+          field === 'transactionSubType' ? (value as Transaction['transactionSubType']) : t.transactionSubType, // transactionSubType
+          field === 'suggestedCategory' ? (value as string | undefined) : t.suggestedCategory, // suggestedCategory
         );
       });
     });
@@ -215,22 +234,9 @@ export default function ReviewPage() {
         </div>
       </div>
 
-      {/* Instructions */}
-      <div className="container mx-auto px-4 py-4">
-        <Card className="bg-primary/5 border-primary/20">
-          <CardContent className="p-4">
-            <p className="text-sm">
-              <strong>💡 Tip:</strong> Review each transaction carefully. Click
-              on any field to edit it. Make sure amounts, dates, and
-              descriptions are correct before importing.
-            </p>
-          </CardContent>
-        </Card>
-      </div>
-
       {/* Transactions Table */}
-      <div className="flex justify-center pb-8">
-        <div className="w-[80vw] mx-auto pb-8">
+      <div className="flex justify-center pb-4">
+        <div className="w-[80vw] mx-auto pb-4">
           <div className="rounded-lg border">
             <Table>
               <TableHeader>
@@ -426,6 +432,13 @@ export default function ReviewPage() {
           </div>
         </div>
       </div>
+
+      {/* Verification Summary - Bottom of page */}
+      {verificationReport && (
+        <div className="w-[80vw] mx-auto pb-8">
+          <VerificationSummary report={verificationReport} />
+        </div>
+      )}
     </div>
   );
 }

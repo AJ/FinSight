@@ -3,12 +3,11 @@
  */
 
 import { Currency } from '@/types';
+import { Transaction, TransactionSubType } from '@/models/Transaction';
+import { CCVerificationReport } from '@/lib/verification/verificationEngine';
 
 // Statement type enumeration
 export type StatementType = 'bank' | 'credit_card';
-
-// Extended transaction type to include transfers
-export type TransactionType = 'income' | 'expense' | 'transfer';
 
 // Addon card information
 export interface AddonCard {
@@ -62,6 +61,8 @@ export interface CreditCardStatement {
     expiringNext?: number;
     expiringNextDate?: Date;
   };
+  // Verification report (Approach B + C)
+  verificationReport?: CCVerificationReport;
 }
 
 // Extension fields for Transaction interface (to be merged)
@@ -75,7 +76,7 @@ export interface CCTransactionExtension {
   originalCurrency?: Currency;
   originalAmount?: number;
   isInternational?: boolean;
-  transactionType?: 'purchase' | 'payment' | 'refund' | 'interest' | 'fee';
+  transactionSubType?: TransactionSubType;
 }
 
 // Payment behavior metrics
@@ -157,35 +158,10 @@ export interface CCExtractedTransaction {
   originalCurrency?: string;     // Original ISO currency code for international transactions (e.g., "USD")
   originalAmount?: number;       // Amount in original currency
   isInternationalTransaction?: boolean;
-  transactionType?: LLMTransactionType;
+  transactionSubType?: Transaction['transactionSubType'];
+  suggestedCategory?: string;    // LLM's category suggestion
   cardHolder?: string;
 }
-
-/**
- * Transaction types as extracted by LLM from statements.
- * These represent the actual transaction type from the statement.
- * Applicable to both bank and credit card statements.
- */
-export type LLMTransactionType = 
-  // Money coming in (credits)
-  | 'deposit'       // Cash/cheque deposit
-  | 'transfer_in'   // Incoming transfer (NEFT/IMPS/UPI in)
-  | 'refund'        // Merchant refund
-  | 'interest'      // Interest credited (bank) / charged (CC)
-  | 'cashback'      // Cashback earned
-  | 'rewards'       // Points/miles redemption
-  
-  // Money going out (debits)
-  | 'purchase'      // Regular purchase/charge
-  | 'payment'       // Payment made (CC payment / bill payment)
-  | 'withdrawal'    // ATM/cash withdrawal
-  | 'transfer_out'  // Outgoing transfer (NEFT/IMPS/UPI out)
-  | 'fee'           // Any fee (late, annual, forex, maintenance)
-  | 'charge'        // General charge
-  
-  // Edge cases
-  | 'adjustment'    // Billing adjustment/correction
-  | 'reversal';     // Transaction reversal
 
 // Due date item for display
 export interface DueDateItem {

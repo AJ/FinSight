@@ -5,13 +5,13 @@ import { UploadDialog } from './UploadDialog';
 import { UploadProvider, useUpload } from './UploadContext';
 
 function AppLayoutInner({ children }: { children: React.ReactNode }) {
-  const { isUploadOpen, closeUpload } = useUpload();
+  const { isUploadOpen, closeUpload, isProcessing } = useUpload();
 
   return (
     <div className="flex h-screen bg-background">
       <Sidebar />
       {children}
-      <UploadDialog open={isUploadOpen} onOpenChange={(open) => !open && closeUpload()} />
+      <UploadDialog open={isUploadOpen} onOpenChange={closeUpload} isProcessing={isProcessing} />
     </div>
   );
 }

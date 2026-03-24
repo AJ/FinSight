@@ -17,6 +17,8 @@ import { useSettingsStore } from "@/lib/store/settingsStore";
 import { useChatStore } from "@/lib/store/chatStore";
 import { useCreditCardStore } from "@/lib/store/creditCardStore";
 import { LLMStatus, ParsedStatement, Currency, Transaction, Category } from "@/types";
+import type { CCSummary } from "@/lib/parsers/extractSummary";
+import type { VerificationReport, CCVerificationReport } from "@/lib/verification/verificationEngine";
 import { useRouter } from "next/navigation";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Card, CardContent } from "@/components/ui/card";
@@ -33,6 +35,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Label } from "@/components/ui/label";
+import { debugLog } from "@/lib/utils/debug";
 
 const MAX_PASSWORD_ATTEMPTS = 3;
 
@@ -44,7 +47,7 @@ interface FileProcessorProps {
 export function FileProcessor({ onSuccess, onProcessingChange }: FileProcessorProps) {
   const [isProcessing, setIsProcessing] = useState(false);
   const processingStartTime = useRef<number>(0);
-  
+
   // Notify parent when processing state changes
   useEffect(() => {
     if (isProcessing) {
@@ -53,12 +56,13 @@ export function FileProcessor({ onSuccess, onProcessingChange }: FileProcessorPr
       // Log processing time when done
       if (processingStartTime.current > 0) {
         const elapsed = ((Date.now() - processingStartTime.current) / 1000).toFixed(2);
-        console.log(`[FileProcessor] Processing completed in ${elapsed}s`);
+        debugLog(`[FileProcessor] Processing completed in ${elapsed}s`);
         processingStartTime.current = 0;
       }
     }
     onProcessingChange?.(isProcessing);
   }, [isProcessing, onProcessingChange]);
+
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [progress, setProgress] = useState<string | null>(null);
@@ -91,6 +95,7 @@ export function FileProcessor({ onSuccess, onProcessingChange }: FileProcessorPr
   const processParsedStatement = useCallback((
     parsed: ParsedStatement,
     detectedCurrency: Currency | null,
+    verificationReport?: VerificationReport | CCVerificationReport,
   ) => {
     if (parsed.transactions.length === 0) {
       throw new Error(
@@ -108,6 +113,14 @@ export function FileProcessor({ onSuccess, onProcessingChange }: FileProcessorPr
       console.warn(
         `[Parser] ${parsed.failedChunks.length} chunks failed to parse. Transactions from these sections are missing:`,
         parsed.failedChunks
+      );
+    }
+
+    // Save verification report if available
+    if (verificationReport) {
+      sessionStorage.setItem(
+        "pendingVerificationReport",
+        JSON.stringify(verificationReport),
       );
     }
 
@@ -146,6 +159,8 @@ export function FileProcessor({ onSuccess, onProcessingChange }: FileProcessorPr
         txn.anomalyTypes,
         txn.anomalyDetails,
         txn.anomalyDismissed,
+        txn.transactionSubType,
+        txn.suggestedCategory,
       );
     });
 
@@ -174,7 +189,7 @@ export function FileProcessor({ onSuccess, onProcessingChange }: FileProcessorPr
         description: `Completed in ${elapsed} seconds`,
         duration: 5000,
       });
-      console.log(`[FileProcessor] Processing completed in ${elapsed}s`);
+      debugLog(`[FileProcessor] Processing completed in ${elapsed}s`);
       processingStartTime.current = 0;
     }
 
@@ -208,11 +223,48 @@ export function FileProcessor({ onSuccess, onProcessingChange }: FileProcessorPr
         parsed = result.statement;
         detectedCurrency = result.currency;
         // Store CC statement metadata for the credit cards page
+        // Note: Transform CCSummary (new pipeline type) to CreditCardStatement (store type)
         if (result.ccStatement) {
-          addCCStatement(result.ccStatement);
+          const ccStatement = result.ccStatement as CCSummary;  // Type transformation - temporary
+          addCCStatement({
+            id: crypto.randomUUID(),
+            fileName: file.name,
+            parseDate: new Date(),
+            cardLastFour: ccStatement.cardLastFour || '',
+            cardIssuer: ccStatement.cardIssuer || '',
+            cardHolder: ccStatement.cardHolder || undefined,
+            statementPeriod: ccStatement.statementPeriodStart && ccStatement.statementPeriodEnd ? {
+              start: new Date(ccStatement.statementPeriodStart),
+              end: new Date(ccStatement.statementPeriodEnd),
+            } : { start: new Date(), end: new Date() },
+            statementDate: ccStatement.statementDate ? new Date(ccStatement.statementDate) : new Date(),
+            paymentDueDate: ccStatement.paymentDueDate ? new Date(ccStatement.paymentDueDate) : new Date(),
+            totalDue: ccStatement.totalDue ?? 0,
+            minimumDue: ccStatement.minimumDue ?? 0,
+            creditLimit: ccStatement.creditLimit ?? 0,
+            availableCredit: ccStatement.availableCredit ?? 0,
+            previousBalance: ccStatement.previousBalance ?? 0,
+            paymentsReceived: ccStatement.paymentsReceived ?? 0,
+            purchasesAndCharges: ccStatement.purchasesAndCharges ?? 0,
+            interestCharged: ccStatement.interestCharged ?? 0,
+            lateFee: ccStatement.lateFee ?? 0,
+            otherCharges: ccStatement.otherCharges ?? 0,
+            cashbackEarned: ccStatement.cashbackEarned ?? 0,
+            rewardPoints: ccStatement.rewardPoints ? {
+              openingBalance: ccStatement.rewardPoints.opening ?? 0,
+              earned: ccStatement.rewardPoints.earned ?? 0,
+              redeemed: ccStatement.rewardPoints.redeemed ?? 0,
+              expired: 0,
+              closingBalance: ccStatement.rewardPoints.closing ?? 0,
+              expiringNext: undefined,
+              expiringNextDate: undefined,
+            } : undefined,
+            isPaid: false,
+          });
         }
-        processParsedStatement(parsed, detectedCurrency);
+        processParsedStatement(parsed, detectedCurrency, result.verification);
       } catch (err) {
+        // debugError('[FileProcessor][PDF Parsing] Error:', err, 'isPasswordError:', isPasswordError(err));
         if (isPasswordError(err)) {
           // PDF needs password - show password dialog
           setPendingFile(file);
@@ -221,8 +273,14 @@ export function FileProcessor({ onSuccess, onProcessingChange }: FileProcessorPr
           setPendingTypeFile(file);
           setPendingTypePassword(password);
           setStatementType(selectedType);
+          // ========== FIX (2026-03-16) START ==========
+          // Re-throw password error so caller knows it failed.
+          // Old code did not re-throw, causing success branch to run after wrong password.
+          throw err;
+          // ========== FIX (2026-03-16) END ==========
         } else {
           // Other error
+          debugLog('[FileProcessor][PDF Parsing] "other" error:', err);
           throw err;
         }
       }
@@ -231,12 +289,54 @@ export function FileProcessor({ onSuccess, onProcessingChange }: FileProcessorPr
       const result = await parseCSV(file);
       parsed = result.statement;
       detectedCurrency = result.detectedCurrency;
+      
+      // Categorize transactions using LLM
+      setProgress("Categorizing transactions...");
+      const settings = useSettingsStore.getState();
+      try {
+        const categorizer = await import('@/lib/categorization/aiCategorizer');
+        const categories = await categorizer.categorizeTransactions(
+          parsed.transactions,
+          {
+            provider: settings.llmProvider,
+            baseUrl: settings.ollamaUrl,
+            model: settings.llmModel || '',
+          }
+        );
+        // Apply categories to transactions
+        parsed.transactions = categorizer.applyCategorizationResults(parsed.transactions, categories);
+      } catch (e) {
+        console.error('[FileProcessor] Categorization failed:', e);
+        // Continue without categories - keyword fallback already applied by parser
+      }
+      
       processParsedStatement(parsed, detectedCurrency);
     } else if (isXLS) {
       setProgress("Parsing Excel file...");
       const result = await parseXLS(file);
       parsed = result.statement;
       detectedCurrency = result.detectedCurrency;
+      
+      // Categorize transactions using LLM
+      setProgress("Categorizing transactions...");
+      const settings = useSettingsStore.getState();
+      try {
+        const categorizer = await import('@/lib/categorization/aiCategorizer');
+        const categories = await categorizer.categorizeTransactions(
+          parsed.transactions,
+          {
+            provider: settings.llmProvider,
+            baseUrl: settings.ollamaUrl,
+            model: settings.llmModel || '',
+          }
+        );
+        // Apply categories to transactions
+        parsed.transactions = categorizer.applyCategorizationResults(parsed.transactions, categories);
+      } catch (e) {
+        console.error('[FileProcessor] Categorization failed:', e);
+        // Continue without categories - keyword fallback already applied by parser
+      }
+      
       processParsedStatement(parsed, detectedCurrency);
     } else {
       throw new Error(
@@ -265,6 +365,7 @@ export function FileProcessor({ onSuccess, onProcessingChange }: FileProcessorPr
 
   // Handle password submission - retry with password
   const handlePasswordSubmit = useCallback(async (password: string) => {
+    debugLog('[fileprocesser][PasswordSubmit] pendingFile:', pendingFile, 'password:', password ? '***' : 'empty');
     if (!pendingFile) return;
 
     setPasswordDialogOpen(false);
@@ -276,18 +377,22 @@ export function FileProcessor({ onSuccess, onProcessingChange }: FileProcessorPr
       const typeToUse = pendingTypeFile ? statementType : 'auto';
       await processFileWithStatementType(pendingFile, typeToUse, password);
       // Success - clear password state
+      debugLog('[FileProcessor][PasswordSubmit] Password correct, file processed successfully. Clearing password state and setpendingfile to null');
       setPendingFile(null);
       setPasswordAttempts(0);
       setPendingTypeFile(null);
       setPendingTypePassword(undefined);
       setStatementType('auto');
     } catch (err) {
+      // debugError('[FileProcessor][PasswordSubmit] Error:', err, 'isPasswordError:', isPasswordError(err));
       if (isPasswordError(err)) {
         const newAttempts = passwordAttempts + 1;
         setPasswordAttempts(newAttempts);
-
+        debugLog(`[FileProcessor][PasswordSubmit] Password attempt ${newAttempts} failed for file:`, pendingFile.name, 'max attempts:', MAX_PASSWORD_ATTEMPTS);
         if (newAttempts >= MAX_PASSWORD_ATTEMPTS) {
+          debugLog(`[FileProcessor][PasswordSubmit] Max password attempts reached for file:`, pendingFile.name, ' newAttempts:', newAttempts);
           // Too many failed attempts
+          debugLog('[FileProcessor][PasswordSubmit] Password correct, file processed successfully. Clearing password state and setpendingfile to null. Attempt counts', newAttempts);
           setPendingFile(null);
           setPasswordAttempts(0);
           setPendingTypeFile(null);
@@ -300,7 +405,9 @@ export function FileProcessor({ onSuccess, onProcessingChange }: FileProcessorPr
           setPasswordDialogOpen(true);
         }
       } else {
+        debugLog('[FileProcessor][PasswordSubmit] "other" error:', err);
         // Other error
+        debugLog('[FileProcessor][PasswordSubmit] Non-password error occurred. Clearing pending file and password state. Error:', err, 'pendingFile:', pendingFile.name, 'passwordAttempts:', passwordAttempts);
         setPendingFile(null);
         setPasswordAttempts(0);
         setPendingTypeFile(null);
@@ -308,14 +415,16 @@ export function FileProcessor({ onSuccess, onProcessingChange }: FileProcessorPr
         setError(err instanceof Error ? err.message : "Failed to parse PDF file");
       }
     } finally {
+      debugLog('[FileProcessor][PasswordSubmit] Finally block reached. Clearing processing state if not waiting for password. pendingFile:', pendingFile, 'passwordDialogOpen:', passwordDialogOpen);
       setIsProcessing(false);
       setProgress(null);
     }
-  }, [pendingFile, passwordAttempts, processFileWithStatementType, pendingTypeFile, statementType]);
+  }, [pendingFile, passwordAttempts, processFileWithStatementType, pendingTypeFile, statementType, passwordDialogOpen]);
 
   // Handle password dialog cancel
   const handlePasswordCancel = useCallback(() => {
     setPasswordDialogOpen(false);
+    debugLog('[FileProcessor][PasswordCancel] Password dialog cancelled. Clearing pending file and password state. pendingFile:', pendingFile ? pendingFile.name : 'null');
     setPendingFile(null);
     setPasswordAttempts(0);
     setPasswordError(null);
@@ -323,9 +432,34 @@ export function FileProcessor({ onSuccess, onProcessingChange }: FileProcessorPr
     setProgress(null);
     setPendingTypeFile(null);
     setPendingTypePassword(undefined);
-  }, []);
+  }, [pendingFile]);
 
   // Handle statement type dialog continue
+  // ========== FIX (2026-03-16) START ==========
+  // Changed to async/await with try-catch to handle password errors.
+  // Password errors are handled inside processFileWithStatementType (shows dialog),
+  // so we swallow those errors here. Non-password errors are re-thrown.
+  const handleStatementTypeContinue = useCallback(async () => {
+    setStatementTypeDialogOpen(false);
+    if (pendingTypeFile) {
+      setIsProcessing(true);
+      try {
+        await processFileWithStatementType(pendingTypeFile, statementType, pendingTypePassword);
+        setPendingTypeFile(null);
+        setPendingTypePassword(undefined);
+      } catch (err) {
+        // Password errors are handled inside processFileWithStatementType (shows dialog)
+        // Just swallow the error here - don't let it bubble up
+        if (!isPasswordError(err)) {
+          // Non-password errors should still be shown
+          throw err;
+        }
+      }
+    }
+  }, [pendingTypeFile, statementType, pendingTypePassword, processFileWithStatementType]);
+  // ========== FIX (2026-03-16) END ==========
+  // Old code (sync, no error handling):
+  /*
   const handleStatementTypeContinue = useCallback(() => {
     setStatementTypeDialogOpen(false);
     if (pendingTypeFile) {
@@ -335,6 +469,7 @@ export function FileProcessor({ onSuccess, onProcessingChange }: FileProcessorPr
       setPendingTypePassword(undefined);
     }
   }, [pendingTypeFile, statementType, pendingTypePassword, processFileWithStatementType]);
+  */
 
   // Handle statement type dialog cancel
   const handleStatementTypeCancel = useCallback(() => {
@@ -370,13 +505,14 @@ export function FileProcessor({ onSuccess, onProcessingChange }: FileProcessorPr
         // Log processing time even on error
         if (processingStartTime.current > 0) {
           const elapsed = ((Date.now() - processingStartTime.current) / 1000).toFixed(2);
-          console.log(`[FileProcessor] Processing failed after ${elapsed}s: ${errorMessage}`);
+          debugLog(`[FileProcessor] Processing failed after ${elapsed}s: ${errorMessage}`);
           processingStartTime.current = 0;
         }
       }
     } finally {
       // Only clear processing if not waiting for password
       if (!passwordDialogOpen) {
+        // debugError('[FileProcessor][handleFileSelect] Finally block reached. Clearing processing state. passwordDialogOpen:', passwordDialogOpen);
         setIsProcessing(false);
         setProgress(null);
       }
@@ -430,6 +566,7 @@ export function FileProcessor({ onSuccess, onProcessingChange }: FileProcessorPr
       <PasswordDialog
         open={passwordDialogOpen}
         onOpenChange={(open) => {
+          debugLog('[FileProcessor][PasswordDialog] onOpenChange called with open:', open);
           if (!open) {
             handlePasswordCancel();
           }
@@ -467,15 +604,15 @@ export function FileProcessor({ onSuccess, onProcessingChange }: FileProcessorPr
       )}
 
       {/* Statement Type Selector Dialog */}
-      <Dialog 
-        open={statementTypeDialogOpen} 
+      <Dialog
+        open={statementTypeDialogOpen}
         onOpenChange={(open) => {
           // Prevent closing while processing
           if (!open && isProcessing) return;
           setStatementTypeDialogOpen(open);
         }}
       >
-        <DialogContent 
+        <DialogContent
           onEscapeKeyDown={(e) => {
             // Prevent escape key while processing
             if (isProcessing) {

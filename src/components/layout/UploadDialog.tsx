@@ -13,7 +13,7 @@ interface UploadDialogProps {
 
 export function UploadDialog({ open, onOpenChange, isProcessing = false }: UploadDialogProps) {
   const [localProcessing, setLocalProcessing] = useState(false);
-  
+
   // Use local state if parent doesn't provide isProcessing
   const effectiveProcessing = isProcessing || localProcessing;
 
@@ -25,7 +25,7 @@ export function UploadDialog({ open, onOpenChange, isProcessing = false }: Uploa
         </DialogHeader>
         <div className="space-y-4">
           <AIConnectionBar disabled={effectiveProcessing} />
-          <FileProcessor 
+          <FileProcessor
             onSuccess={() => onOpenChange(false)}
             onProcessingChange={setLocalProcessing}
           />

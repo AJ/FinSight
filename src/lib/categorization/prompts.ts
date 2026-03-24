@@ -27,7 +27,7 @@ Category guidance:
 - "bills": Credit card payments, loan payments, EMI, bill payments
 - "insurance": Insurance premium payments`;
 
-import { normalizeTransactionType } from '@/lib/utils/transactionType';
+import { normalizeTransactionType } from '@/models/TransactionType';
 
 /**
  * Build the user prompt with transaction data.

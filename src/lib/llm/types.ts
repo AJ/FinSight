@@ -1,3 +1,5 @@
+// src/lib/llm/types.ts
+
 /**
  * Shared types for LLM clients.
  */
@@ -15,3 +17,55 @@ export const DEFAULT_URLS: Record<LLMProvider, string> = {
   ollama: 'http://localhost:11434',
   lmstudio: 'http://localhost:1234',
 };
+
+/**
+ * LLM call options for controlling generation behavior.
+ */
+export type LLMCallOptions = {
+  /**
+   * Temperature for generation (0 = deterministic, 1 = creative).
+   * Default: 0 (required for deterministic extraction)
+   */
+  temperature?: number;
+
+  /**
+   * Maximum tokens to generate.
+   * Default: 4096
+   * Recommended per stage:
+   *   - type_detection: 512
+   *   - summary: 2048
+   *   - transactions: 12288
+   *   - rewards: 1024
+   */
+  maxTokens?: number;
+
+  /**
+   * Stage name for logging and error messages.
+   * Examples: "type_detection", "summary", "transactions", "rewards"
+   */
+  stage?: string;
+};
+
+/**
+ * LLM Error with retry classification.
+ * Use this to distinguish transient failures (retry) from permanent failures (don't retry).
+ */
+export class OllamaError extends Error {
+  constructor(
+    message: string,
+    public retryable: boolean
+  ) {
+    super(message);
+    this.name = 'OllamaError';
+  }
+}
+
+export class LMStudioError extends Error {
+  constructor(
+    message: string,
+    public retryable: boolean
+  ) {
+    super(message);
+    this.name = 'LMStudioError';
+  }
+}

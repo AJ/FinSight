@@ -12,7 +12,7 @@ interface FileUploadProps {
   isProcessing?: boolean;
 }
 
-const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50 MB
+const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10 MB
 const VALID_EXTENSIONS = ['.csv', '.pdf', '.xls', '.xlsx'];
 
 // MIME type validation to prevent extension spoofing
@@ -40,7 +40,7 @@ function validateAndSelectFile(file: File, onFileSelect: (file: File) => void): 
   }
 
   if (file.size > MAX_FILE_SIZE) {
-    alert('File is too large. Maximum size is 50 MB.');
+    alert('File is too large. Maximum size is 10 MB.');
     return false;
   }
 
