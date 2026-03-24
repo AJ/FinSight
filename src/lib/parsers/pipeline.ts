@@ -104,7 +104,7 @@ async function processCreditCard(normalizedText: string): Promise<PipelineResult
       maxRetries: MAX_RETRIES,
       stage: 'cc_summary',
       maxTokens: 2048,
-      onValidationFailure: (parsed, _errors) => {
+      onValidationFailure: (parsed) => {
         const s = parsed as CCSummary;
         console.log('[RetryEngine cc_summary] Validation failed. LLM returned:', {
           statementDate: s?.statementDate,

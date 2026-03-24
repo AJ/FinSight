@@ -125,6 +125,25 @@ Category.register(new Category("travel", "Travel", CategoryType.Expense,
     "hertz", "enterprise", "avis", "lyft", "uber"],
   "Plane", "#0ea5e9"));
 
+Category.register(new Category("fees", "Fees & Charges", CategoryType.Expense,
+  ["fee", "charges", "penalty", "late fee", "service fee",
+    "annual fee", "maintenance fee", "transaction fee",
+    "fcy markup", "foreign currency", "currency conversion",
+    "bank fee", "processing fee", "admin fee", "administrative"],
+  "AlertCircle", "#f43f5e"));
+
+Category.register(new Category("taxes", "Taxes", CategoryType.Expense,
+  ["tax", "gst", "vat", "cess", "duty", "tds", "tax deducted",
+    "igst", "cgst", "sgst", "ugst", "sales tax", "income tax",
+    "property tax", "stamp duty", "excise", "levy", "impost"],
+  "Receipt", "#d946ef"));
+
+Category.register(new Category("interest-expense", "Interest", CategoryType.Expense,
+  ["interest", "finance charge", "interest charged", "interest debited",
+    "igp", "interest payment", "loan interest", "credit interest",
+    "overdue interest", "penal interest", "interest on"],
+  "Percent", "#a855f7"));
+
 Category.register(new Category("other", "Other", CategoryType.Excluded,
   [],
   "HelpCircle", "#6b7280"));

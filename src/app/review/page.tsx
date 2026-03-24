@@ -20,7 +20,15 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
-import { ArrowLeft, CheckCircle, Edit2, Trash2, Download } from "lucide-react";
+import { ArrowLeft, CheckCircle, Edit2, Trash2, Download, Check, XCircle } from "lucide-react";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Transaction, TransactionJSON, TransactionType, Category } from "@/types";
 import { useTransactionStore } from "@/lib/store/transactionStore";
 import { useSettingsStore } from "@/lib/store/settingsStore";
@@ -97,6 +105,7 @@ export default function ReviewPage() {
   const [pendingTransactions, setPendingTransactions] = useState<Transaction[] | null>(() => loadPendingTransactions());
   const [verificationReport] = useState<VerificationReport | CCVerificationReport | null>(() => loadVerificationReport());
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [showUnsavedModal, setShowUnsavedModal] = useState(false);
   const addTransactions = useTransactionStore((state) => state.addTransactions);
   const startBackgroundCategorization = useTransactionStore((state) => state.startBackgroundCategorization);
   const runAnomalyDetection = useTransactionStore((state) => state.runAnomalyDetection);
@@ -171,7 +180,22 @@ export default function ReviewPage() {
     setPendingTransactions((prev) => prev?.filter((t) => t.id !== id) ?? prev);
   };
 
+  const handleSaveEdit = () => {
+    // Just exit edit mode - changes are already applied via handleEditField
+    setEditingId(null);
+  };
+
   const handleConfirmImport = () => {
+    if (editingId) {
+      // There are unsaved changes
+      setShowUnsavedModal(true);
+      return;
+    }
+
+    proceedWithImport();
+  };
+
+  const proceedWithImport = () => {
     if (pendingTransactions.length === 0) {
       alert("No transactions to import!");
       return;
@@ -245,6 +269,7 @@ export default function ReviewPage() {
                   <TableHead>Description</TableHead>
                   <TableHead className="w-[8%] text-right pr-2">Amount</TableHead>
                   <TableHead className="w-[5%] text-center">Type</TableHead>
+                  <TableHead className="w-[8%] text-center">Subtype</TableHead>
                   <TableHead className="w-[15%] text-center">Category</TableHead>
                   <TableHead className="w-[5%] text-center">Actions</TableHead>
                 </TableRow>
@@ -360,6 +385,49 @@ export default function ReviewPage() {
                       )}
                     </TableCell>
 
+                    {/* Subtype */}
+                    <TableCell className="text-center">
+                      {isEditing ? (
+                        <Select
+                          value={transaction.transactionSubType || ""}
+                          onValueChange={(value: string) => {
+                            handleEditField(transaction.id, "transactionSubType", value || undefined);
+                          }}
+                        >
+                          <SelectTrigger className="w-full">
+                            <SelectValue placeholder="Select subtype" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {/* Debit subtypes */}
+                            {transaction.type === "debit" && (
+                              <>
+                                <SelectItem value="purchase">Purchase</SelectItem>
+                                <SelectItem value="fee">Fee</SelectItem>
+                                <SelectItem value="tax">Tax</SelectItem>
+                                <SelectItem value="interest">Interest</SelectItem>
+                                <SelectItem value="charge">Charge</SelectItem>
+                                <SelectItem value="adjustment">Adjustment</SelectItem>
+                              </>
+                            )}
+                            {/* Credit subtypes */}
+                            {transaction.type === "credit" && (
+                              <>
+                                <SelectItem value="payment">Payment</SelectItem>
+                                <SelectItem value="refund">Refund</SelectItem>
+                                <SelectItem value="cashback">Cashback</SelectItem>
+                                <SelectItem value="reversal">Reversal</SelectItem>
+                                <SelectItem value="adjustment">Adjustment</SelectItem>
+                              </>
+                            )}
+                          </SelectContent>
+                        </Select>
+                      ) : (
+                        <span className="text-xs text-muted-foreground">
+                          {transaction.transactionSubType || "-"}
+                        </span>
+                      )}
+                    </TableCell>
+
                     {/* Category */}
                     <TableCell>
                       <Select
@@ -380,49 +448,98 @@ export default function ReviewPage() {
                           </SelectValue>
                         </SelectTrigger>
                         <SelectContent>
-                          {DEFAULT_CATEGORIES.filter(
-                            (c) => !c.isExcluded,
-                          ).map((cat) => {
-                            const display = getCategoryDisplay(cat.id);
-                            const IconComponent = display.icon;
-                            return (
-                              <SelectItem key={cat.id} value={cat.id}>
-                                <span className="flex items-center gap-2">
-                                  <IconComponent
-                                    className="w-3 h-3"
-                                    style={{ color: display.color }}
-                                  />
-                                  {cat.name}
-                                </span>
-                              </SelectItem>
+                          {(() => {
+                            // Sort categories alphabetically, put "Other" at bottom
+                            const categories = DEFAULT_CATEGORIES.filter(
+                              (c) => !c.isExcluded,
                             );
-                          })}
+                            const otherCategory = categories.find(
+                              (c) => c.id === "other",
+                            );
+                            const regularCategories = categories
+                              .filter((c) => c.id !== "other")
+                              .sort((a, b) => a.name.localeCompare(b.name));
+
+                            return (
+                              <>
+                                {regularCategories.map((cat) => {
+                                  const display = getCategoryDisplay(cat.id);
+                                  const IconComponent = display.icon;
+                                  return (
+                                    <SelectItem key={cat.id} value={cat.id}>
+                                      <span className="flex items-center gap-2">
+                                        <IconComponent
+                                          className="w-3 h-3"
+                                          style={{ color: display.color }}
+                                        />
+                                        {cat.name}
+                                      </span>
+                                    </SelectItem>
+                                  );
+                                })}
+                                {/* Separator before "Other" */}
+                                <div className="h-px bg-border my-1" />
+                                {otherCategory && (() => {
+                                  const display = getCategoryDisplay(otherCategory.id);
+                                  const IconComponent = display.icon;
+                                  return (
+                                    <SelectItem key={otherCategory.id} value={otherCategory.id}>
+                                      <span className="flex items-center gap-2">
+                                        <IconComponent
+                                          className="w-3 h-3"
+                                          style={{ color: display.color }}
+                                        />
+                                        {otherCategory.name}
+                                      </span>
+                                    </SelectItem>
+                                  );
+                                })()}
+                              </>
+                            );
+                          })()}
                         </SelectContent>
                       </Select>
                     </TableCell>
 
                     {/* Actions */}
                     <TableCell>
-                      <div className="flex gap-2">
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          onClick={() =>
-                            setEditingId(isEditing ? null : transaction.id)
-                          }
-                        >
-                          <Edit2 className="w-4 h-4" />
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          onClick={() =>
-                            handleDeleteTransaction(transaction.id)
-                          }
-                        >
-                          <Trash2 className="w-4 h-4 text-destructive" />
-                        </Button>
-                      </div>
+                      {isEditing ? (
+                        <div className="flex gap-2">
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={handleSaveEdit}
+                            className="text-emerald-600 hover:text-emerald-700"
+                          >
+                            <Check className="w-4 h-4" />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={() => setEditingId(null)}
+                            className="text-rose-600 hover:text-rose-700"
+                          >
+                            <XCircle className="w-4 h-4" />
+                          </Button>
+                        </div>
+                      ) : (
+                        <div className="flex gap-2">
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={() => setEditingId(transaction.id)}
+                          >
+                            <Edit2 className="w-4 h-4" />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={() => handleDeleteTransaction(transaction.id)}
+                          >
+                            <Trash2 className="w-4 h-4 text-destructive" />
+                          </Button>
+                        </div>
+                      )}
                     </TableCell>
                   </TableRow>
                 );
@@ -439,6 +556,46 @@ export default function ReviewPage() {
           <VerificationSummary report={verificationReport} />
         </div>
       )}
+
+      {/* Unsaved Changes Modal */}
+      <Dialog open={showUnsavedModal} onOpenChange={setShowUnsavedModal}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Unsaved Changes</DialogTitle>
+            <DialogDescription>
+              You have unsaved edits. What would you like to do?
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="gap-2">
+            <Button
+              variant="outline"
+              onClick={() => {
+                setShowUnsavedModal(false);
+              }}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setEditingId(null);
+                setShowUnsavedModal(false);
+              }}
+            >
+              Discard Changes
+            </Button>
+            <Button
+              onClick={() => {
+                setEditingId(null);
+                setShowUnsavedModal(false);
+                proceedWithImport();
+              }}
+            >
+              Save & Continue
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

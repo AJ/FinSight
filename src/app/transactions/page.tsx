@@ -564,7 +564,6 @@ function TransactionsPageContent() {
                       <div className="flex items-center gap-2">
                         <InlineCategoryEditor
                           categoryId={transaction.category.id}
-                          isIncome={transaction.isIncome}
                           needsReview={transaction.needsReview}
                           onCategoryChange={(newCat) => handleCategoryChange(transaction.id, newCat)}
                         />

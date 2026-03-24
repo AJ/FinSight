@@ -12,11 +12,9 @@ import { getCategoryById, DEFAULT_CATEGORIES } from "@/lib/categorization/catego
 import { getCategoryDisplay } from "./CategoryBadge";
 import { ChevronDown, AlertCircle, Check, Search } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { CategoryType } from "@/types";
 
 interface InlineCategoryEditorProps {
   categoryId: string;
-  isIncome: boolean;
   needsReview?: boolean;
   onCategoryChange: (newCategory: string) => void;
   className?: string;
@@ -24,7 +22,6 @@ interface InlineCategoryEditorProps {
 
 export function InlineCategoryEditor({
   categoryId,
-  isIncome,
   needsReview = false,
   onCategoryChange,
   className,
@@ -35,13 +32,11 @@ export function InlineCategoryEditor({
   const display = getCategoryDisplay(categoryId);
   const IconComponent = display.icon;
 
-  // Filter categories by category type and search term
+  // Filter categories by search term (show all categories, not filtered by type)
   const filteredCategories = useMemo(() => {
-    const targetCategoryType = isIncome ? CategoryType.Income : CategoryType.Expense;
-    return DEFAULT_CATEGORIES.filter((c) => {
-      // Show categories matching the target type (exclude "excluded" categories)
-      const matchesType = c.type === targetCategoryType;
-      if (!matchesType) return false;
+    const categories = DEFAULT_CATEGORIES.filter((c) => {
+      // Exclude "excluded" categories (like Investment)
+      if (c.isExcluded) return false;
 
       if (!searchTerm) return true;
 
@@ -50,7 +45,17 @@ export function InlineCategoryEditor({
       const matchesKeywords = c.keywords.some(kw => kw.toLowerCase().includes(search));
       return matchesName || matchesKeywords;
     });
-  }, [isIncome, searchTerm]);
+
+    // Sort alphabetically, put "Other" at bottom
+    const otherCategory = categories.find((c) => c.id === "other");
+    const regularCategories = categories
+      .filter((c) => c.id !== "other")
+      .sort((a, b) => a.name.localeCompare(b.name));
+
+    return otherCategory
+      ? [...regularCategories, otherCategory]
+      : regularCategories;
+  }, [searchTerm]);
 
   // Reset search when popover closes
   const handleOpenChange = (open: boolean) => {
@@ -119,33 +124,41 @@ export function InlineCategoryEditor({
               No categories found
             </div>
           ) : (
-            filteredCategories.map((cat) => {
+            filteredCategories.map((cat, index) => {
               const catDisplay = getCategoryDisplay(cat.id);
               const CatIcon = catDisplay.icon;
               const isSelected = cat.id === categoryId;
+              const isOther = cat.id === "other";
+              const prevCategory = filteredCategories[index - 1];
+              const showSeparator = isOther && prevCategory && prevCategory.id !== "other";
 
               return (
-                <button
-                  key={cat.id}
-                  onClick={() => {
-                    onCategoryChange(cat.id);
-                    setIsOpen(false);
-                  }}
-                  className={cn(
-                    "w-full flex items-center gap-2 px-2 py-1.5 rounded-md text-sm transition-colors",
-                    "hover:bg-muted",
-                    isSelected && "bg-muted/50"
+                <>
+                  {showSeparator && (
+                    <div className="h-px bg-border my-1" />
                   )}
-                >
-                  <CatIcon
-                    className="w-3.5 h-3.5 flex-shrink-0"
-                    style={{ color: catDisplay.color }}
-                  />
-                  <span className="flex-1 text-left">{cat.name}</span>
-                  {isSelected && (
-                    <Check className="w-3.5 h-3.5 text-primary" />
-                  )}
-                </button>
+                  <button
+                    key={cat.id}
+                    onClick={() => {
+                      onCategoryChange(cat.id);
+                      setIsOpen(false);
+                    }}
+                    className={cn(
+                      "w-full flex items-center gap-2 px-2 py-1.5 rounded-md text-sm transition-colors",
+                      "hover:bg-muted",
+                      isSelected && "bg-muted/50"
+                    )}
+                  >
+                    <CatIcon
+                      className="w-3.5 h-3.5 flex-shrink-0"
+                      style={{ color: catDisplay.color }}
+                    />
+                    <span className="flex-1 text-left">{cat.name}</span>
+                    {isSelected && (
+                      <Check className="w-3.5 h-3.5 text-primary" />
+                    )}
+                  </button>
+                </>
               );
             })
           )}
