@@ -1,11 +1,20 @@
 /**
- * Statement Extraction Prompts
- * 
- * All prompts for parsing bank and credit card statements.
- * Organized by extraction pass.
+ * Credit Card Statement - LLM Prompts
+ *
+ * Two-pass approach for local LLMs with limited context windows:
+ * 1. Type detection (minimal tokens)
+ * 2. Extraction with appropriate template
  */
 
-/* ── Type Detection Prompt ────────────────────────────────── */
+import {
+  TypeDetectionResult,
+  CCExtractionResult,
+} from '@/types/creditCard';
+import { TRANSACTION_SUB_TYPES } from '@/models/Transaction';
+
+// Generate the list of valid transaction sub-types for the prompt
+const TRANSACTION_SUB_TYPE_LIST = TRANSACTION_SUB_TYPES.join(', ');
+
 
 export const TYPE_DETECTION_PROMPT = `Analyze this document and determine if it is a bank statement or a credit card statement.
 
@@ -26,29 +35,29 @@ Look for these BANK STATEMENT indicators:
 - "cheque" references
 - Account type (savings, current, salary)
 
-CONFIDENCE SCALE (IMPORTANT):
-- 0.9-1.0: Clear, unambiguous signals (e.g., "credit limit" + "minimum due" for CC, or "opening balance" + "closing balance" for bank)
-- 0.7-0.9: Strong signals present but some minor ambiguity
-- 0.5-0.7: Weak or mixed signals (both CC and bank indicators present)
-- <0.5: Very uncertain - indicators are unclear or contradictory
-
 Return ONLY a JSON object with your analysis:
 {
   "type": "bank" | "credit_card" | "unknown",
-  "confidence": 0.0 to 1.0,
-  "reason": "brief explanation of which indicators were found"
+  "confidence": 0.0 to 1.0
 }
 
 If you see BOTH bank and credit card indicators, prioritize credit card indicators.
 If uncertain, return "unknown" with confidence < 0.5.
 
-DOCUMENT TEXT:
+DOCUMENT TEXT (first portion):
 ---
-{RAW_TEXT}
 `;
 
-/* ── Credit Card: Summary Pass (Pass 1) ──────────────────── */
 
+/**
+ * CC Summary Pass - extracts ONLY summary fields (Pass 1)
+ * 
+ * EXTRACTION STRATEGY:
+ * 1. Find ALL candidates for ambiguous fields (previousBalance)
+ * 2. Select best candidate using priority rules
+ * 3. Extract other fields directly from summary section
+ * 4. NEVER compute from transactions
+ */
 export const CC_SUMMARY_PROMPT = `You are an expert credit card statement parser.
 
 Your task is to extract ONLY summary-level fields from the statement.
@@ -68,21 +77,12 @@ previousBalanceCandidates:
 Look for labels similar to:
 - Previous Balance
 - Previous Statement Balance
-- Previous Statement Dues
 - Balance Brought Forward
 - Opening Balance (ONLY if clearly from previous cycle)
 
 Return ALL matches with:
 - label (exact text)
 - value
-
-IMPORTANT: The value may appear in different positions depending on the bank's format:
-- On the same line as the label
-- On the next line below the label
-- In a column aligned with the label
-- After a colon or separator
-
-Find the numeric value that is clearly associated with the label.
 
 --------------------------------------------------
 STEP 2 — SELECT BEST CANDIDATE
@@ -91,7 +91,7 @@ Select previousBalance using:
 
 Priority:
 1. "Previous Balance" or equivalent
-2. "Previous Statement Balance" or "Previous Statement Dues"
+2. "Previous Statement Balance"
 3. "Balance Brought Forward"
 4. Opening balance ONLY if clearly tied to previous cycle
 
@@ -143,46 +143,28 @@ CRITICAL RULES
   - Retail Spends
   - Total Spends
   - Charges
-  - Purchases/Debit
-- Value may appear in equation format (see rule 3)
 
 2. paymentsReceived:
 - Look for:
   - Payments Received
   - Payments & Credits
-  - Payments/Credits Received
   - Amount Paid
-- Value may appear in equation format (see rule 3)
 
-3. EQUATION FORMAT (some statements use this):
-Some statements show summary values in equation format like:
-  "60000 50000 + 80000 + 0 = 90000"
-
-The formula is: Previous - Payments + Purchases + Finance = Total
-
-Parse as:
-- First number (before space): previousBalance
-- Second number (after space, before +): paymentsReceived (this is SUBTRACTED in the formula)
-- Third number (after first +): purchasesAndCharges
-- Fourth number (after second +): financeCharges
-- Number after =: totalDue
-
-4. cashbackEarned:
+3. cashbackEarned:
 - Includes cashback, valueback, reward-equivalent
 - If not present → null
 
-5. Dates:
+4. Dates:
 - Convert to YYYY-MM-DD if possible
 - Else return null
 
-6. Amounts:
+5. Amounts:
 - Remove commas
 - Convert to number
 - No currency symbols
 
-7. Missing values:
+6. Missing values:
 - Return null (NOT 0)
-- 0 is ONLY valid if the statement explicitly shows "0" or "0.00"
 
 --------------------------------------------------
 OUTPUT FORMAT (STRICT JSON ONLY)
@@ -225,8 +207,9 @@ DOCUMENT:
 {RAW_TEXT}
 `;
 
-/* ── Credit Card: Transactions Pass (Pass 2) ─────────────── */
-
+/**
+ * CC Transactions Pass - extracts ONLY transactions (Pass 2)
+ */
 export const CC_TRANSACTIONS_PROMPT = `You are a deterministic financial data extraction engine.
 
 Your task is to extract ALL individual transactions from this credit card statement.
@@ -250,30 +233,14 @@ Return ONLY valid JSON. No explanation. No extra text. No markdown.
       "description": "merchant/description",
       "amount": number,
       "type": "debit" | "credit",
-      "transactionSubType": "purchase" | "payment" | "refund" | "cashback" | "tax" | "fee" | "interest" | "charge" | "adjustment" | "reversal",
+      "transactionSubType": "purchase" | "payment" | "refund" | "cashback" | "fee" | "interest" | "charge" | "adjustment" | "reversal",
       "localCurrency": "INR",
       "isInternationalTransaction": boolean,
       "originalCurrency": "USD" (omit if domestic),
-      "originalAmount": number (omit if domestic),
-      "confidence": 0.0 to 1.0 (optional - your confidence in this extraction)
+      "originalAmount": number (omit if domestic)
     }
-  ],
-  "_debug": {
-    "totalCount": number,
-    "droppedTransactions": [
-      {
-        "reason": "why dropped (e.g., amount unclear, date missing)",
-        "rawText": "the problematic text"
-      }
-    ]
-  }
+  ]
 }
-
-CONFIDENCE SCALE (optional but helpful):
-- 0.9-1.0: All fields clearly visible in statement (amount, date, merchant all unambiguous)
-- 0.7-0.9: Most fields clear, minor ambiguity (e.g., date format unclear)
-- 0.5-0.7: Some fields uncertain (e.g., amount hard to read, merchant name cut off)
-- <0.5: Low confidence - multiple fields unclear or text is garbled
 
 --------------------------------
 EXTRACTION RULES
@@ -290,104 +257,17 @@ RULE 2 — NUMBER FORMATTING
 - Remove ALL commas: 1,23,456.78 → 123456.78
 - Output as plain decimal without commas
 
-RULE 3 - Keyword-based extraction:
-- Keywords MAY support classification but MUST NOT override transaction context or type.
-`
-//- If keyword-based classification conflicts with transaction type or logical flow, IGNORE the keyword.
-+
-`
-- Keywords MAY support classification but are hints only. Transaction context, type, and structural position (e.g. amount prefix, column position) always take priority over keyword matching."
-
-RULE 4 — DEBIT VS CREDIT (CRITICAL)
-Debit (money charged TO card):
-- Purchases, shopping, dining, subscriptions
-- Fees, interest, taxes, penalties
-- Look for: no prefix, or "-" prefix, or "DR"
-
-Credit (money credited TO card):
-- Payments (HINTS: "PAYMENT", "PAYZAPP", "UPI", "NEFT", "IMPS")
-- Refunds, reversals, cashback
-- Look for: "+" prefix, "CR" prefix or suffix, or payment keywords
-
-IMPORTANT: 
-- Refunds are ALWAYS credits (keywords: "REFUND", "RETURN", "REVERSAL")
-- Cashback is ALWAYS a credit
-- If amount has "+" prefix or "CR" → type = "credit"
-- If amount has "-" prefix or "DR" → type = "debit"
-- Otherwise use context (merchant = debit, refund keyword = credit)
-
-RULE 5 — AMOUNT EXTRACTION (CRITICAL)
-The amount is ALWAYS in a separate column or position from the description.
-
-DO NOT extract numbers that are part of the description text:
-- Tax codes like "-29", "18%", "RATE 18.0" are NOT the amount
-- Reference numbers, transaction IDs, voucher numbers are NOT the amount
-- Any number embedded in the description text is NOT the amount
-
-The amount will be:
-- In a separate column from the description
-- Usually formatted with currency symbol (₹, Rs) or as a standalone number
-- The main monetary value of the transaction
-- Some statements can contain a rewards point column before or after the amount column. Do not confuse reward points with the transaction amount.
-
-Example:
-Description: "IGST-VPS2627827578828-RATE 18.0 -29 (Ref# VT123456)"
-Amount: "12.35" (in a separate column, NOT the -29 from the description)
-
-`
-/*   
-RULE 6 — SUBTYPES (payment, refund, cashback, tax, fee, interest, adjustment, reversal, charge)
-1. Assign the most appropriate subtype:
-IF type == "credit" (Important check)
-   - "cashback": Reward cash credited (Look for: CASHBACK, VALUEBACK, REWARD CASH)
-   - "adjustment": Account adjustments
-   - "payment": You paying the card bill (Look for: PAYMENT, PAID, PAYZAPP, UPI, NEFT, IMPS)
-   - "refund": Money back from merchant (Look for: REFUND, RETURN, REVERSAL, CANCEL - but also any credit from a merchant)
-   - "reversal": Reversed transactions
-
-
-
-IF type = "debit":
-   - "tax": Tax charged on transactions. Look for: GST, IGST, CGST, SGST, UGST, VAT, CESS, DUTY, TAX, TDS in the description.
-   - "fee": Bank charges ONLY (HINTS: FEE, CHARGE, PENALTY, LATE FEE, ANNUAL FEE, SERVICE FEE). NEVER assign this subtype if the description contains IGST, CGST, SGST, UGST, GST, TDS, or VAT — those are always "tax".
-   - "interest": Interest charged (HINTS: INTEREST, IGP, FINANCE CHARGE)
-   - "purchase": Regular spending at merchants
-   - "charge": Other charges not covered above
-
-2. Keywords are hints, not requirements - use context. E.g., a credit from "URBAN COMPANY" is likely a refund even without the word "REFUND"
-3. If no subtype keyword matches, use the most logical default
-*/   
-   
-   
-
-/*
-IMPORTANT: Determine type FIRST, then subtype:
-1. FIRST determine if type is "debit" or "credit" using the rules above (+ prefix = credit, etc.)
-2. THEN assign the most appropriate subtype:   
-   - "cashback": Reward cash credited (HINTS: CASHBACK, VALUEBACK, REWARD CASH)
-   - "tax" is a subtype of "debit" and indicates tax charged on a purchase. It is NOT the total amount of the transaction, but the tax component. Look for tax keywords in the description to identify this subtype (*Non exclusive HINTS*: GST, IGST, CGST, SGST, UGST, VAT, CESS, DUTY, TAX, TDS)
-   - "purchase": Regular spending at merchants (most common for debits)
-   - "FCY MARKUP FEE" is not a bank fee but a currency conversion charge, so classify it as "charge" subtype, not "fee"
-   - "fee": Bank charges ONLY (HINTS: FEE, CHARGE, PENALTY, LATE FEE, ANNUAL FEE, SERVICE FEE). NEVER assign this subtype if the description contains IGST, CGST, SGST, UGST, GST, TDS, or VAT — those are always "tax".
-   - "interest": Interest charged (HINTS: INTEREST, IGP, FINANCE CHARGE)
-   - "adjustment": Account adjustments
-   - "reversal": Reversed transactions
-   - "charge": Other charges not covered above
-3. Keywords are hints, not requirements - use context. E.g., a credit from "URBAN COMPANY" is likely a refund even without the word "REFUND"
-4. If no subtype keyword matches, use the most logical default (e.g., merchant debit = "purchase")
-*/
-+
-`
-RULE 6 - Non-Bank FEEs:
-- "FCY MARKUP FEE" is not a bank fee but a currency conversion charge, so classify it as "charge" subtype, not "fee"
-- "payment": Credit card bill payment; Look for but not exclusive to: PAYMENT, PAID, PAYZAPP, UPI, NEFT, IMPS). 
-
-RULE 7 — DATE FORMAT
+RULE 3 — DATE FORMAT
 - Convert all dates to YYYY-MM-DD
 - "15 Jan 2024" → "2024-01-15"
 - "15/01/24" → "2024-01-15"
 
-RULE 8 — INTERNATIONAL TRANSACTIONS
+RULE 4 — DEBIT VS CREDIT
+- Debit = money charged to card (purchases, fees, interest)
+- Credit = money credited to card (payments, refunds, cashback)
+- Use transactionSubType for more specific classification
+
+RULE 5 — INTERNATIONAL TRANSACTIONS
 - If TWO amounts shown (e.g., "USD 38.60 = INR 3,431.14"):
   - amount: 3431.14 (the INR amount)
   - originalAmount: 38.60 (the foreign amount)
@@ -395,7 +275,7 @@ RULE 8 — INTERNATIONAL TRANSACTIONS
   - isInternationalTransaction: true
 - If only ONE amount shown, use it as both amount and originalAmount
 
-RULE 9 — WHAT IS A TRANSACTION
+RULE 6 — WHAT IS A TRANSACTION
 A transaction MUST have ALL THREE:
 1. A specific DATE (not a date range, not a due date)
 2. A MERCHANT NAME or specific payee
@@ -408,15 +288,15 @@ DO NOT EXTRACT:
 - Header text, column headers, section titles
 - Marketing text, offers, promotional content
 - Interest calculation explanations
-- Credit Card Bill Payment instructions
+- Payment instructions
 
 --------------------------------
 END
 --------------------------------`;
 
-
-/* ── Credit Card: Rewards Pass (Pass 3) ──────────────────── */
-
+/**
+ * CC Rewards Pass - extracts ONLY rewards data (Pass 3)
+ */
 export const CC_REWARDS_PROMPT = `You are a deterministic financial data extraction engine.
 
 Your task is to extract reward points and cashback data from this credit card statement.
@@ -485,8 +365,9 @@ If this fails, recheck the extracted values.
 END
 --------------------------------`;
 
-/* ── Bank: Summary Pass (Pass 1) ─────────────────────────── */
-
+/**
+ * Bank Summary Pass - extracts ONLY account summary (Pass 1)
+ */
 export const BANK_SUMMARY_PROMPT = `You are a deterministic financial data extraction engine.
 
 Your task is to extract ONLY the ACCOUNT SUMMARY fields from this bank statement.
@@ -526,10 +407,8 @@ RULE 1 — DO NOT GUESS
 If a field is not clearly labeled and present → return null.
 Never infer. Never estimate.
 
-RULE 2 — DATE FORMAT
-- Convert all dates to YYYY-MM-DD
-- "15 Jan 2024" → "2024-01-15"
-- "15/01/24" → "2024-01-15"
+RULE 2 — DATES MUST BE YYYY-MM-DD
+Convert all dates to YYYY-MM-DD format.
 
 RULE 3 — NUMERIC FORMAT
 Return amounts as plain numbers.
@@ -583,8 +462,9 @@ closingBalance:
 END
 --------------------------------`;
 
-/* ── Bank: Transactions Pass (Pass 2) ────────────────────── */
-
+/**
+ * Bank Transactions Pass - extracts ONLY transactions (Pass 2)
+ */
 export const BANK_TRANSACTIONS_PROMPT = `You are a deterministic financial data extraction engine.
 
 Your task is to extract ALL individual transactions from this bank statement.
@@ -607,8 +487,7 @@ Return ONLY valid JSON. No explanation. No extra text. No markdown.
       "date": "YYYY-MM-DD",
       "description": "merchant/description",
       "amount": number,
-      "type": "debit" | "credit",
-      "balance": number | null
+      "type": "debit" | "credit"
     }
   ]
 }
@@ -629,8 +508,6 @@ RULE 2 — NUMBER FORMATTING
 
 RULE 3 — DATE FORMAT
 - Convert all dates to YYYY-MM-DD
-- "15 Jan 2024" → "2024-01-15"
-- "15/01/24" → "2024-01-15"
 
 RULE 4 — DEBIT VS CREDIT (IN ORDER OF PRIORITY)
 1. SEPARATE COLUMNS: "Debit" column = "debit", "Credit" column = "credit"
@@ -655,49 +532,7 @@ DO NOT EXTRACT:
 - Bank contact information
 - Header text, column headers, section titles
 
-RULE 7 — RUNNING BALANCE (IF PRESENT)
-Many statements include a "Balance" column showing running balance.
-- If present, extract the balance value for each transaction
-- Balance is the account balance AFTER the transaction is applied
-- If not present, return null for balance field
-
 --------------------------------
 END
 --------------------------------`;
 
-
-/* ── Direct LLM parsing (browser → Ollama) ───────────────── */
-/* Disabled - using multi-pass pipeline instead
-const PARSE_PROMPT = `You are an expert bank statement parser. Your job is to extract ALL financial transactions from the raw text of a bank statement.
-
-IMPORTANT RULES:
-1. Extract EVERY single transaction — do NOT skip any.
-2. Auto-detect the currency from the statement (look for symbols like ₹, $, €, £, ¥ or words like Rupee, Dollar, Euro, or ISO codes like INR, USD, EUR).
-3. Auto-detect the date format used (DD/MM/YYYY, MM/DD/YYYY, YYYY-MM-DD, DD-Mon-YYYY, etc.).
-4. For each transaction, extract:
-   - date: in YYYY-MM-DD format
-   - description: the payee, merchant, or narration text
-   - amount: the absolute numeric value (always positive)
-   - type: "debit" for money going out (withdrawals/payments/expenses), "credit" for money coming in (deposits/transfers-in/refunds)
-5. Look for these clues to determine type:
-   - Separate "Debit" and "Credit" columns → debit column = "debit", credit column = "credit"
-   - Keywords indicating DEBIT: DEBIT, DR, WITHDRAWAL, PAID, SENT, OUT, PAYMENT TO, TRANSFER TO, NEFT-OUT, IMPS-OUT
-   - Keywords indicating CREDIT: CREDIT, CR, DEPOSIT, RECEIVED, IN, REFUND, TRANSFER FROM, NEFT-IN, IMPS-IN, UPI-CREDIT, CASH DEPOSIT
-   - Negative amounts or amounts in parentheses = debit
-   - Column headers like "Money Out" vs "Money In" → out = debit, in = credit
-   - TRANSFERS: "Transfer from X" or "Received from X" = credit; "Transfer to X" or "Sent to X" = debit
-6. EXTRACT BALANCE INFORMATION:
-   - openingBalance: the account balance at the START of the statement period (look for "Opening Balance", "Brought Forward", "Balance B/F", starting balance)
-   - closingBalance: the account balance at the END of the statement period (look for "Closing Balance", "Carried Forward", "Balance C/F", ending balance)
-   - These are CRITICAL for verification - extract them as numbers (positive for credit balance, negative for overdraft)
-7. Do NOT include opening/closing balance rows as transactions — only actual transactions.
-8. Do NOT hallucinate transactions. Only extract what is actually in the text.
-9. Output ONLY valid JSON — no markdown fences, no explanation, no extra text.
-
-REQUIRED JSON FORMAT:
-{"currency":{"code":"INR","symbol":"₹","name":"Indian Rupee"},"openingBalance":50000.00,"closingBalance":45000.00,"transactions":[{"date":"2024-01-15","description":"Amazon Purchase","amount":500.00,"type":"debit"},{"date":"2024-01-20","description":"Salary Credit","amount":50000.00,"type":"credit"}]}
-
-BANK STATEMENT TEXT:
----
-`;
-*/

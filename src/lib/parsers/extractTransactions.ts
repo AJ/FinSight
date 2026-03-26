@@ -4,12 +4,12 @@
  * Extracts all individual transaction rows from statement.
  */
 
-import { Transaction } from '@/models/Transaction';
+import type { ExtractedTransaction } from '@/types/extractedTransaction';
 import { CC_TRANSACTIONS_PROMPT, BANK_TRANSACTIONS_PROMPT } from './prompts';
 
-export { Transaction };
+export type { ExtractedTransaction };
 export interface TransactionsOutput {
-  transactions: Transaction[];
+  transactions: ExtractedTransaction[];
   _debug?: {
     totalCount: number;
     droppedTransactions: Array<{

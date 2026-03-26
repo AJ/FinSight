@@ -21,6 +21,7 @@ import {
 } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
 import { ArrowLeft, CheckCircle, Edit2, Trash2, Download, Check, XCircle } from "lucide-react";
+import { cn } from "@/lib/utils";
 import {
   Dialog,
   DialogContent,
@@ -280,7 +281,18 @@ export default function ReviewPage() {
                 const isEditing = editingId === transaction.id;
 
                 return (
-                  <TableRow key={transaction.id}>
+                  <TableRow 
+                    key={transaction.id}
+                    className={cn(
+                      "border-b-2",
+                      // Low confidence highlighting (yellow/orange borders)
+                      transaction.verificationConfidence !== undefined && transaction.verificationConfidence < 0.5 && "border-orange-400 border-dashed",
+                      transaction.verificationConfidence !== undefined && transaction.verificationConfidence >= 0.5 && transaction.verificationConfidence < 0.75 && "border-yellow-400 border-dashed",
+                      // Confidence mismatch highlighting (red border)
+                      transaction.llmConfidence !== undefined && transaction.verificationConfidence !== undefined &&
+                      Math.abs(transaction.llmConfidence - transaction.verificationConfidence) > 0.3 && "border-red-400 border-dotted"
+                    )}
+                  >
                     {/* Date */}
                     <TableCell className="font-mono text-sm text-center">
                       {isEditing ? (

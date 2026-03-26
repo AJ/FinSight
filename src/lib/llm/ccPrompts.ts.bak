@@ -1,0 +1,871 @@
+/**
+ * Credit Card Statement - LLM Prompts
+ *
+ * Two-pass approach for local LLMs with limited context windows:
+ * 1. Type detection (minimal tokens)
+ * 2. Extraction with appropriate template
+ */
+
+import {
+  TypeDetectionResult,
+  CCExtractionResult,
+} from '@/types/creditCard';
+import { TRANSACTION_SUB_TYPES } from '@/models/Transaction';
+
+// Generate the list of valid transaction sub-types for the prompt
+const TRANSACTION_SUB_TYPE_LIST = TRANSACTION_SUB_TYPES.join(', ');
+
+/* ── Pass 1: Statement Type Detection ─────────────────────── */
+
+export const TYPE_DETECTION_PROMPT = `Analyze this document and determine if it is a bank statement or a credit card statement.
+
+Look for these CREDIT CARD indicators:
+- "credit limit", "available credit", "cash limit"
+- "minimum amount due", "minimum due", "min due"
+- "payment due date", "due date"
+- "total amount due", "total due", "outstanding balance"
+- "previous balance", "brought forward"
+- Card number with 16 digits (or last 4 digits shown)
+- "statement period" followed by billing cycle dates
+
+Look for these BANK STATEMENT indicators:
+- "account number", "a/c no"
+- "opening balance", "closing balance"
+- "cr" / "dr" columns for credits/debits
+- Running balance column
+- "cheque" references
+- Account type (savings, current, salary)
+
+Return ONLY a JSON object with your analysis:
+{
+  "type": "bank" | "credit_card" | "unknown",
+  "confidence": 0.0 to 1.0
+}
+
+If you see BOTH bank and credit card indicators, prioritize credit card indicators.
+If uncertain, return "unknown" with confidence < 0.5.
+
+DOCUMENT TEXT (first portion):
+---
+`;
+
+/* ── Pass 2a: Bank Statement Extraction (existing) ─────────── */
+
+// Note: The existing PARSE_PROMPT from llmParser.ts will continue to be used
+// for bank statements
+
+/* ── Pass 2b: Credit Card Statement Extraction ─────────────── */
+
+/* DEAD CODE - OLD COMBINED PROMPT
+   Replaced by separate CC_SUMMARY_PROMPT, CC_TRANSACTIONS_PROMPT, CC_REWARDS_PROMPT
+
+export const CC_EXTRACTION_PROMPT = `You are an expert credit card statement parser. Extract ALL information from this credit card statement.
+
+STATEMENT-LEVEL INFORMATION TO EXTRACT:
+1. cardLastFour: Last 4 digits of the credit card number
+2. cardIssuer: Bank name (e.g., "HDFC Bank", "ICICI Bank", "Axis Bank")
+3. cardHolder: Primary card holder name (if mentioned)
+4. statementPeriodStart: Start date of statement period (YYYY-MM-DD)
+5. statementPeriodEnd: End date of statement period (YYYY-MM-DD)
+6. statementDate: Date the statement was generated (YYYY-MM-DD)
+7. paymentDueDate: Payment deadline (YYYY-MM-DD)
+8. totalDue: The TOTAL amount you owe for this statement
+   - Look for: "Total Amount Due", "Total Due", "Outstanding Balance"
+   - DO NOT confuse with "Minimum Due" (which is typically a small % of totalDue)
+   
+9. minimumDue: The MINIMUM payment you must make by the due date
+   - Look for: "Minimum Due", "Min Due", "Minimum Amount Due"
+   - This is typically a small percentage (3-10%) of totalDue
+10. creditLimit: Total credit limit on the card
+11. availableCredit: Available credit remaining
+12. previousBalance: The balance carried forward from the PREVIOUS statement (this is what you owed before this billing cycle started)
+    - Look for: "Previous Statement Dues", "Previous Balance", "Opening Balance", "Balance B/F", "Balance Brought Forward"
+    - This is usually a POSITIVE number (amount you owed)
+    - DO NOT confuse with "Minimum Due" or "Total Due" - those are for THIS statement
+13. paymentsReceived: Total payments/credits received during period (look for "PAYMENTS/CREDITS RECEIVED")
+14. purchasesAndCharges: Total new purchases/charges during period (look for "PURCHASES/DEBIT", "New Purchases")
+15. interestCharged: Interest amount charged (if any, else 0)
+16. lateFee: Late payment fee (if any, else 0)
+17. otherCharges: Other fees/charges (if any, else 0) - includes FCY markup, GST, service charges
+18. addonCards: Array of addon/supplementary card holders if present
+19. apr: Annual Percentage Rate as decimal (e.g., 0.408 for 40.8%). Look for "interest rate", "finance charges", "APR", "monthly interest rate"
+20. monthlyInterestRate: Monthly interest rate as decimal (e.g., 0.034 for 3.4%)
+21. minimumPaymentPercent: Minimum payment as % of outstanding (e.g., 0.05 for 5%). Look for "5% of outstanding"
+22. minimumPaymentFloor: Minimum absolute payment amount (e.g., 200 if "min ₹200")
+23. cashbackEarned: Total cashback earned this period. Look for "cashback earned", "cash back", "total cashback"
+24. rewardPoints: Object containing reward points summary:
+    - openingBalance: Points at start of statement period
+    - earned: Points earned this period
+    - redeemed: Points redeemed this period
+    - expired: Points that expired this period
+    - closingBalance: Current points balance
+    - expiringNext: Points expiring in next 30-90 days
+    - expiringNextDate: Expiry date for expiring points (YYYY-MM-DD)
+    Look for sections like "Reward Points Summary", "Points Balance", "Points Earned", "Points Redeemed"
+
+TRANSACTIONS TO EXTRACT:
+CRITICAL: Extract EVERY transaction - do NOT skip any:
+- Count the TOTAL NUMBER of transactions in the statement
+- Note this number - you MUST extract exactly this many transactions
+- Do NOT skip any transaction, even if it looks similar to another
+- Do NOT merge transactions - each row is a separate transaction
+- After extracting, verify you extracted the same number of transactions you counted
+- If counts don't match, reprocess until they do
+
+For each transaction, extract:
+- date: Transaction date in YYYY-MM-DD format
+- description: Merchant name or transaction description
+- amount: The amount in the statement's LOCAL currency (the currency your card was charged in)
+  - For international transactions: There will be TWO amounts (e.g., "USD 38.60 = INR 3,431.14")
+  - Use the SECOND amount (the local/statement currency), NOT the first foreign currency amount!
+  - For example: "USD 38.60 = INR 3,431.14" → amount: 3431.14 | originalAmount: 38.60 | originalCurrency: "USD"
+- localCurrency: ISO code of the statement's local currency (e.g., "INR", "USD", "EUR")
+- isInternationalTransaction: true if the transaction was in foreign currency, false otherwise
+- originalCurrency: The foreign currency code (e.g., "USD", "EUR") if international, omit if domestic
+- originalAmount: The foreign currency amount if international, omit if domestic
+- transactionSubType: One of ${TRANSACTION_SUB_TYPE_LIST}
+  - Use "cashback" for any cash back, cash_back, or CB entries (credits to the card)
+  - Use "payment" for CC bill payments
+  - Use "purchase" for regular merchant charges
+/* COMMENTED OUT - causing miscategorization issues
+- suggestedCategory: Suggest a category ID based on the merchant and transaction type
+  - Common categories: "groceries", "dining", "shopping", "bills", "transportation", "entertainment", "healthcare", "travel", "income", "transfer", "fees", "cashback", "other"
+  - Use "bills" for bill payments, CC payments, loan payments
+  - Use "fees" for bank fees, transaction fees, maintenance fees
+  - Use "transfer" for UPI/NEFT/IMPS transfers
+  - Use "cashback" for cashback rewards
+  - Use "shopping" for retail purchases (Amazon, Flipkart, etc.)
+  - Use "dining" for restaurants, food delivery (Swiggy, Zomato)
+  - Use "groceries" for grocery stores, supermarkets
+  - Use "transportation" for fuel, taxi, Uber, Ola
+  - Use "entertainment" for movies, streaming (Netflix, Spotify)
+  - Use "income" for salary, deposits, refunds
+  - Use "other" when unsure
+
+- cardHolder: Name of addon card holder if this is an addon card transaction
+
+CRITICAL RULES - WHAT IS A TRANSACTION:
+A transaction MUST have ALL THREE of these characteristics:
+1. A specific DATE (not a date range, not "expiring in", not a due date)
+2. A MERCHANT NAME or specific payee (not generic bank text)
+3. A specific AMOUNT (a number, not "points", not percentages)
+
+DO NOT EXTRACT AS TRANSACTIONS:
+- Legal disclaimers, terms & conditions, fine print
+- Bank contact information, addresses, phone numbers
+- Summary sections (reward points, cashback summaries, GST summaries)
+- Header text, column headers, section titles
+- Marketing text, offers, promotional content
+- Interest calculation explanations
+- Insurance information
+- Payment instructions
+- Text about "points expiring", "bonus points", "cash back"
+- GST/invoice numbers and tax breakdowns
+- Any text without a clear DATE + MERCHANT + AMOUNT combination
+
+EXAMPLES OF NON-TRANSACTIONS (DO NOT EXTRACT):
+❌ "Terms & Conditions apply, visit www.offers..." - No merchant/amount
+❌ "BANK WILL REPORT YOU AS DEFAULTER..." - Legal disclaimer
+❌ "Reward Points Summary" - Summary section, not individual transaction
+❌ "GSTIN : 33AAACH2702H2Z6 HSN Code : 997113" - Tax info
+❌ "Points expiring in next 30 days" - No specific transaction
+
+EXAMPLES OF REAL TRANSACTIONS (EXTRACT THESE):
+✅ "15/01/24  AMAZON INDIA CYBER SI  2,500.00" - Has date, merchant, amount
+✅ "20/01/24  SWIGGY INSTAMART  850.00" - Has date, merchant, amount
+✅ "25/01/24  PAYMENT RECEIVED - THANK YOU  -15,000.00" - Has date, merchant, amount
+
+FOR ADDON/SUPPLEMENTARY CARDS:
+- Look for section headers like "ADD-ON CARD TRANSACTIONS", "SUPPLEMENTARY CARD", or card holder names
+- Attribute transactions in those sections to the named card holder
+- Primary card transactions should have cardHolder omitted
+
+OUTPUT FORMAT:
+Return ONLY valid JSON with this structure:
+{
+  "statement": {
+    "cardLastFour": "1234",
+    "cardIssuer": "HDFC Bank",
+    "cardHolder": "John Doe",
+    "statementPeriodStart": "2024-01-01",
+    "statementPeriodEnd": "2024-01-31",
+    "statementDate": "2024-02-01",
+    "paymentDueDate": "2024-02-20",
+    "totalDue": 25000.00,
+    "minimumDue": 1250.00,
+    "creditLimit": 100000.00,
+    "availableCredit": 75000.00,
+    "previousBalance": 15000.00,
+    "paymentsReceived": 15000.00,
+    "purchasesAndCharges": 25000.00,
+    "interestCharged": 0,
+    "lateFee": 0,
+    "otherCharges": 0,
+    "addonCards": [
+      { "cardHolderName": "Jane Doe" }
+    ],
+    "apr": 0.408,
+    "monthlyInterestRate": 0.034,
+    "minimumPaymentPercent": 0.05,
+    "minimumPaymentFloor": 200,
+    "cashbackEarned": 250.00,
+    "rewardPoints": {
+      "openingBalance": 5000,
+      "earned": 1250,
+      "redeemed": 0,
+      "expired": 0,
+      "closingBalance": 6250,
+      "expiringNext": 500,
+      "expiringNextDate": "2024-03-31"
+    }
+  },
+  "transactions": [
+    {
+      "date": "2024-01-15",
+      "description": "AMAZON INDIA",
+      "amount": 2500.00,
+      "localCurrency": "INR",
+      "isInternationalTransaction": false,
+      "transactionSubType": "purchase",
+      "suggestedCategory": "shopping"
+    },
+    {
+      "date": "2024-01-20",
+      "description": "AIRBNB * HOST",
+      "amount": 7500.00,
+      "localCurrency": "INR",
+      "isInternationalTransaction": true,
+      "originalCurrency": "USD",
+      "originalAmount": 89.00,
+      "transactionSubType": "purchase",
+      "suggestedCategory": "travel"
+    }
+  ]
+}
+
+Do NOT include markdown fences. Output ONLY the JSON object.
+
+CREDIT CARD STATEMENT TEXT:
+---
+`;
+*/  // END DEAD CODE - OLD COMBINED PROMPT
+/* ── Helper Functions ──────────────────────────────────────── */
+
+/**
+ * Parse type detection result from LLM response
+ */
+/* DEAD - Replaced by new pipeline */
+export function parseTypeDetectionResult(raw: string): TypeDetectionResult {
+  const normalizeStatementType = (value: unknown): TypeDetectionResult['statementType'] => {
+    const normalized = String(value || '').trim().toLowerCase().replace(/[\s_-]+/g, '');
+
+    if (normalized === 'creditcard' || normalized === 'cc' || normalized === 'card') {
+      return 'credit_card';
+    }
+    if (normalized === 'bank' || normalized === 'bankstatement' || normalized === 'checking' || normalized === 'savings') {
+      return 'bank';
+    }
+    return 'unknown';
+  };
+
+  const normalizeConfidence = (value: unknown): number => {
+    const parsed = typeof value === 'number' ? value : Number.parseFloat(String(value || ''));
+    if (!Number.isFinite(parsed)) return 0;
+    return Math.max(0, Math.min(1, parsed));
+  };
+
+  const buildResult = (payload: Record<string, unknown>): TypeDetectionResult => ({
+    statementType: normalizeStatementType(payload.type),
+    confidence: normalizeConfidence(payload.confidence),
+  });
+
+  try {
+    // Try direct parse
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    if ('type' in parsed && 'confidence' in parsed) {
+      return buildResult(parsed);
+    }
+  } catch {
+    // Try extracting JSON from response
+    const match = raw.match(/\{[^{}]*"type"[^{}]*"confidence"[^{}]*\}/);
+    if (match) {
+      try {
+        const parsed = JSON.parse(match[0]) as Record<string, unknown>;
+        return buildResult(parsed);
+      } catch {
+        // Continue to default
+      }
+    }
+  }
+
+  // Default fallback
+  return {
+    statementType: 'unknown',
+    confidence: 0,
+  };
+}
+*/  // END DEAD - parseTypeDetectionResult
+
+/**
+ * Parse CC extraction result from LLM response
+ */
+/* DEAD - Replaced by new pipeline */
+export function parseCCExtractionResult(raw: string): CCExtractionResult | null {
+  try {
+    // Try direct parse
+    return JSON.parse(raw) as CCExtractionResult;
+  } catch {
+    // Try extracting from code block
+    const codeBlockMatch = raw.match(/```(?:json)?\s*([\s\S]*?)```/);
+    if (codeBlockMatch) {
+      try {
+        return JSON.parse(codeBlockMatch[1].trim()) as CCExtractionResult;
+      } catch {
+        // Continue
+      }
+    }
+
+    // Try finding JSON object
+    const match = raw.match(/\{[\s\S]*"statement"[\s\S]*"transactions"[\s\S]*\}/);
+    if (match) {
+      try {
+        return JSON.parse(match[0]) as CCExtractionResult;
+      } catch {
+        // Try fixing common issues
+        let fixed = match[0];
+        fixed = fixed.replace(/,\s*([}\]])/g, '$1');
+        try {
+          return JSON.parse(fixed) as CCExtractionResult;
+        } catch {
+          // Give up
+        }
+      }
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Validate CC extraction result has required fields
+ */
+export function validateCCExtractionResult(result: CCExtractionResult): boolean {
+  // Check statement object exists
+  if (!result || !result.statement) return false;
+  
+  const { statement } = result;
+
+  // Check required statement fields
+  if (!statement.cardLastFour || !statement.cardIssuer) return false;
+  if (!statement.paymentDueDate || !statement.totalDue) return false;
+  if (typeof statement.creditLimit !== 'number') return false;
+
+  // Check transactions array
+  if (!Array.isArray(result.transactions)) return false;
+
+  return true;
+}
+
+/**
+ * Get first N chars of text for type detection
+ * (no need to send entire document for detection)
+ */
+export function getTextForDetection(text: string, maxChars: number = 3000): string {
+  if (text.length <= maxChars) return text;
+
+  // Get first portion which typically contains statement headers
+  // and summary info that helps identify statement type
+  return text.substring(0, maxChars);
+}
+
+*/  // END DEAD CODE - OLD COMBINED PROMPT
+
+/* ── Multi-Pass Prompts ────────────────────────────────────── */
+
+/**
+ * CC Summary Pass - extracts ONLY summary fields (Pass 1)
+ * 
+ * EXTRACTION STRATEGY:
+ * 1. Find ALL candidates for ambiguous fields (previousBalance)
+ * 2. Select best candidate using priority rules
+ * 3. Extract other fields directly from summary section
+ * 4. NEVER compute from transactions
+ */
+export const CC_SUMMARY_PROMPT = `You are an expert credit card statement parser.
+
+Your task is to extract ONLY summary-level fields from the statement.
+
+IMPORTANT:
+- DO NOT extract transactions
+- DO NOT compute totals unless explicitly instructed
+- DO NOT guess values
+- If a value is not found, return null (NOT 0)
+
+--------------------------------------------------
+STEP 1 — FIND CANDIDATES
+
+Scan the document and extract ALL possible candidates for:
+
+previousBalanceCandidates:
+Look for labels similar to:
+- Previous Balance
+- Previous Statement Balance
+- Balance Brought Forward
+- Opening Balance (ONLY if clearly from previous cycle)
+
+Return ALL matches with:
+- label (exact text)
+- value
+
+--------------------------------------------------
+STEP 2 — SELECT BEST CANDIDATE
+
+Select previousBalance using:
+
+Priority:
+1. "Previous Balance" or equivalent
+2. "Previous Statement Balance"
+3. "Balance Brought Forward"
+4. Opening balance ONLY if clearly tied to previous cycle
+
+Rules:
+- MUST NOT be totalDue
+- MUST NOT be creditLimit
+- MUST be <= creditLimit (if creditLimit exists)
+- If no valid candidate found → return null
+
+--------------------------------------------------
+STEP 3 — EXTRACT OTHER FIELDS (DIRECT ONLY)
+
+Extract the following fields STRICTLY from summary sections:
+
+{
+  "cardLastFour": string | null,
+  "cardIssuer": string | null,
+  "cardHolder": string | null,
+
+  "statementDate": string | null,
+  "statementPeriodStart": string | null,
+  "statementPeriodEnd": string | null,
+
+  "paymentDueDate": string | null,
+
+  "totalDue": number | null,
+  "minimumDue": number | null,
+
+  "creditLimit": number | null,
+  "availableCredit": number | null,
+
+  "previousBalance": number | null,
+
+  "paymentsReceived": number | null,
+
+  "purchasesAndCharges": number | null,
+
+  "cashbackEarned": number | null
+}
+
+--------------------------------------------------
+CRITICAL RULES
+
+1. purchasesAndCharges:
+- MUST be extracted ONLY from summary section
+- DO NOT compute from transactions
+- Look for:
+  - Purchases
+  - Retail Spends
+  - Total Spends
+  - Charges
+
+2. paymentsReceived:
+- Look for:
+  - Payments Received
+  - Payments & Credits
+  - Amount Paid
+
+3. cashbackEarned:
+- Includes cashback, valueback, reward-equivalent
+- If not present → null
+
+4. Dates:
+- Convert to YYYY-MM-DD if possible
+- Else return null
+
+5. Amounts:
+- Remove commas
+- Convert to number
+- No currency symbols
+
+6. Missing values:
+- Return null (NOT 0)
+
+--------------------------------------------------
+OUTPUT FORMAT (STRICT JSON ONLY)
+
+{
+  "previousBalanceCandidates": [
+    {
+      "label": "string",
+      "value": number
+    }
+  ],
+  "cardLastFour": string | null,
+  "cardIssuer": string | null,
+  "cardHolder": string | null,
+
+  "statementDate": string | null,
+  "statementPeriodStart": string | null,
+  "statementPeriodEnd": string | null,
+
+  "paymentDueDate": string | null,
+
+  "totalDue": number | null,
+  "minimumDue": number | null,
+
+  "creditLimit": number | null,
+  "availableCredit": number | null,
+
+  "previousBalance": number | null,
+
+  "paymentsReceived": number | null,
+
+  "purchasesAndCharges": number | null,
+
+  "cashbackEarned": number | null
+}
+
+--------------------------------------------------
+DOCUMENT:
+---
+{RAW_TEXT}
+`;
+
+/**
+ * CC Transactions Pass - extracts ONLY transactions (Pass 2)
+ */
+export const CC_TRANSACTIONS_PROMPT = `You are a deterministic financial data extraction engine.
+
+Your task is to extract ALL individual transactions from this credit card statement.
+
+--------------------------------
+INPUT
+--------------------------------
+
+{RAW_TEXT}
+
+--------------------------------
+OUTPUT FORMAT (STRICT JSON)
+--------------------------------
+
+Return ONLY valid JSON. No explanation. No extra text. No markdown.
+
+{
+  "transactions": [
+    {
+      "date": "YYYY-MM-DD",
+      "description": "merchant/description",
+      "amount": number,
+      "type": "debit" | "credit",
+      "transactionSubType": "purchase" | "payment" | "refund" | "cashback" | "fee" | "interest" | "charge" | "adjustment" | "reversal",
+      "localCurrency": "INR",
+      "isInternationalTransaction": boolean,
+      "originalCurrency": "USD" (omit if domestic),
+      "originalAmount": number (omit if domestic)
+    }
+  ]
+}
+
+--------------------------------
+EXTRACTION RULES
+--------------------------------
+
+RULE 1 — EXTRACT EVERY TRANSACTION
+- Count the TOTAL NUMBER of transactions first
+- Extract EVERY transaction — do NOT skip any
+- Do NOT merge transactions — each row is separate
+- Do NOT skip transactions that look similar
+
+RULE 2 — NUMBER FORMATTING
+- Indian statements use lakh format: 1,23,456.78
+- Remove ALL commas: 1,23,456.78 → 123456.78
+- Output as plain decimal without commas
+
+RULE 3 — DATE FORMAT
+- Convert all dates to YYYY-MM-DD
+- "15 Jan 2024" → "2024-01-15"
+- "15/01/24" → "2024-01-15"
+
+RULE 4 — DEBIT VS CREDIT
+- Debit = money charged to card (purchases, fees, interest)
+- Credit = money credited to card (payments, refunds, cashback)
+- Use transactionSubType for more specific classification
+
+RULE 5 — INTERNATIONAL TRANSACTIONS
+- If TWO amounts shown (e.g., "USD 38.60 = INR 3,431.14"):
+  - amount: 3431.14 (the INR amount)
+  - originalAmount: 38.60 (the foreign amount)
+  - originalCurrency: "USD"
+  - isInternationalTransaction: true
+- If only ONE amount shown, use it as both amount and originalAmount
+
+RULE 6 — WHAT IS A TRANSACTION
+A transaction MUST have ALL THREE:
+1. A specific DATE (not a date range, not a due date)
+2. A MERCHANT NAME or specific payee
+3. A specific AMOUNT
+
+DO NOT EXTRACT:
+- Legal disclaimers, terms & conditions
+- Bank contact information
+- Summary sections (reward points, cashback summaries)
+- Header text, column headers, section titles
+- Marketing text, offers, promotional content
+- Interest calculation explanations
+- Payment instructions
+
+--------------------------------
+END
+--------------------------------`;
+
+/**
+ * CC Rewards Pass - extracts ONLY rewards data (Pass 3)
+ */
+export const CC_REWARDS_PROMPT = `You are a deterministic financial data extraction engine.
+
+Your task is to extract reward points and cashback data from this credit card statement.
+
+--------------------------------
+INPUT
+--------------------------------
+
+{RAW_TEXT}
+
+--------------------------------
+OUTPUT FORMAT (STRICT JSON)
+--------------------------------
+
+Return ONLY valid JSON. No explanation. No extra text. No markdown.
+
+{
+  "cashback": number or null,
+  "rewardPoints": {
+    "opening": number or null,
+    "earned": number or null,
+    "redeemed": number or null,
+    "closing": number or null
+  }
+}
+
+For any field not clearly present: return null.
+For any field explicitly stated as zero: return 0.
+
+--------------------------------
+EXTRACTION RULES
+--------------------------------
+
+RULE 1 — CASHBACK VS POINTS
+- Cashback: monetary value (₹), maps to "cashback" field
+- Points: integer, dimensionless, maps to "rewardPoints.*" fields
+- If statement has only cashback and no points, rewardPoints fields should be null
+- If statement has only points and no cashback, cashback should be null
+
+RULE 2 — LOCATE REWARDS SECTION
+Look for section headers like:
+- "Reward Points Summary"
+- "Loyalty Points Statement"
+- "Bonus Points Earned"
+- "Cashback Earned"
+- "Points Balance"
+
+RULE 3 — IGNORE PROMOTIONAL TEXT
+The rewards section is often followed by promotional offers.
+Stop extraction at:
+- "Important Information"
+- "Terms"
+- "Redeem your points"
+- Next transaction section
+
+RULE 4 — VERIFY REWARDS MATH
+If all four points fields are present, verify:
+
+  closing ≈ opening + earned - redeemed
+
+Tolerance: ±1 point for rounding.
+
+If this fails, recheck the extracted values.
+
+--------------------------------
+END
+--------------------------------`;
+
+/**
+ * Bank Summary Pass - extracts ONLY account summary (Pass 1)
+ */
+export const BANK_SUMMARY_PROMPT = `You are a deterministic financial data extraction engine.
+
+Your task is to extract ONLY the ACCOUNT SUMMARY fields from this bank statement.
+
+--------------------------------
+INPUT
+--------------------------------
+
+{RAW_TEXT}
+
+--------------------------------
+OUTPUT FORMAT (STRICT JSON)
+--------------------------------
+
+Return ONLY valid JSON. No explanation. No extra text. No markdown.
+
+{
+  "statementDate": "YYYY-MM-DD or null",
+  "statementPeriodStart": "YYYY-MM-DD or null",
+  "statementPeriodEnd": "YYYY-MM-DD or null",
+  "accountNumber": "string or null",
+  "accountHolderName": "string or null",
+  "bankName": "string or null",
+  "accountType": "string or null",
+  "openingBalance": number or null,
+  "closingBalance": number or null
+}
+
+For any field not clearly present: return null.
+Never omit a key — always include all keys, using null for absent fields.
+
+--------------------------------
+EXTRACTION RULES
+--------------------------------
+
+RULE 1 — DO NOT GUESS
+If a field is not clearly labeled and present → return null.
+Never infer. Never estimate.
+
+RULE 2 — DATES MUST BE YYYY-MM-DD
+Convert all dates to YYYY-MM-DD format.
+
+RULE 3 — NUMERIC FORMAT
+Return amounts as plain numbers.
+No commas. No currency symbols.
+Indian lakh-format: 1,23,456.78 → 123456.78
+Overdraft (negative) balances: return as negative numbers.
+
+RULE 4 — IGNORE TRANSACTION ROWS
+Do not extract balances from running balance columns.
+openingBalance and closingBalance are in the account summary section,
+not in the transaction table.
+
+--------------------------------
+FIELD DEFINITIONS
+--------------------------------
+
+statementDate:
+  Look for: "Statement Date", "Generated On", "Date of Statement"
+
+statementPeriodStart:
+  Look for: "From", "Period From", "Statement From"
+
+statementPeriodEnd:
+  Look for: "To", "Period To", "Statement To"
+
+accountNumber:
+  Look for: "Account Number", "A/C No", "Account No"
+  Return as string to preserve leading zeros.
+
+accountHolderName:
+  Look for: "Account Holder", "Name", "Customer Name"
+
+bankName:
+  Look for: the institution name at the top of the statement.
+
+accountType:
+  Look for: "Savings Account", "Current Account", "Salary Account"
+  Return as lowercase: "savings", "current", "salary"
+
+openingBalance:
+  Look for: "Opening Balance", "Balance B/F", "Balance Brought Forward"
+  This is the balance at the START of the statement period.
+  Negative (overdraft) balances should be returned as negative numbers.
+
+closingBalance:
+  Look for: "Closing Balance", "Balance C/F", "Balance Carried Forward"
+  This is the balance at the END of the statement period.
+  Negative (overdraft) balances should be returned as negative numbers.
+
+--------------------------------
+END
+--------------------------------`;
+
+/**
+ * Bank Transactions Pass - extracts ONLY transactions (Pass 2)
+ */
+export const BANK_TRANSACTIONS_PROMPT = `You are a deterministic financial data extraction engine.
+
+Your task is to extract ALL individual transactions from this bank statement.
+
+--------------------------------
+INPUT
+--------------------------------
+
+{RAW_TEXT}
+
+--------------------------------
+OUTPUT FORMAT (STRICT JSON)
+--------------------------------
+
+Return ONLY valid JSON. No explanation. No extra text. No markdown.
+
+{
+  "transactions": [
+    {
+      "date": "YYYY-MM-DD",
+      "description": "merchant/description",
+      "amount": number,
+      "type": "debit" | "credit"
+    }
+  ]
+}
+
+--------------------------------
+EXTRACTION RULES
+--------------------------------
+
+RULE 1 — EXTRACT EVERY TRANSACTION
+- Count the TOTAL NUMBER of transactions first
+- Extract EVERY transaction — do NOT skip any
+- Do NOT merge transactions — each row is separate
+
+RULE 2 — NUMBER FORMATTING
+- Indian statements use lakh format: 1,23,456.78
+- Remove ALL commas: 1,23,456.78 → 123456.78
+- Output as plain decimal without commas
+
+RULE 3 — DATE FORMAT
+- Convert all dates to YYYY-MM-DD
+
+RULE 4 — DEBIT VS CREDIT (IN ORDER OF PRIORITY)
+1. SEPARATE COLUMNS: "Debit" column = "debit", "Credit" column = "credit"
+2. KEYWORDS for DEBIT: DEBIT, DR, WITHDRAWAL, PAID, SENT, OUT, PAYMENT TO, TRANSFER TO
+3. KEYWORDS for CREDIT: CREDIT, CR, DEPOSIT, RECEIVED, IN, REFUND, TRANSFER FROM
+4. Negative amounts or amounts in parentheses = debit
+
+RULE 5 — IGNORE RUNNING BALANCE COLUMN
+Many statements have a "Balance" column showing running balance.
+- DO NOT extract running balance values as transaction amounts
+- Only extract amounts from Debit/Credit columns
+
+RULE 6 — WHAT IS A TRANSACTION
+A transaction MUST have ALL THREE:
+1. A specific DATE
+2. A MERCHANT NAME or description
+3. A specific AMOUNT
+
+DO NOT EXTRACT:
+- Opening/closing balance rows
+- Legal disclaimers, terms & conditions
+- Bank contact information
+- Header text, column headers, section titles
+
+--------------------------------
+END
+--------------------------------`;
+

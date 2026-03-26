@@ -12,8 +12,9 @@
 
 import { validateCCCrossSection, validateBankCrossSection } from './verificationEngine';
 import type { CCSummary, BankSummary } from '@/lib/parsers/extractSummary';
-import type { Transaction, TransactionsOutput } from '@/lib/parsers/extractTransactions';
+import type { TransactionsOutput } from '@/lib/parsers/extractTransactions';
 import type { RewardsOutput } from '@/lib/parsers/extractRewards';
+import { Transaction } from '@/models/Transaction';
 
 /**
  * Simple string similarity comparison (Dice coefficient).
@@ -205,7 +206,7 @@ export function mergeOutputs(
   }
 
   // Step 1: Deduplicate transactions
-  const rawTransactions: Transaction[] = txData?.transactions ?? [];
+  const rawTransactions: Transaction[] = (txData?.transactions as unknown as Transaction[]) ?? [];
   
   // DEBUG: Log transaction count before deduplication
   console.log(`[MergeEngine] ${statementType}: ${rawTransactions.length} transactions from LLM`);
@@ -231,7 +232,39 @@ export function mergeOutputs(
     warnings.push(...[]);
   }
 
-  // Step 4: Cross-section totals check (warning only)
+  // Step 4: Balance reconciliation (bank statements only)
+  if (statementType === 'bank' && summary && 'openingBalance' in summary) {
+    const bankSummary = summary as BankSummary;
+    const transactionsWithBalance = deduped.filter(t => t.balance !== undefined && t.balance !== null);
+    
+    if (transactionsWithBalance.length > 0) {
+      // Check first transaction balance matches opening balance
+      const firstBalance = transactionsWithBalance[0].balance;
+      if (bankSummary.openingBalance !== null && firstBalance !== undefined) {
+        const balanceDiff = Math.abs(firstBalance - bankSummary.openingBalance);
+        if (balanceDiff > 1.0) {
+          warnings.push(
+            `Balance reconciliation: first transaction balance (${firstBalance}) ` +
+            `does not match opening balance (${bankSummary.openingBalance}) — diff: ${balanceDiff}`
+          );
+        }
+      }
+      
+      // Check last transaction balance matches closing balance
+      const lastBalance = transactionsWithBalance[transactionsWithBalance.length - 1].balance;
+      if (bankSummary.closingBalance !== null && lastBalance !== undefined) {
+        const balanceDiff = Math.abs(lastBalance - bankSummary.closingBalance);
+        if (balanceDiff > 1.0) {
+          warnings.push(
+            `Balance reconciliation: last transaction balance (${lastBalance}) ` +
+            `does not match closing balance (${bankSummary.closingBalance}) — diff: ${balanceDiff}`
+          );
+        }
+      }
+    }
+  }
+
+  // Step 5: Cross-section totals check (warning only)
   let crossWarnings: string[] = [];
   if (summary) {
     if (statementType === 'credit_card' && 'totalDue' in summary) {

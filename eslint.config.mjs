@@ -16,6 +16,11 @@ const eslintConfig = defineConfig([
     "public/pdf.mjs",
     "public/pdf.worker.min.mjs",
   ]),
+  {
+    rules: {
+      '@typescript-eslint/no-explicit-any': 'warn',
+    },
+  },
 ]);
 
 export default eslintConfig;

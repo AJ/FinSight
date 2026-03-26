@@ -7,21 +7,74 @@
 
 const isDebugEnabled = process.env.NODE_ENV === 'development' || process.env.DEBUG_LOGGING === 'true';
 
-export function debugLog(...args: unknown[]): void {
+/**
+ * Log debug information with optional stage context.
+ * Overload 1: With stage prefix
+ * @param stage - The stage/context of the log (e.g., 'cc_transactions', 'verification')
+ * @param args - The data to log
+ */
+export function debugLog(stage: string, ...args: unknown[]): void;
+/**
+ * Log debug information without stage context (backward compatible).
+ * Overload 2: Without stage prefix
+ * @param args - The data to log
+ */
+export function debugLog(...args: unknown[]): void;
+/**
+ * Implementation
+ */
+export function debugLog(stageOrArg: string | unknown, ...args: unknown[]): void {
   if (isDebugEnabled) {
-    console.log(...args);
+    if (typeof stageOrArg === 'string') {
+      console.log(`[${stageOrArg}]`, ...args);
+    } else {
+      console.log(stageOrArg, ...args);
+    }
   }
 }
 
-export function debugWarn(...args: unknown[]): void {
+/**
+ * Log warnings with optional stage context.
+ * Overload 1: With stage prefix
+ */
+export function debugWarn(stage: string, ...args: unknown[]): void;
+/**
+ * Log warnings without stage context (backward compatible).
+ * Overload 2: Without stage prefix
+ */
+export function debugWarn(...args: unknown[]): void;
+/**
+ * Implementation
+ */
+export function debugWarn(stageOrArg: string | unknown, ...args: unknown[]): void {
   if (isDebugEnabled) {
-    console.warn(...args);
+    if (typeof stageOrArg === 'string') {
+      console.warn(`[${stageOrArg}]`, ...args);
+    } else {
+      console.warn(stageOrArg, ...args);
+    }
   }
 }
 
-export function debugError(...args: unknown[]): void {
-  // Errors are always logged, but consider using proper error tracking in production
-  console.error(...args);
+/**
+ * Log errors with optional stage context. Errors are always logged.
+ * Overload 1: With stage prefix
+ */
+export function debugError(stage: string, ...args: unknown[]): void;
+/**
+ * Log errors without stage context (backward compatible).
+ * Overload 2: Without stage prefix
+ */
+export function debugError(...args: unknown[]): void;
+/**
+ * Implementation
+ */
+export function debugError(stageOrArg: string | unknown, ...args: unknown[]): void {
+  if (typeof stageOrArg === 'string') {
+    console.error(`[${stageOrArg}]`, ...args);
+  } else {
+    console.error(stageOrArg, ...args);
+  }
 }
 
 /**

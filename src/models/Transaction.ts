@@ -49,6 +49,8 @@ export interface TransactionJSON {
   anomalyTypes?: AnomalyType[];
   anomalyDetails?: AnomalyDetails;
   anomalyDismissed?: boolean;
+  llmConfidence?: number;           // LLM's self-reported confidence (0.0-1.0)
+  verificationConfidence?: number;  // Our verification confidence (0.0-1.0)
 }
 
 /**
@@ -87,6 +89,9 @@ export class Transaction {
     public readonly transactionSubType?: TransactionSubType,
     // LLM's suggested category (used as initial category, can be overridden)
     public readonly suggestedCategory?: string,
+    // Confidence scores
+    public readonly llmConfidence?: number,           // LLM's self-reported confidence (0.0-1.0)
+    public readonly verificationConfidence?: number,  // Our verification confidence (0.0-1.0)
   ) {}
 
   // Direction getters (from TransactionType)
@@ -143,6 +148,8 @@ export class Transaction {
       anomalyTypes: this.anomalyTypes,
       anomalyDetails: this.anomalyDetails,
       anomalyDismissed: this.anomalyDismissed,
+      llmConfidence: this.llmConfidence,
+      verificationConfidence: this.verificationConfidence,
     };
   }
 
@@ -179,6 +186,8 @@ export class Transaction {
       json.anomalyDismissed,
       json.transactionSubType,
       json.suggestedCategory,
+      json.llmConfidence,
+      json.verificationConfidence,
     );
   }
 }

@@ -6,7 +6,9 @@
 
 import { ValidationResult } from '../parsers/retryEngine';
 import type { CCSummary, BankSummary } from '../parsers/extractSummary';
-import type { Transaction, TransactionsOutput } from '../parsers/extractTransactions';
+import type { TransactionsOutput } from '../parsers/extractTransactions';
+import { ExtractedTransaction } from '@/types/extractedTransaction';
+import { Transaction } from '@/models/Transaction';
 
 // Accept multiple date formats:
 // YYYY-MM-DD, YYYY/MM/DD (ISO, international)
@@ -242,6 +244,9 @@ export function validateBankSummary(summary: unknown): ValidationResult<BankSumm
   // openingBalance and closingBalance can be negative (overdraft)
   // No range constraint needed
 
+  // Add balance reconciliation warning if transactions have balance data
+  // This will be checked in mergeEngine when transactions are available
+
   return {
     valid: errors.length === 0,
     errors,
@@ -333,6 +338,6 @@ export function validateTransactions(data: unknown): ValidationResult<Transactio
     valid: errors.length === 0,
     errors,
     warnings,
-    data: { transactions: validTxns }
+    data: { transactions: validTxns as unknown as ExtractedTransaction[] }
   };
 }

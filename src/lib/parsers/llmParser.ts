@@ -20,6 +20,7 @@ import {
   VerificationReport,
   CCVerificationReport,
 } from "@/lib/verification/verificationEngine";
+import { validateTransactions } from "@/lib/verification/validationEngine";
 import { toast } from "sonner";
 import type { CCSummary, BankSummary } from "./extractSummary";
 
@@ -386,17 +387,26 @@ export async function parseWithLLMExtended(
     // Map new pipeline output to old format
     const pipelineSummary = pipelineResult.data.summary as CCSummary | null;
 
+    // Validate LLM output structure before mapping
+    const validationResult = validateTransactions(pipelineResult.data.transactions);
+    if (!validationResult.valid) {
+      throw new Error(`Transaction validation failed: ${validationResult.errors.join(', ')}`);
+    }
+    if (validationResult.warnings.length > 0) {
+      console.warn('[LLM Parser] Transaction validation warnings:', validationResult.warnings);
+    }
+
     // Map pipeline transactions to app Transaction model
-    transactions = pipelineResult.data.transactions.map(t => {
+    transactions = validationResult.data!.transactions.map(t => {
       const category = Category.fromId('other') || Category.fromId(Category.DEFAULT_ID)!;
       const txnType = t.type === 'credit' ? TransactionType.Credit : TransactionType.Debit;
       return new Transaction(
-        uuidv4(),
-        new Date(t.date),
-        t.description,
-        Math.abs(t.amount),
-        txnType,
-        category,
+        uuidv4(), // id
+        new Date(t.date), // date
+        t.description, // description
+        Math.abs(t.amount), // amount
+        txnType, // type
+        category, // category
         undefined, // balance
         undefined, // merchant
         t.description, // originalText
@@ -404,22 +414,23 @@ export async function parseWithLLMExtended(
         undefined, // categoryConfidence
         undefined, // needsReview
         undefined, // categorizedBy
-        SourceType.Bank,
+        SourceType.Bank, // sourceType
         undefined, // statementId
         undefined, // cardIssuer
         undefined, // cardLastFour
         undefined, // cardHolder
-        settingsCurrency,
-        t.originalCurrency,
-        t.originalAmount,
-        // Map LLM field (isInternationalTransaction) to model field (isInternational)
-        t.isInternational || false,
-        undefined, // anomaly
+        settingsCurrency, // localCurrency
+        t.originalCurrency ? { code: t.originalCurrency, symbol: '', name: t.originalCurrency } : undefined, // originalCurrency
+        t.originalAmount, // originalAmount
+        t.isInternationalTransaction || false, // isInternational
+        undefined, // isAnomaly
         undefined, // anomalyTypes
         undefined, // anomalyDetails
         undefined, // anomalyDismissed
-        t.transactionSubType as TransactionSubType | undefined,
+        t.transactionSubType as TransactionSubType | undefined, // transactionSubType
         undefined, // suggestedCategory
+        t.confidence, // llmConfidence
+        undefined, // verificationConfidence
       );
     });
 
@@ -458,6 +469,26 @@ export async function parseWithLLMExtended(
         passed: ccVerificationReport.passed,
       });
 
+      // Also run per-transaction verification to get confidence scores
+      const rawTextForVerification = await extractTextFromPDF(file, password);
+      const bankMeta: StatementMeta = {
+        openingBalance: ccMeta.previousBalance,
+        closingBalance: ccMeta.totalDue,
+        currency: ccMeta.currency,
+      };
+      const perTxVerification = verifyStatement(rawTextForVerification, transactions, bankMeta);
+      
+      // Merge verification confidence onto transactions
+      const verifiedMap = new Map(perTxVerification.verified.map(v => [v.id, v.confidence]));
+      transactions = transactions.map(t => new Transaction(
+        t.id, t.date, t.description, t.amount, t.type, t.category, t.balance, t.merchant,
+        t.originalText, t.budgetMonth, t.categoryConfidence, t.needsReview, t.categorizedBy,
+        t.sourceType, t.statementId, t.cardIssuer, t.cardLastFour, t.cardHolder,
+        t.localCurrency, t.originalCurrency, t.originalAmount, t.isInternational,
+        t.isAnomaly, t.anomalyTypes, t.anomalyDetails, t.anomalyDismissed,
+        t.transactionSubType, t.suggestedCategory, t.llmConfidence, verifiedMap.get(t.id),
+      ));
+
       // Store verification result in the return value (not on ccStatement)
       verificationReport = ccVerificationReport;
 
@@ -491,17 +522,26 @@ export async function parseWithLLMExtended(
     // Map new pipeline output to old format
     const pipelineSummary = pipelineResult.data.summary as BankSummary | null;
 
+    // Validate LLM output structure before mapping
+    const validationResult = validateTransactions(pipelineResult.data.transactions);
+    if (!validationResult.valid) {
+      throw new Error(`Transaction validation failed: ${validationResult.errors.join(', ')}`);
+    }
+    if (validationResult.warnings.length > 0) {
+      console.warn('[LLM Parser] Transaction validation warnings:', validationResult.warnings);
+    }
+
     // Map pipeline transactions to app Transaction model
-    transactions = pipelineResult.data.transactions.map(t => {
+    transactions = validationResult.data!.transactions.map(t => {
       const category = Category.fromId('other') || Category.fromId(Category.DEFAULT_ID)!;
       const txnType = t.type === 'credit' ? TransactionType.Credit : TransactionType.Debit;
       return new Transaction(
-        uuidv4(),
-        new Date(t.date),
-        t.description,
-        Math.abs(t.amount),
-        txnType,
-        category,
+        uuidv4(), // id
+        new Date(t.date), // date
+        t.description, // description
+        Math.abs(t.amount), // amount
+        txnType, // type
+        category, // category
         undefined, // balance
         undefined, // merchant
         t.description, // originalText
@@ -509,22 +549,23 @@ export async function parseWithLLMExtended(
         undefined, // categoryConfidence
         undefined, // needsReview
         undefined, // categorizedBy
-        SourceType.Bank,
+        SourceType.Bank, // sourceType
         undefined, // statementId
         undefined, // cardIssuer
         undefined, // cardLastFour
         undefined, // cardHolder
-        settingsCurrency,
-        t.originalCurrency,
-        t.originalAmount,
-        // Map LLM field (isInternationalTransaction) to model field (isInternational)
-        t.isInternational || false,
-        undefined, // anomaly
+        settingsCurrency, // localCurrency
+        t.originalCurrency ? { code: t.originalCurrency, symbol: '', name: t.originalCurrency } : undefined, // originalCurrency
+        t.originalAmount, // originalAmount
+        t.isInternationalTransaction || false, // isInternational
+        undefined, // isAnomaly
         undefined, // anomalyTypes
         undefined, // anomalyDetails
         undefined, // anomalyDismissed
-        t.transactionSubType as TransactionSubType | undefined,
+        t.transactionSubType as TransactionSubType | undefined, // transactionSubType
         undefined, // suggestedCategory
+        t.confidence, // llmConfidence
+        undefined, // verificationConfidence
       );
     });
     failedChunks = []; // New pipeline doesn't have failed chunks
@@ -551,6 +592,17 @@ export async function parseWithLLMExtended(
         reconciliation: bankVerificationReport.reconciliation,
         overallConfidence: bankVerificationReport.overallConfidence,
       });
+
+      // Merge verification confidence onto transactions
+      const verifiedMap = new Map(bankVerificationReport.verified.map(v => [v.id, v.confidence]));
+      transactions = transactions.map(t => new Transaction(
+        t.id, t.date, t.description, t.amount, t.type, t.category, t.balance, t.merchant,
+        t.originalText, t.budgetMonth, t.categoryConfidence, t.needsReview, t.categorizedBy,
+        t.sourceType, t.statementId, t.cardIssuer, t.cardLastFour, t.cardHolder,
+        t.localCurrency, t.originalCurrency, t.originalAmount, t.isInternational,
+        t.isAnomaly, t.anomalyTypes, t.anomalyDetails, t.anomalyDismissed,
+        t.transactionSubType, t.suggestedCategory, t.llmConfidence, verifiedMap.get(t.id),
+      ));
 
       // Store verification result
       verificationReport = bankVerificationReport;
