@@ -10,6 +10,7 @@ import { getTransactionAnalytics } from '@/lib/insights';
 import { InsightCard } from './InsightCard';
 import { Sparkles, RefreshCw, AlertCircle, Loader2 } from 'lucide-react';
 import { Insight } from '@/lib/insights/types';
+import { debugLog } from '@/lib/utils/debug';
 
 export function InsightsPanel() {
   const transactions = useTransactionStore((state) => state.transactions);
@@ -34,7 +35,8 @@ export function InsightsPanel() {
     setGenerating(true);
 
     try {
-      console.log('[InsightsPanel] Starting generation with', transactions.length, 'transactions');
+      //console.log('[InsightsPanel] Starting generation with', transactions.length, 'transactions');
+      debugLog("InsightsPanel", "Starting insight generation with transaction count", transactions.length," transactions:", transactions);
 
       // Call server-side API
       const response = await fetch('/api/insights', {
@@ -71,10 +73,12 @@ export function InsightsPanel() {
         category: insight.category,
       }));
 
-      console.log('[InsightsPanel] Generated', insightsWithIds.length, 'insights');
+      //console.log('[InsightsPanel] Generated', insightsWithIds.length, 'insights');
+      debugLog("InsightsPanel", "Generated insights:", insightsWithIds);
       setInsights(insightsWithIds);
     } catch (err) {
-      console.error('[InsightsPanel]', err);
+      //console.error('[InsightsPanel]', err);
+      debugLog("InsightsPanel", "Error generating insights:", err);
       setError(
         err instanceof Error
           ? err.message

@@ -19,6 +19,7 @@ import { Transaction } from "@/types";
 import { format, startOfMonth, startOfWeek, endOfWeek, differenceInWeeks, addWeeks } from "date-fns";
 import { useSettingsStore } from "@/lib/store/settingsStore";
 import { formatCurrency } from "@/lib/currencyFormatter";
+import { debugLog } from "@/lib/utils/debug";
 
 ChartJS.register(
   CategoryScale,
@@ -40,7 +41,7 @@ export function TrendLineChart({ transactions }: TrendLineChartProps) {
 
   const chartData = useMemo(() => {
     if (transactions.length === 0) {
-      console.log("[TrendLineChart] No transactions");
+      debugLog("[TrendLineChart] No transactions");
       return { labels: [], datasets: [], isWeekly: false };
     }
 
@@ -51,7 +52,7 @@ export function TrendLineChart({ transactions }: TrendLineChartProps) {
     })).filter((t) => !isNaN(t.dateObj.getTime()));
 
     if (transactionsWithDates.length === 0) {
-      console.log("[TrendLineChart] No valid dates");
+      debugLog("[TrendLineChart] No valid dates");
       return { labels: [], datasets: [], isWeekly: false };
     }
 
@@ -65,7 +66,7 @@ export function TrendLineChart({ transactions }: TrendLineChartProps) {
     const numWeeks = differenceInWeeks(lastDate, firstDate) + 1;
     const useWeekly = numWeeks <= 7;
 
-    console.log("[TrendLineChart] Date range weeks:", numWeeks, "Using weekly:", useWeekly);
+    debugLog('TrendLineChart', 'Date range weeks:', numWeeks, 'Using weekly:', useWeekly);
 
     let labels: string[] = [];
     const incomeByPeriod: number[] = [];
@@ -149,9 +150,9 @@ export function TrendLineChart({ transactions }: TrendLineChartProps) {
       });
     }
 
-    console.log("[TrendLineChart] Labels:", labels);
-    console.log("[TrendLineChart] Income:", incomeByPeriod);
-    console.log("[TrendLineChart] Expenses:", expensesByPeriod);
+    debugLog('TrendLineChart', 'Labels:', labels);
+    debugLog('TrendLineChart', 'Income:', incomeByPeriod);
+    debugLog('TrendLineChart', 'Expenses:', expensesByPeriod);
 
     return {
       labels,
@@ -240,7 +241,7 @@ export function TrendLineChart({ transactions }: TrendLineChartProps) {
         <CardTitle>{title}</CardTitle>
       </CardHeader>
       <CardContent>
-        <div className="h-[300px]">
+        <div className="h-75">
           <Line data={chartData} options={options} />
         </div>
       </CardContent>

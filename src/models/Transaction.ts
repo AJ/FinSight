@@ -1,3 +1,4 @@
+import { v4 as uuidv4 } from 'uuid';
 import { TransactionType } from './TransactionType';
 import { Category } from './Category';
 import { CategorizedBy } from './CategorizedBy';
@@ -5,6 +6,7 @@ import { SourceType } from './SourceType';
 import { AnomalyType } from './AnomalyType';
 import { AnomalyDetails } from './AnomalyDetails';
 import { Currency } from '@/types';
+import { ExtractedTransaction } from '@/types/extractedTransaction';
 
 // All possible transaction sub-types (for LLM prompts and validation)
 export const TRANSACTION_SUB_TYPES = [
@@ -189,5 +191,58 @@ export class Transaction {
       json.llmConfidence,
       json.verificationConfidence,
     );
-  }
+  }   
+  /**
+    * Create Transaction from LLM-extracted data.
+    *
+    * @param extracted - Raw LLM output (DTO)
+    * @param settingsCurrency - User's configured currency
+    * @param sourceType - Source of the transaction (Bank or Credit Card)
+    * @returns New Transaction instance
+    */
+  static fromExtracted(
+    extracted: ExtractedTransaction,
+    settingsCurrency: Currency,
+    sourceType: SourceType
+    ): Transaction {
+      const category = Category.fromId('other') ?? Category.fromId(Category.DEFAULT_ID)!;
+      const txnType = extracted.type === 'credit' ? TransactionType.Credit : TransactionType.Debit;
+
+      return new Transaction(
+        uuidv4(), // id
+        new Date(extracted.date), // date
+        extracted.description, // description
+        Math.abs(extracted.amount), // amount
+        txnType, // type
+        category, // category
+        undefined, // balance
+        undefined, // merchant
+        extracted.description, // originalText
+        undefined, // budgetMonth
+        undefined, // categoryConfidence
+        undefined, // needsReview
+        undefined, // categorizedBy
+        sourceType, // sourceType
+        undefined, // statementId
+        undefined, // cardIssuer
+        undefined, // cardLastFour
+        undefined, // cardHolder
+        settingsCurrency, // localCurrency
+        extracted.originalCurrency ? {
+          code: extracted.originalCurrency,
+          symbol: extracted.originalCurrency,
+          name: extracted.originalCurrency
+        } : undefined, // originalCurrency
+        extracted.originalAmount, // originalAmount
+        extracted.isInternationalTransaction ?? false, // isInternational
+        undefined, // isAnomaly
+        undefined, // anomalyTypes
+        undefined, // anomalyDetails
+        undefined, // anomalyDismissed
+        extracted.transactionSubType as TransactionSubType | undefined, // transactionSubType
+        undefined, // suggestedCategory
+        extracted.confidence, // llmConfidence
+        undefined // verificationConfidence
+      );
+   }
 }

@@ -9,6 +9,7 @@ import type { CCSummary, BankSummary } from '../parsers/extractSummary';
 import type { TransactionsOutput } from '../parsers/extractTransactions';
 import { ExtractedTransaction } from '@/types/extractedTransaction';
 import { Transaction } from '@/models/Transaction';
+import { debugLog } from '@/lib/utils/debug';
 
 // Accept multiple date formats:
 // YYYY-MM-DD, YYYY/MM/DD (ISO, international)
@@ -276,7 +277,6 @@ export function validateTransactions(data: unknown): ValidationResult<Transactio
   const errors: string[] = [];
   const warnings: string[] = [];
   const validTxns: Transaction[] = [];
-  const inputCount = normalized.transactions.length;
 
   // Noise row patterns to reject - must match ENTIRE description exactly
   const NOISE_ROW_PATTERNS = [
@@ -332,7 +332,18 @@ export function validateTransactions(data: unknown): ValidationResult<Transactio
   }
 
   // DEBUG: Log validation results
-  console.log(`[ValidationEngine] ${inputCount} transactions from LLM → ${validTxns.length} valid (${errors.length} errors, ${warnings.length} warnings)`);
+  debugLog("ValidationEngine", `Transactions from LLM → ${validTxns.length} valid (${errors.length} errors, ${warnings.length} warnings)`);
+
+  // Additional debugging for better visibility into parsing process
+  if (errors.length > 0 || warnings.length > 0) {
+    console.log(`Validation Summary - Errors: ${errors.length}, Warnings: ${warnings.length}`);
+    if (errors.length > 0) {
+      console.log('Errors:', errors);
+    }
+    if (warnings.length > 0) {
+      console.log('Warnings:', warnings);
+    }
+  }
 
   return {
     valid: errors.length === 0,

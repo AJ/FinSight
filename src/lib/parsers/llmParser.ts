@@ -1,6 +1,5 @@
-import { ParsedStatement, Currency, LLMStatus, TransactionType, Transaction, Category, SourceType } from "@/types";
+import { ParsedStatement, Currency, LLMStatus, TransactionType, Transaction, SourceType } from "@/types";
 import { TransactionSubType } from "@/models/Transaction";
-import { v4 as uuidv4 } from "uuid";
 import { useSettingsStore } from "@/lib/store/settingsStore";
 import { getBrowserClient } from "@/lib/llm/index";
 import { LLMProvider } from "@/lib/llm/types";
@@ -397,42 +396,9 @@ export async function parseWithLLMExtended(
     }
 
     // Map pipeline transactions to app Transaction model
-    transactions = validationResult.data!.transactions.map(t => {
-      const category = Category.fromId('other') || Category.fromId(Category.DEFAULT_ID)!;
-      const txnType = t.type === 'credit' ? TransactionType.Credit : TransactionType.Debit;
-      return new Transaction(
-        uuidv4(), // id
-        new Date(t.date), // date
-        t.description, // description
-        Math.abs(t.amount), // amount
-        txnType, // type
-        category, // category
-        undefined, // balance
-        undefined, // merchant
-        t.description, // originalText
-        undefined, // budgetMonth
-        undefined, // categoryConfidence
-        undefined, // needsReview
-        undefined, // categorizedBy
-        SourceType.Bank, // sourceType
-        undefined, // statementId
-        undefined, // cardIssuer
-        undefined, // cardLastFour
-        undefined, // cardHolder
-        settingsCurrency, // localCurrency
-        t.originalCurrency ? { code: t.originalCurrency, symbol: '', name: t.originalCurrency } : undefined, // originalCurrency
-        t.originalAmount, // originalAmount
-        t.isInternationalTransaction || false, // isInternational
-        undefined, // isAnomaly
-        undefined, // anomalyTypes
-        undefined, // anomalyDetails
-        undefined, // anomalyDismissed
-        t.transactionSubType as TransactionSubType | undefined, // transactionSubType
-        undefined, // suggestedCategory
-        t.confidence, // llmConfidence
-        undefined, // verificationConfidence
-      );
-    });
+    transactions = validationResult.data!.transactions.map(t =>
+      Transaction.fromExtracted(t, settingsCurrency, SourceType.Bank)
+    );
 
     // Use pipeline summary directly (new types)
     if (pipelineSummary && 'cardLastFour' in pipelineSummary) {
@@ -532,42 +498,10 @@ export async function parseWithLLMExtended(
     }
 
     // Map pipeline transactions to app Transaction model
-    transactions = validationResult.data!.transactions.map(t => {
-      const category = Category.fromId('other') || Category.fromId(Category.DEFAULT_ID)!;
-      const txnType = t.type === 'credit' ? TransactionType.Credit : TransactionType.Debit;
-      return new Transaction(
-        uuidv4(), // id
-        new Date(t.date), // date
-        t.description, // description
-        Math.abs(t.amount), // amount
-        txnType, // type
-        category, // category
-        undefined, // balance
-        undefined, // merchant
-        t.description, // originalText
-        undefined, // budgetMonth
-        undefined, // categoryConfidence
-        undefined, // needsReview
-        undefined, // categorizedBy
-        SourceType.Bank, // sourceType
-        undefined, // statementId
-        undefined, // cardIssuer
-        undefined, // cardLastFour
-        undefined, // cardHolder
-        settingsCurrency, // localCurrency
-        t.originalCurrency ? { code: t.originalCurrency, symbol: '', name: t.originalCurrency } : undefined, // originalCurrency
-        t.originalAmount, // originalAmount
-        t.isInternationalTransaction || false, // isInternational
-        undefined, // isAnomaly
-        undefined, // anomalyTypes
-        undefined, // anomalyDetails
-        undefined, // anomalyDismissed
-        t.transactionSubType as TransactionSubType | undefined, // transactionSubType
-        undefined, // suggestedCategory
-        t.confidence, // llmConfidence
-        undefined, // verificationConfidence
-      );
-    });
+    transactions = validationResult.data!.transactions.map(t =>
+      Transaction.fromExtracted(t, settingsCurrency, SourceType.Bank)
+    );
+
     failedChunks = []; // New pipeline doesn't have failed chunks
 
     // Prefer detected local currency from transactions; fallback to user settings currency.
