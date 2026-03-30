@@ -1,3 +1,20 @@
+/**
+ * @deprecated Server-side chat endpoint - superseded by browser-direct implementation.
+ * 
+ * WHY DEPRECATED:
+ * - ChatPanel.tsx now uses getBrowserClient().chatStream() directly (browser-direct)
+ * - Browser-direct approach reduces latency (no server hop) and improves privacy
+ * - This server proxy adds unnecessary complexity without providing value
+ * 
+ * REPLACED BY:
+ * - src/components/chat/ChatPanel.tsx (uses browser-direct LLM calls)
+ * 
+ * SAFE TO DELETE: Yes - no active dependencies
+ * 
+ * PRESERVED FOR: Reference patterns (rate limiting, stream transformation) if server-side
+ * chat is needed in future hybrid architecture with auth/persistence.
+ */
+
 import { getServerClient } from '@/lib/llm/index';
 import { LLMProvider } from '@/lib/llm/types';
 import { validateLlmServerUrl } from '@/lib/store/settingsStore';

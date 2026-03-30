@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { useSettingsStore, validateLlmServerUrl, isRemoteUrlConfirmed, confirmRemoteUrl } from '@/lib/store/settingsStore';
-import { checkLLMStatus } from '@/lib/parsers/llmParser';
+import { checkLLMConnection } from '@/lib/store/llmConnectionStore';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
@@ -84,7 +84,7 @@ export function AIConnectionBar({ onStatusChange, disabled = false }: AIConnecti
       if (!silent) setIsConnecting(true);
 
       try {
-        const res = await checkLLMStatus(url, llmProvider);
+        const res = await checkLLMConnection(true);  // Force fresh check
         if (res.connected) {
           setStatus('connected');
           setModels(res.models);

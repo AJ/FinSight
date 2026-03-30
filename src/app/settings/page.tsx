@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { useTransactionStore } from '@/lib/store/transactionStore';
 import { useSettingsStore, validateLlmServerUrl, isRemoteUrlConfirmed, confirmRemoteUrl } from '@/lib/store/settingsStore';
 import { useChatStore } from '@/lib/store/chatStore';
-import { checkLLMStatus } from '@/lib/parsers/llmParser';
+import { checkLLMConnection } from '@/lib/store/llmConnectionStore';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import {
@@ -109,7 +109,7 @@ export default function SettingsPage() {
       setConnectionStatus('idle');
 
       try {
-        const status = await checkLLMStatus(url, llmProvider);
+        const status = await checkLLMConnection(true);  // Force fresh check
 
         if (status.connected) {
           setConnectionStatus('connected');

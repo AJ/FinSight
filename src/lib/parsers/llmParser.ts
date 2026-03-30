@@ -1,5 +1,4 @@
 import { ParsedStatement, Currency, LLMStatus, TransactionType, Transaction, SourceType } from "@/types";
-import { TransactionSubType } from "@/models/Transaction";
 import { useSettingsStore } from "@/lib/store/settingsStore";
 import { getBrowserClient } from "@/lib/llm/index";
 import { LLMProvider } from "@/lib/llm/types";

@@ -20,7 +20,7 @@ export function debugLog(stage: string, ...args: unknown[]): void;
  * @param args - The data to log
  * @deprecated Use the overload with stage prefix for better context in logs.
  */
-//export function debugLog(...args: unknown[]): void;
+export function debugLog(...args: unknown[]): void;
 
 /**
  * Implementation
@@ -45,7 +45,7 @@ export function debugWarn(stage: string, ...args: unknown[]): void;
  * Overload 2: Without stage prefix
  * @deprecated Use the overload with stage prefix for better context in logs.
  */
-// export function debugWarn(...args: unknown[]): void;
+export function debugWarn(...args: unknown[]): void;
 /**
  * Implementation
  */
@@ -69,7 +69,7 @@ export function debugError(stage: string, ...args: unknown[]): void;
  * Overload 2: Without stage prefix
  * @deprecated Use the overload with stage prefix for better context in logs.
  */
-// export function debugError(...args: unknown[]): void;
+export function debugError(...args: unknown[]): void;
 /**
  * Implementation
  */

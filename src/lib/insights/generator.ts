@@ -1,4 +1,21 @@
 /**
+ * @deprecated Browser-direct insights generation - superseded by server API implementation.
+ * 
+ * WHY DEPRECATED:
+ * - InsightsPanel.tsx now calls /api/insights server endpoint
+ * - Server API provides centralized rate limiting, caching, and consistent behavior
+ * - Browser-direct approach was replaced for consistency with categorization flow
+ * 
+ * REPLACED BY:
+ * - src/app/api/insights/route.ts (server-side insights generation)
+ * 
+ * SAFE TO DELETE: Yes - no active dependencies
+ * 
+ * PRESERVED FOR: Reference if browser-direct insights needed in future
+ * (e.g., offline mode, privacy-focused deployments).
+ */
+
+/**
  * LLM-based insight generator.
  * Calls the LLM with pre-aggregated analytics to generate spending insights.
  */

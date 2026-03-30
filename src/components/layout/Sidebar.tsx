@@ -18,7 +18,7 @@ import {
   ChevronRight,
 } from 'lucide-react';
 import { useUpload } from './UploadContext';
-import { checkLLMStatus } from '@/lib/parsers/llmParser';
+import { checkLLMConnection, subscribeToLLMConnection } from '@/lib/store/llmConnectionStore';
 
 const navItems = [
   { href: '/', label: 'Dashboard', icon: LayoutDashboard },
@@ -40,17 +40,17 @@ export function Sidebar() {
   const router = useRouter();
   const { openUpload } = useUpload();
 
-  // Check LLM connection on mount
+  // Subscribe to LLM connection status (uses centralized cache)
   useEffect(() => {
-    const checkConnection = async () => {
-      try {
-        const status = await checkLLMStatus();
-        setLlmConnected(status.connected);
-      } catch {
-        setLlmConnected(false);
-      }
-    };
-    checkConnection();
+    // Check connection on mount (uses cache + deduplication)
+    checkLLMConnection().catch(() => {
+      // Error already handled by store
+    });
+    
+    // Subscribe to status changes
+    return subscribeToLLMConnection((status) => {
+      setLlmConnected(status?.connected ?? false);
+    });
   }, []);
 
   const isActive = (href: string) => {

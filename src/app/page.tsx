@@ -26,8 +26,8 @@ import {
 } from 'lucide-react';
 import { format } from 'date-fns';
 import { useUpload } from '@/components/layout/UploadContext';
-import { checkLLMStatus } from '@/lib/parsers/llmParser';
 import { toast } from 'sonner';
+import { checkLLMConnection } from '@/lib/store/llmConnectionStore';
 
 // Currency symbol icon component
 function CurrencySymbol({ symbol }: { symbol: string }) {
@@ -63,7 +63,7 @@ export default function DashboardPage() {
 
     const checkConnection = async () => {
       try {
-        const status = await checkLLMStatus();
+        const status = await checkLLMConnection();
         if (!status.connected) {
           toast.error('AI is offline', {
             description: 'Connect Ollama or LM Studio to parse statements. Go to Settings to configure.',

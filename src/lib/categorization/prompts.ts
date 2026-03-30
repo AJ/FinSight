@@ -75,7 +75,7 @@ function escapeJson(str: string): string {
  */
 export function parseCategorizationResponse(
   response: string
-): { id: string; category: string; confidence: number }[] {
+): { id: string; category: string; confidence: number; source: "ai" | "keyword" }[] {
   // Try direct parse
   try {
     const parsed = JSON.parse(response);
@@ -135,13 +135,22 @@ export function parseCategorizationResponse(
  */
 function normalizeResult(
   result: unknown
-): { id: string; category: string; confidence: number } {
+): { id: string; category: string; confidence: number; source: "ai" | "keyword" } {
   const obj = result as Record<string, unknown>;
   const rawCategory = String(obj.category || "other");
+  const rawConfidence = obj.confidence;
+  
+  // Parse confidence: must be valid number between 0-1, otherwise low confidence fallback
+  let confidence = 0.2; // Default to low confidence
+  if (typeof rawConfidence === "number" && rawConfidence >= 0 && rawConfidence <= 1) {
+    confidence = rawConfidence;
+  }
+  
   return {
     id: String(obj.id || ""),
     category: normalizeCategoryId(rawCategory),
-    confidence: typeof obj.confidence === "number" ? obj.confidence : 0.5,
+    confidence,
+    source: typeof rawConfidence === "number" ? "ai" : "keyword",
   };
 }
 
@@ -149,7 +158,7 @@ function normalizeResult(
  * Validate a categorization result.
  */
 function isValidResult(
-  result: { id: string; category: string; confidence: number }
+  result: { id: string; category: string; confidence: number; source: "ai" | "keyword" }
 ): boolean {
   const validCategories = DEFAULT_CATEGORIES.map((c) => c.id);
   return (

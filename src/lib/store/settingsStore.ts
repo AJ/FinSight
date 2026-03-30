@@ -148,6 +148,7 @@ interface SettingsStore extends Settings {
   // LLM settings
   llmProvider: LLMProvider;
   ollamaUrl: string; // Kept for backwards compatibility
+  lmStudioUrl: string; // LM Studio URL
   llmModel: string | null;
 
   setCurrency: (currency: Currency) => void;
@@ -156,6 +157,7 @@ interface SettingsStore extends Settings {
   getAvailableCurrencies: () => Currency[];
   setLLMProvider: (provider: LLMProvider) => void;
   setOllamaUrl: (url: string) => void;
+  setLmStudioUrl: (url: string) => void;
   setLLMModel: (model: string | null) => void;
 }
 
@@ -169,6 +171,7 @@ export const useSettingsStore = create<SettingsStore>()(
       // LLM defaults
       llmProvider: "ollama",
       ollamaUrl: "http://localhost:11434",
+      lmStudioUrl: "http://localhost:1234",
       llmModel: null,
 
       setCurrency: (currency) => set({ currency }),
@@ -178,6 +181,7 @@ export const useSettingsStore = create<SettingsStore>()(
       setLLMProvider: (provider) => set({
         llmProvider: provider,
         ollamaUrl: DEFAULT_URLS[provider], // Reset URL to provider default
+        lmStudioUrl: DEFAULT_URLS[provider], // Reset URL to provider default
         llmModel: null, // Clear model selection when switching providers
       }),
       setOllamaUrl: (url) => {
@@ -188,6 +192,14 @@ export const useSettingsStore = create<SettingsStore>()(
           // Still set the URL but it will fail on connection test
           // This allows users to see what they typed
           set({ ollamaUrl: url });
+        }
+      },
+      setLmStudioUrl: (url) => {
+        const result = validateLlmServerUrl(url);
+        if (result.valid) {
+          set({ lmStudioUrl: result.sanitized });
+        } else {
+          set({ lmStudioUrl: url });
         }
       },
       setLLMModel: (model) => set({ llmModel: model }),

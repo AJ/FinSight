@@ -1,3 +1,20 @@
+/**
+ * @deprecated Server-side LLM status check endpoint - superseded by browser-direct implementation.
+ * 
+ * WHY DEPRECATED:
+ * - No UI component calls this endpoint
+ * - Settings page uses browser-direct connection checks
+ * - Server proxy adds unnecessary layer for simple connectivity test
+ * 
+ * REPLACED BY:
+ * - Browser-direct LLM connection checks in Settings page
+ * 
+ * SAFE TO DELETE: Yes - no active dependencies
+ * 
+ * PRESERVED FOR: Reference if server-side status endpoint needed in future
+ * hybrid architecture with centralized LLM management.
+ */
+
 import { NextRequest, NextResponse } from 'next/server';
 import { getServerClient } from '@/lib/llm/index';
 import { LLMProvider } from '@/lib/llm/types';

@@ -1,6 +1,6 @@
 /**
  * Statement type detection.
- * 
+ *
  * Analyzes normalized text and determines if it's a credit card or bank statement.
  * Returns type + confidence score.
  */
@@ -14,20 +14,71 @@ export interface TypeDetectionResult {
   reason: string;
 }
 
-export async function detectStatementType(normalizedText: string): Promise<TypeDetectionResult> {
-  const prompt = TYPE_DETECTION_PROMPT.replace('{RAW_TEXT}', normalizedText);
-  // const prompt = TYPE_DETECTION_PROMPT + normalizedText + '\n---\n\nAnalyze and return JSON:';
+/**
+ * Normalize the LLM's type value to canonical format.
+ * Handles variations like "credit-card", "credit card", "CC", etc.
+ */
+function normalizeTypeValue(type: unknown): 'credit_card' | 'bank' | 'unknown' {
+  const normalized = String(type || '')
+    .toLowerCase()
+    .trim()
+    .replace(/[\s-]+/g, '_');  // "credit-card" → "credit_card", "credit card" → "credit_card"
   
+  // Map common variations to canonical values
+  const typeMap: Record<string, 'credit_card' | 'bank' | 'unknown'> = {
+    // Credit card variations
+    'credit_card': 'credit_card',
+    'credit_card_statement': 'credit_card',
+    'cc': 'credit_card',
+    'card': 'credit_card',
+    'creditcard': 'credit_card',
+    
+    // Bank variations
+    'bank': 'bank',
+    'bank_statement': 'bank',
+    'savings': 'bank',
+    'current': 'bank',
+    'checking': 'bank',
+    
+    // Unknown/ambiguous
+    'unknown': 'unknown',
+  };
+  
+  return typeMap[normalized] || 'unknown';
+}
+
+export async function detectStatementType(normalizedText: string): Promise<TypeDetectionResult> {
+  // Add context slices (first 500 + last 500 chars) for better detection
+  const contextSlice = normalizedText.length > 1000
+    ? `${normalizedText.slice(0, 500)}\n\n... [document truncated for brevity] ...\n\n${normalizedText.slice(-500)}`
+    : normalizedText;
+  
+  const prompt = TYPE_DETECTION_PROMPT.replace('{RAW_TEXT}', contextSlice);
+
   const rawResponse = await callLLM(prompt, { stage: 'type_detection', maxTokens: 512 });
 
   try {
     const parsed = JSON.parse(rawResponse);
+    
+    // Normalize the type value to handle LLM variations
+    const normalizedType = normalizeTypeValue(parsed.type);
+    
+    // If type is unknown, throw error for manual selection
+    if (normalizedType === 'unknown') {
+      throw new Error(`Unknown statement type: ${parsed.type}`);
+    }
+    
     return {
-      statementType: parsed.type,
+      statementType: normalizedType,
       confidence: parsed.confidence,
       reason: parsed.reason || ''
     };
-  } catch {
+  } catch (error) {
+    // Re-throw if it's our unknown type error
+    if (error instanceof Error && error.message.includes('Unknown statement type')) {
+      throw error;
+    }
+    
     // Log the raw response for debugging
     console.error('[Type Detection] Failed to parse LLM response:', rawResponse);
 

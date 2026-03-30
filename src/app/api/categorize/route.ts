@@ -10,6 +10,8 @@ import {
 } from "@/lib/categorization/prompts";
 import { categorizeByKeywords } from "@/lib/categorization/aiCategorizer";
 import { normalizeTransactionTypeStrict } from '@/models/TransactionType';
+import { CategorizeRequestSchema, CategorizeResponseSchema } from '@/lib/validation/llmApiSchemas';
+import { fromZodError } from 'zod-validation-error';
 
 const BATCH_SIZE = 20;
 
@@ -48,20 +50,24 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    const { transactions, provider, baseUrl, model } = await request.json();
+    const body = await request.json();
+    
+    // Validate request body against schema
+    const parseResult = CategorizeRequestSchema.safeParse(body);
+    if (!parseResult.success) {
+      return NextResponse.json(
+        { error: 'Invalid request format', details: fromZodError(parseResult.error).message },
+        { status: 400 }
+      );
+    }
+
+    const { transactions, provider, baseUrl, model } = parseResult.data;
 
     debugLog(`[Categorize] Request received:`, {
       transactionCount: transactions?.length || 0,
       provider,
       model,
     });
-
-    if (!Array.isArray(transactions) || transactions.length === 0) {
-      return NextResponse.json(
-        { error: "No transactions provided" },
-        { status: 400 }
-      );
-    }
 
     const llmProvider = (provider as LLMProvider) || "ollama";
     
@@ -186,6 +192,13 @@ export async function POST(request: NextRequest) {
 
     const totalDuration = Date.now() - startTime;
     debugLog(`[Categorize] Completed: ${results.length} results in ${totalDuration}ms`);
+
+    // Validate response
+    const responseParseResult = CategorizeResponseSchema.safeParse({ results });
+    if (!responseParseResult.success) {
+      debugError('[Categorize] Response validation failed:', fromZodError(responseParseResult.error).message);
+      // Return results anyway but log the validation error
+    }
 
     return NextResponse.json(
       { results },

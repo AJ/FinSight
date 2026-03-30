@@ -7,10 +7,10 @@ import { PasswordDialog } from "./PasswordDialog";
 import { parseCSV } from "@/lib/parsers/csvParser";
 import { parseXLS } from "@/lib/parsers/xlsParser";
 import {
-  checkLLMStatus,
   parseWithLLMExtended,
   isPasswordError,
 } from "@/lib/parsers/llmParser";
+import { subscribeToLLMConnection } from '@/lib/store/llmConnectionStore';
 import { normalizeMerchantName, categorizeTransaction } from "@/lib/categorizer";
 import { DEFAULT_CATEGORIES } from "@/lib/categorization/categories";
 import { useSettingsStore } from "@/lib/store/settingsStore";
@@ -86,9 +86,11 @@ export function FileProcessor({ onSuccess, onProcessingChange }: FileProcessorPr
   const addCCStatement = useCreditCardStore((state) => state.addStatement);
   const router = useRouter();
 
-  // Check LLM status on mount
+  // Subscribe to LLM connection status (uses centralized cache)
   useEffect(() => {
-    checkLLMStatus().then(setLlmStatus);
+    return subscribeToLLMConnection((status) => {
+      setLlmStatus(status);
+    });
   }, []);
 
   // Common processing logic for parsed statements
