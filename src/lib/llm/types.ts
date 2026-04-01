@@ -44,6 +44,11 @@ export type LLMCallOptions = {
    * Examples: "type_detection", "summary", "transactions", "rewards"
    */
   stage?: string;
+
+  /**
+   * Optional abort signal for cancelling in-flight requests.
+   */
+  signal?: AbortSignal;
 };
 
 /**

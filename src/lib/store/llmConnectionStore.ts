@@ -52,7 +52,7 @@ export const useLLMConnectionStore = create<LLMConnectionState>((set, get) => ({
     // Read current settings directly
     const settings = useSettingsStore.getState();
     const provider = settings.llmProvider;
-    const url = provider === 'ollama' ? settings.ollamaUrl : settings.lmStudioUrl;
+    const url = settings.llmServerUrl;  // Single URL field for all providers
     const model = settings.llmModel;
     const now = Date.now();
     

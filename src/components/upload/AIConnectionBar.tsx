@@ -41,13 +41,13 @@ interface AIConnectionBarProps {
 
 export function AIConnectionBar({ onStatusChange, disabled = false }: AIConnectionBarProps) {
   const llmProvider = useSettingsStore((s) => s.llmProvider);
-  const ollamaUrl = useSettingsStore((s) => s.ollamaUrl);
+  const llmServerUrl = useSettingsStore((s) => s.llmServerUrl);
   const llmModel = useSettingsStore((s) => s.llmModel);
   const setLLMProvider = useSettingsStore((s) => s.setLLMProvider);
-  const setOllamaUrl = useSettingsStore((s) => s.setOllamaUrl);
+  const setLLMServerUrl = useSettingsStore((s) => s.setLLMServerUrl);
   const setLLMModel = useSettingsStore((s) => s.setLLMModel);
 
-  const [urlInput, setUrlInput] = useState(ollamaUrl);
+  const [urlInput, setUrlInput] = useState(llmServerUrl);
   const [models, setModels] = useState<string[]>([]);
   const [isConnecting, setIsConnecting] = useState(false);
   const [status, setStatus] = useState<'idle' | 'connected' | 'failed'>('idle');
@@ -88,7 +88,7 @@ export function AIConnectionBar({ onStatusChange, disabled = false }: AIConnecti
         if (res.connected) {
           setStatus('connected');
           setModels(res.models);
-          setOllamaUrl(url);
+          setLLMServerUrl(url);
 
           if (res.models.length > 0 && (!llmModel || !res.models.includes(llmModel))) {
             setLLMModel(res.models[0]);
@@ -107,7 +107,7 @@ export function AIConnectionBar({ onStatusChange, disabled = false }: AIConnecti
         setIsConnecting(false);
       }
     },
-    [llmModel, llmProvider, setOllamaUrl, setLLMModel, onStatusChange]
+    [llmModel, setLLMServerUrl, setLLMModel, onStatusChange]
   );
 
   // Handle remote URL warning confirmation
@@ -131,7 +131,7 @@ export function AIConnectionBar({ onStatusChange, disabled = false }: AIConnecti
 
   // Auto-connect on mount
   useEffect(() => {
-    connect(ollamaUrl, true);
+    connect(llmServerUrl, true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 

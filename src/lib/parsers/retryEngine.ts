@@ -13,6 +13,7 @@ export interface RetryConfig {
   stage: string;
   maxTokens?: number;
   onValidationFailure?: (parsed: unknown, errors: string[]) => void;
+  signal?: AbortSignal;
 }
 
 export interface RetryResult<T> {
@@ -21,6 +22,7 @@ export interface RetryResult<T> {
   errors: string[];
   warnings: string[];
   attempts: number;
+  debugInfo?: unknown;
 }
 
 export interface ValidationResult<T> {
@@ -84,10 +86,12 @@ export async function runWithRetry<T>(
   let lastRawOutput: string | null = null;
   let lastParsedData: T | null = null;
   let lastValidationWarnings: string[] = [];
+  let lastDebugInfo: unknown;
 
   const callOptions = {
     stage: config.stage,
-    maxTokens: config.maxTokens ?? 4096
+    maxTokens: config.maxTokens ?? 4096,
+    signal: config.signal,
     // temperature is hardcoded to 0 in callLLM - do not override
   };
 
@@ -121,10 +125,12 @@ export async function runWithRetry<T>(
           console.log('[RetryEngine] Parsed transaction response keys:', Object.keys(anyParsed));
           if (anyParsed?._debug) {
             console.log('[RetryEngine] Transaction extraction debug:', anyParsed._debug);
+            lastDebugInfo = anyParsed._debug;
             // Strip _debug before validation
             delete anyParsed._debug;
           } else {
             console.log('[RetryEngine] No _debug field in response');
+            lastDebugInfo = undefined;
           }
         }
 
@@ -145,14 +151,21 @@ export async function runWithRetry<T>(
       const validationResult = validateFn(parsed);
 
       if (validationResult.valid) {
-        // Log success with attempt count for measuring prompt effectiveness
-        debugLog(`[Retry Engine ${config.stage}] Success on attempt ${attempt}`);
+        // Log success with attempt count and extracted data (for debugging)
+        debugLog(config.stage, `Success on attempt ${attempt}`);
+        if (config.stage === 'cc_summary' || config.stage === 'bank_summary') {
+          debugLog(config.stage, 'Extracted summary:', validationResult.data);
+        }
+        if (config.stage === 'cc_transactions' || config.stage === 'bank_transactions') {
+          debugLog(config.stage, 'Extracted transactions:', validationResult.data);
+        }
         return {
           success: true,
           data: validationResult.data,
           errors: [],
           warnings: validationResult.warnings,
-          attempts: attempt
+          attempts: attempt,
+          debugInfo: lastDebugInfo,
         };
       }
 
@@ -169,6 +182,9 @@ export async function runWithRetry<T>(
       debugLog(`[Retry Engine ${config.stage}] Errors:`, validationResult.errors);
 
     } catch (extractErr: unknown) {
+      if (config.signal?.aborted) {
+        throw extractErr;
+      }
       // LLM call failed (network, timeout, etc.)
       errors.length = 0;
       errors.push(`LLM call failed: ${extractErr instanceof Error ? extractErr.message : 'Unknown error'}`);
@@ -181,6 +197,7 @@ export async function runWithRetry<T>(
     data: lastParsedData,
     errors,
     warnings: lastValidationWarnings,
-    attempts: config.maxRetries
+    attempts: config.maxRetries,
+    debugInfo: lastDebugInfo,
   };
 }

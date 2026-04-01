@@ -1,4 +1,4 @@
-import { ParsedStatement, Currency, LLMStatus, TransactionType, Transaction, SourceType } from "@/types";
+import { ParsedStatement, Currency, LLMStatus, Transaction, SourceType } from "@/types";
 import { useSettingsStore } from "@/lib/store/settingsStore";
 import { getBrowserClient } from "@/lib/llm/index";
 import { LLMProvider } from "@/lib/llm/types";
@@ -21,6 +21,7 @@ import {
 import { validateTransactions } from "@/lib/verification/validationEngine";
 import { toast } from "sonner";
 import type { CCSummary, BankSummary } from "./extractSummary";
+import type { TransactionSubType } from "@/models/Transaction";
 
 /* ============================================================
    Password Error Detection
@@ -211,7 +212,7 @@ export async function extractTextFromTabular(file: File): Promise<string> {
  */
 export async function checkLLMStatus(url?: string, provider?: LLMProvider): Promise<LLMStatus> {
   const settings = useSettingsStore.getState();
-  const llmUrl = url || settings.ollamaUrl;
+  const llmUrl = url || settings.llmServerUrl;
   const llmProvider = provider || settings.llmProvider;
   const client = getBrowserClient(llmProvider);
   return client.checkStatus(llmUrl);
@@ -235,40 +236,40 @@ const CC_ISSUERS = [
   'hsbc', 'standard chartered', 'scb', 'rbl', 'yes bank',
 ];
 
-/**
- * Detect if a transaction is a credit card payment
- */
-export function isCCPayment(description: string, type?: TransactionType): boolean {
-  const lower = description.toLowerCase();
+function normalizeCCTransactionSubTypes(transactions: Transaction[]): Transaction[] {
+  const cashbackKeywords = ['cashback', 'valueback', 'reward cash', 'reward cashback'];
 
-  // Special handling for BillDesk: 
-  // - If it's a CREDIT (money in), it's likely a CC bill payment being reflected.
-  // - If it's a DEBIT (money out) WITHOUT a specific bank name, it could be a utility bill.
-  if (lower.includes('billdesk')) {
-    if (type === TransactionType.Credit) return true;
-    // For debits, only count as CC payment if it mentions an issuer
-    if (CC_ISSUERS.some(issuer => lower.includes(issuer))) return true;
-    return false;
-  }
-
-  // Check for CC payment keywords
-  if (CC_PAYMENT_KEYWORDS.some(kw => lower.includes(kw))) {
-    return true;
-  }
-
-  // Flexible matches
-  if (lower.includes('autopay') && lower.includes('cc')) {
-    return true;
-  }
-
-  // Check for issuer + card/payment pattern
-  if (CC_ISSUERS.some(issuer => lower.includes(issuer))) {
-    if (lower.includes('card') || lower.includes('payment') || lower.includes('bill')) {
-      return true;
+  return transactions.map((t) => {
+    if (t.sourceType !== SourceType.CreditCard) {
+      return t;
     }
-  }
 
-  return false;
+    if (!t.isCredit) {
+      return t;
+    }
+
+    if (t.transactionSubType !== 'bill_payment') {
+      return t;
+    }
+
+    const text = `${t.description} ${t.originalText ?? ''}`.toLowerCase();
+    const looksLikeCashback = cashbackKeywords.some((keyword) => text.includes(keyword));
+    const looksLikeBillPayment = CC_PAYMENT_KEYWORDS.some((keyword) => text.includes(keyword))
+      || CC_ISSUERS.some((issuer) => text.includes(issuer) && (text.includes('card') || text.includes('bill')));
+
+    if (looksLikeCashback || looksLikeBillPayment) {
+      return t;
+    }
+
+    return new Transaction(
+      t.id, t.date, t.description, t.amount, t.type, t.category, t.balance, t.merchant,
+      t.originalText, t.budgetMonth, t.categoryConfidence, t.needsReview, t.categorizedBy,
+      t.sourceType, t.statementId, t.cardIssuer, t.cardLastFour, t.cardHolder,
+      t.localCurrency, t.originalCurrency, t.originalAmount, t.isInternational,
+      t.isAnomaly, t.anomalyTypes, t.anomalyDetails, t.anomalyDismissed,
+      'refund' as TransactionSubType, t.suggestedCategory, t.llmConfidence, t.verificationConfidence,
+    );
+  });
 }
 
 export function detectCurrencyFromText(text: string): string | null {
@@ -303,6 +304,7 @@ export async function parseWithLLMExtended(
   onProgress?: (status: string) => void,
   password?: string,
   statementType?: 'bank' | 'credit_card',  // Optional: skip auto-detection if provided
+  signal?: AbortSignal,
 ): Promise<ExtendedParseResult> {
   const ext = file.name.toLowerCase();
   const isPDF = ext.endsWith(".pdf");
@@ -333,7 +335,7 @@ export async function parseWithLLMExtended(
     // Auto-detect using LLM (new pipeline's type detection)
     onProgress?.("Detecting statement type...");
     try {
-      typeResult = await detectStatementType(rawText);
+      typeResult = await detectStatementType(rawText, signal);
       debugLog('[Parser] Type detection result:', typeResult);
     } catch (e: unknown) {
       // Type detection failed - prompt user for manual selection
@@ -356,7 +358,6 @@ export async function parseWithLLMExtended(
   let currency: Currency = settingsCurrency;
   let ccStatement: CCSummary | undefined;
   let verificationReport: CCVerificationReport | VerificationReport | undefined;
-  let failedChunks: string[] = [];
 
   // Validate type detection result
   if (!typeResult.statementType) {
@@ -376,7 +377,7 @@ export async function parseWithLLMExtended(
 
     // === NEW MULTI-PASS PIPELINE ===
     console.log('[llmParser] Using NEW multi-pass pipeline for CC statement');
-    const pipelineResult = await processStatement(rawText);
+    const pipelineResult = await processStatement(rawText, signal, typeResult.statementType);
     
     if (!pipelineResult.success || !pipelineResult.data) {
       throw new Error(`Pipeline failed: ${pipelineResult.errors.join(', ')}`);
@@ -396,16 +397,15 @@ export async function parseWithLLMExtended(
 
     // Map pipeline transactions to app Transaction model
     transactions = validationResult.data!.transactions.map(t =>
-      Transaction.fromExtracted(t, settingsCurrency, SourceType.Bank)
+      Transaction.fromExtracted(t, settingsCurrency, SourceType.CreditCard)
     );
+    transactions = normalizeCCTransactionSubTypes(transactions);
 
     // Use pipeline summary directly (new types)
     if (pipelineSummary && 'cardLastFour' in pipelineSummary) {
       ccStatement = pipelineSummary;
     }
     
-    failedChunks = []; // New pipeline doesn't have failed chunks
-
     // Prefer detected local currency from CC transactions; fallback to user settings currency.
     currency = transactions.find((t) => t.localCurrency)?.localCurrency || settingsCurrency;
 
@@ -435,13 +435,12 @@ export async function parseWithLLMExtended(
       });
 
       // Also run per-transaction verification to get confidence scores
-      const rawTextForVerification = await extractTextFromPDF(file, password);
       const bankMeta: StatementMeta = {
         openingBalance: ccMeta.previousBalance,
         closingBalance: ccMeta.totalDue,
         currency: ccMeta.currency,
       };
-      const perTxVerification = verifyStatement(rawTextForVerification, transactions, bankMeta);
+      const perTxVerification = verifyStatement(rawText, transactions, bankMeta);
       
       // Merge verification confidence onto transactions
       const verifiedMap = new Map(perTxVerification.verified.map(v => [v.id, v.confidence]));
@@ -478,7 +477,7 @@ export async function parseWithLLMExtended(
 
     // === NEW MULTI-PASS PIPELINE ===
     console.log('[llmParser] Using NEW multi-pass pipeline for bank statement');
-    const pipelineResult = await processStatement(rawText);
+    const pipelineResult = await processStatement(rawText, signal, typeResult.statementType);
 
     if (!pipelineResult.success || !pipelineResult.data) {
       throw new Error(`Pipeline failed: ${pipelineResult.errors.join(', ')}`);
@@ -500,8 +499,6 @@ export async function parseWithLLMExtended(
     transactions = validationResult.data!.transactions.map(t =>
       Transaction.fromExtracted(t, settingsCurrency, SourceType.Bank)
     );
-
-    failedChunks = []; // New pipeline doesn't have failed chunks
 
     // Prefer detected local currency from transactions; fallback to user settings currency.
     currency = transactions.find((t) => t.localCurrency)?.localCurrency || settingsCurrency;
@@ -567,7 +564,6 @@ export async function parseWithLLMExtended(
       format,
       fileName: file.name,
       parseDate: new Date(),
-      failedChunks,
     },
     currency,
     rawText,

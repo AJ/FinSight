@@ -139,18 +139,27 @@ function normalizeResult(
   const obj = result as Record<string, unknown>;
   const rawCategory = String(obj.category || "other");
   const rawConfidence = obj.confidence;
-  
+
   // Parse confidence: must be valid number between 0-1, otherwise low confidence fallback
   let confidence = 0.2; // Default to low confidence
+  let hasValidAiConfidence = false;
+
   if (typeof rawConfidence === "number" && rawConfidence >= 0 && rawConfidence <= 1) {
     confidence = rawConfidence;
+    hasValidAiConfidence = true;
+  } else if (typeof rawConfidence === "string") {
+    const parsedConfidence = Number(rawConfidence.trim());
+    if (!Number.isNaN(parsedConfidence) && parsedConfidence >= 0 && parsedConfidence <= 1) {
+      confidence = parsedConfidence;
+      hasValidAiConfidence = true;
+    }
   }
-  
+
   return {
     id: String(obj.id || ""),
     category: normalizeCategoryId(rawCategory),
     confidence,
-    source: typeof rawConfidence === "number" ? "ai" : "keyword",
+    source: hasValidAiConfidence ? "ai" : "keyword",
   };
 }
 
@@ -248,4 +257,3 @@ export function normalizeCategoryId(categoryId: string): string {
   console.log(`[Categorize] Unknown category "${categoryId}", using "other"`);
   return "other";
 }
-

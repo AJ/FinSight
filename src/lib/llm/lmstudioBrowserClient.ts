@@ -8,6 +8,9 @@
  * where "localhost" correctly refers to the user's machine.
  */
 
+const GENERATE_TIMEOUT_MS = 3 * 60 * 1000;
+const CHAT_CONNECT_TIMEOUT_MS = 30 * 1000;
+
 /* ── Error handling helpers ───────────────────────────────── */
 
 interface LMStudioError {
@@ -62,6 +65,36 @@ function parseLMStudioError(responseText: string, context: string): string {
   return `LM Studio ${context} failed. Please check if LM Studio is running and the model is loaded.`;
 }
 
+function createAbortSignal(
+  timeoutMs: number,
+  externalSignal?: AbortSignal
+): {
+  signal: AbortSignal;
+  cleanup: () => void;
+} {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(new Error('Request timed out')), timeoutMs);
+  const abortFromExternal = () => controller.abort(externalSignal?.reason);
+
+  if (externalSignal) {
+    if (externalSignal.aborted) {
+      abortFromExternal();
+    } else {
+      externalSignal.addEventListener('abort', abortFromExternal, { once: true });
+    }
+  }
+
+  return {
+    signal: controller.signal,
+    cleanup: () => {
+      clearTimeout(timeoutId);
+      if (externalSignal) {
+        externalSignal.removeEventListener('abort', abortFromExternal);
+      }
+    },
+  };
+}
+
 /* ── Connection check ────────────────────────────────────── */
 
 export async function checkLMStudioStatus(
@@ -112,29 +145,44 @@ export async function generate(
   prompt: string,
   options?: Record<string, unknown>,
 ): Promise<string> {
+  const requestOptions = { ...(options || {}) };
+  const externalSignal = requestOptions.signal as AbortSignal | undefined;
+  delete requestOptions.signal;
+  const { signal, cleanup } = createAbortSignal(GENERATE_TIMEOUT_MS, externalSignal);
+
   let res: Response;
   try {
     res = await fetch(`${baseUrl}/v1/chat/completions`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
+      signal,
       body: JSON.stringify({
         model,
         messages: [{ role: "user", content: prompt }],
         stream: false,
-        ...options,
+        ...requestOptions,
       }),
     });
   } catch {
+    cleanup();
+    if (signal.aborted) {
+      if (externalSignal?.aborted) {
+        throw new Error('LM Studio request was cancelled.');
+      }
+      throw new Error('LM Studio request timed out.');
+    }
     // Network error (LM Studio not running)
     throw new Error(`Cannot connect to LM Studio at ${baseUrl}. Please ensure LM Studio is running.`);
   }
 
   if (!res.ok) {
+    cleanup();
     const text = await res.text().catch(() => res.statusText);
     throw new Error(parseLMStudioError(text, 'request'));
   }
 
   const data = await res.json();
+  cleanup();
   // OpenAI format: { choices: [{ message: { content: "..." } }] }
   return data.choices?.[0]?.message?.content ?? "";
 }
@@ -147,28 +195,43 @@ export async function chatStream(
   messages: { role: string; content: string }[],
   options?: Record<string, unknown>,
 ): Promise<ReadableStream<Uint8Array>> {
+  const requestOptions = { ...(options || {}) };
+  const externalSignal = requestOptions.signal as AbortSignal | undefined;
+  delete requestOptions.signal;
+  const { signal, cleanup } = createAbortSignal(CHAT_CONNECT_TIMEOUT_MS, externalSignal);
+
   let res: Response;
   try {
     res = await fetch(`${baseUrl}/v1/chat/completions`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
+      signal,
       body: JSON.stringify({
         model,
         messages,
         stream: true,
-        ...options,
+        ...requestOptions,
       }),
     });
   } catch {
+    cleanup();
+    if (signal.aborted) {
+      if (externalSignal?.aborted) {
+        throw new Error('LM Studio chat was cancelled.');
+      }
+      throw new Error('LM Studio chat connection timed out.');
+    }
     // Network error (LM Studio not running)
     throw new Error(`Cannot connect to LM Studio at ${baseUrl}. Please ensure LM Studio is running.`);
   }
 
   if (!res.ok) {
+    cleanup();
     const text = await res.text().catch(() => res.statusText);
     throw new Error(parseLMStudioError(text, 'chat'));
   }
 
+  cleanup();
   if (!res.body) throw new Error("No response body from LM Studio");
   return res.body;
 }

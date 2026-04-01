@@ -250,8 +250,8 @@ Return ONLY valid JSON. No explanation. No extra text. No markdown.
       "description": "merchant/description",
       "amount": number,
       "type": "debit" | "credit",
-      "transactionSubType": "purchase" | "payment" | "refund" | "cashback" | "tax" | "fee" | "interest" | "charge" | "adjustment" | "reversal",
-      "localCurrency": "INR",
+      "transactionSubType": "purchase" | "bill_payment" | "refund" | "cashback" | "tax" | "interest" | "charge" | "adjustment" | "reversal" | "fee",
+      "localCurrency": "statement local currency ISO code such as USD, EUR, SGD, or INR",
       "isInternationalTransaction": boolean,
       "originalCurrency": "USD" (omit if domestic),
       "originalAmount": number (omit if domestic),
@@ -305,16 +305,29 @@ Debit (money charged TO card):
 - Look for: no prefix, or "-" prefix, or "DR"
 
 Credit (money credited TO card):
-- Payments (HINTS: "PAYMENT", "PAYZAPP", "UPI", "NEFT", "IMPS")
+- CC Bill Payments (HINTS: "PAYMENT", "PAYZAPP", "UPI", "NEFT", "IMPS")
 - Refunds, reversals, cashback
 - Look for: "+" prefix, "CR" prefix or suffix, or payment keywords
+- If amount has "+" prefix, it is ALWAYS a credit
+- If amount has "CR" prefix or suffix, it is ALWAYS a credit
+- If amount has "-" prefix, it is ALWAYS a debit
+- If amount has "DR" prefix or suffix, it is ALWAYS a debit
 
+`
+//- If description contains refund keywords (REFUND, RETURN, REVERSAL), it is likely a credit even without "CR" keyword
+//- If description contains payment keywords (PAYMENT, PAID, PAYZAPP, UPI, NEFT, IMPS), it is likely a debit even without "DR" keyword
++
+`
 IMPORTANT: 
 - Refunds are ALWAYS credits (keywords: "REFUND", "RETURN", "REVERSAL")
 - Cashback is ALWAYS a credit
 - If amount has "+" prefix or "CR" → type = "credit"
 - If amount has "-" prefix or "DR" → type = "debit"
 - Otherwise use context (merchant = debit, refund keyword = credit)
+
+Example:
+- "20/10/2025| 16:43 Transaction Description + 10 304.00" - This is a *debit* transaction (purchase at merchant)
+- "25/10/2025| 04:00 Transaction Description -10 + 304.00" - this is a *credit* transaction (refund from merchant)
 
 RULE 5 — AMOUNT EXTRACTION (CRITICAL)
 The amount is ALWAYS in a separate column or position from the description.
@@ -335,13 +348,13 @@ Description: "IGST-VPS2627827578828-RATE 18.0 -29 (Ref# VT123456)"
 Amount: "12.35" (in a separate column, NOT the -29 from the description)
 
 `
-/*   
-RULE 6 — SUBTYPES (payment, refund, cashback, tax, fee, interest, adjustment, reversal, charge)
+/*
+RULE 6 — SUBTYPES (bill_payment, refund, cashback, tax, fee, interest, adjustment, reversal, charge)
 1. Assign the most appropriate subtype:
 IF type == "credit" (Important check)
    - "cashback": Reward cash credited (Look for: CASHBACK, VALUEBACK, REWARD CASH)
    - "adjustment": Account adjustments
-   - "payment": You paying the card bill (Look for: PAYMENT, PAID, PAYZAPP, UPI, NEFT, IMPS)
+   - "bill_payment": Credit card bill payment (Look for: PAYMENT, PAID, PAYZAPP, UPI, NEFT, IMPS)
    - "refund": Money back from merchant (Look for: REFUND, RETURN, REVERSAL, CANCEL - but also any credit from a merchant)
    - "reversal": Reversed transactions
 
@@ -379,8 +392,8 @@ IMPORTANT: Determine type FIRST, then subtype:
 +
 `
 RULE 6 - Non-Bank FEEs:
-- "FCY MARKUP FEE" is not a bank fee but a currency conversion charge, so classify it as "charge" subtype, not "fee"
-- "payment": Credit card bill payment; Look for but not exclusive to: PAYMENT, PAID, PAYZAPP, UPI, NEFT, IMPS). 
+- "FCY MARKUP FEE" is not a bank fee but a currency conversion charge and MUST be classifed as "charge" subtype, not "fee"
+- "payment": Credit card bill payment; Look for but not exclusive to: PAYMENT, PAID, PAYZAPP, UPI, NEFT, IMPS).
 
 RULE 7 — DATE FORMAT
 - Convert all dates to YYYY-MM-DD
@@ -388,12 +401,31 @@ RULE 7 — DATE FORMAT
 - "15/01/24" → "2024-01-15"
 
 RULE 8 — INTERNATIONAL TRANSACTIONS
-- If TWO amounts shown (e.g., "USD 38.60 = INR 3,431.14"):
-  - amount: 3431.14 (the INR amount)
+- If TWO amounts shown (e.g., "GBP 38.60 = SGD 65.12"):
+  - amount: 65.12 (the statement-local amount)
   - originalAmount: 38.60 (the foreign amount)
-  - originalCurrency: "USD"
+  - originalCurrency: "GBP"
   - isInternationalTransaction: true
-- If only ONE amount shown, use it as both amount and originalAmount
+- localCurrency MUST be the statement's local currency detected from the document. Do NOT assume INR.
+- If only ONE amount shown, treat it as the statement-local amount and do not invent an original amount or original currency.
+
+Example:
+- Transaction row: $38.60 + 110 3,431.14
+- 38.60 is the foreign/original amount in USD
+- "+ 110" is reward points, not money
+- 3,431.14 is the billed amount in the statement's local currency
+- amount = 3431.14
+- originalAmount = 38.60
+- originalCurrency = USD
+- isInternationalTransaction = true
+
+IMPORTANT:
+- In such rows, NEVER use the foreign currency amount as amount
+- The billed/local amount is the main transaction amount
+- Do NOT set localCurrency from the foreign currency symbol
+- localCurrency must come from the statement context
+- Reward points are not part of either amount
+
 
 RULE 9 — WHAT IS A TRANSACTION
 A transaction MUST have ALL THREE:

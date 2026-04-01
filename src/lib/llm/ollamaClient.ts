@@ -79,6 +79,7 @@ export async function generate(
 
   // Inject system prompt (centralized, not passed by caller)
   const fullPrompt = `${SYSTEM_PROMPT}\n\n${prompt}`;
+  const externalSignal = options?.signal as AbortSignal | undefined;
 
   const modelOptions = { 
     temperature: typedOptions.temperature ?? 0,
@@ -87,6 +88,14 @@ export async function generate(
   };
 
   const controller = new AbortController();
+  const abortFromExternal = () => controller.abort(externalSignal?.reason);
+  if (externalSignal) {
+    if (externalSignal.aborted) {
+      abortFromExternal();
+    } else {
+      externalSignal.addEventListener('abort', abortFromExternal, { once: true });
+    }
+  }
   const timeoutId = setTimeout(() => controller.abort(), 15 * 60 * 1000); // 15 minutes
 
   const startTime = Date.now();
@@ -143,7 +152,10 @@ export async function generate(
     clearTimeout(timeoutId);
     
     if (e instanceof Error && e.name === 'AbortError') {
-      throw new OllamaGenerateError(`Ollama call timed out after 5 minutes`, true);
+      if (externalSignal?.aborted) {
+        throw new OllamaGenerateError(`Ollama call was cancelled`, false);
+      }
+      throw new OllamaGenerateError(`Ollama call timed out after 15 minutes`, true);
     }
     
     if (e instanceof OllamaGenerateError) {
@@ -153,6 +165,10 @@ export async function generate(
     // Network error - retryable
     const message = e instanceof Error ? e.message : 'Unknown error';
     throw new OllamaGenerateError(`Ollama network error: ${message}`, true);
+  } finally {
+    if (externalSignal) {
+      externalSignal.removeEventListener('abort', abortFromExternal);
+    }
   }
 }
 

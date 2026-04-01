@@ -47,7 +47,7 @@ function normalizeTypeValue(type: unknown): 'credit_card' | 'bank' | 'unknown' {
   return typeMap[normalized] || 'unknown';
 }
 
-export async function detectStatementType(normalizedText: string): Promise<TypeDetectionResult> {
+export async function detectStatementType(normalizedText: string, signal?: AbortSignal): Promise<TypeDetectionResult> {
   // Add context slices (first 500 + last 500 chars) for better detection
   const contextSlice = normalizedText.length > 1000
     ? `${normalizedText.slice(0, 500)}\n\n... [document truncated for brevity] ...\n\n${normalizedText.slice(-500)}`
@@ -55,7 +55,7 @@ export async function detectStatementType(normalizedText: string): Promise<TypeD
   
   const prompt = TYPE_DETECTION_PROMPT.replace('{RAW_TEXT}', contextSlice);
 
-  const rawResponse = await callLLM(prompt, { stage: 'type_detection', maxTokens: 512 });
+  const rawResponse = await callLLM(prompt, { stage: 'type_detection', maxTokens: 512, signal });
 
   try {
     const parsed = JSON.parse(rawResponse);

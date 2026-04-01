@@ -20,6 +20,7 @@ import { useTransactionStore } from '@/lib/store/transactionStore';
 import { buildChatContextForQuestion } from '@/lib/chat/contextBuilder';
 import { buildChatOptimizationPlan } from '@/lib/llm/chatOptimization';
 import { ChatMessage } from '@/types';
+import { AbortManager } from '@/lib/utils/AbortManager';
 import {
   Bot,
   Send,
@@ -27,6 +28,7 @@ import {
   Sparkles,
   User,
   ArrowDown,
+  Square,
 } from 'lucide-react';
 import { getBrowserClient } from '@/lib/llm/index';
 
@@ -70,8 +72,8 @@ export function ChatPanel() {
     clearMessages,
   } = useChatStore();
 
-  const ollamaUrl = useSettingsStore((state) => state.ollamaUrl);
   const llmProvider = useSettingsStore((state) => state.llmProvider);
+  const llmServerUrl = useSettingsStore((state) => state.llmServerUrl);
   const settingsModel = useSettingsStore((state) => state.llmModel);
   const currency = useSettingsStore((state) => state.currency);
   const transactions = useTransactionStore((state) => state.transactions);
@@ -84,6 +86,7 @@ export function ChatPanel() {
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const bottomAnchorRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const activeStreamControllerRef = useRef<AbortManager>(new AbortManager());
 
   /* ------------------------------------------------------------------ */
   /*  Auto-scroll                                                       */
@@ -109,6 +112,12 @@ export function ChatPanel() {
   // Focus input on mount
   useEffect(() => {
     inputRef.current?.focus();
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      activeStreamControllerRef.current.abortAll('Component unmounted');
+    };
   }, []);
 
   /* ------------------------------------------------------------------ */
@@ -142,6 +151,9 @@ export function ChatPanel() {
       addMessage(assistantMsg);
 
       setIsStreaming(true);
+      const streamController = new AbortController();
+      activeStreamControllerRef.current.signal(); // Register with manager
+      let streamedContent = '';
 
       try {
         const client = getBrowserClient(llmProvider);
@@ -149,7 +161,7 @@ export function ChatPanel() {
         // Resolve model
         let selectedModel = activeModel ?? undefined;
         if (!selectedModel) {
-          const models = await client.listModels(ollamaUrl);
+          const models = await client.listModels(llmServerUrl);
           selectedModel = models[0];
         }
         if (!selectedModel) {
@@ -173,10 +185,13 @@ export function ChatPanel() {
 ${statementContext || 'No statement data available yet.'}
 
 Guidelines:
+- Use ONLY the provided statement context for factual answers. Do not invent or assume missing transactions, balances, merchants, categories, or dates.
 - Be concise and precise with numbers.
 - Format currency amounts properly.
 - If asked for calculations, show your work briefly.
-- If the data doesn't contain enough info, say so.`;
+- If the data doesn't contain enough info, say so clearly.
+- When answering with amounts, trends, counts, or conclusions, mention the relevant transaction dates and/or transactions you used.
+- The relevant transactions section is sampled and not exhaustive. If the sampled context is not enough to support a confident answer, say that explicitly.`;
 
         const chatMessages = [
           { role: 'system', content: systemPrompt },
@@ -188,10 +203,12 @@ Guidelines:
         ];
 
         // Stream directly from browser → LLM
-        const stream = await client.chatStream(ollamaUrl, selectedModel, chatMessages, optimizationPlan.requestOptions);
+        const stream = await client.chatStream(llmServerUrl, selectedModel, chatMessages, {
+          ...optimizationPlan.requestOptions,
+          signal: streamController.signal,
+        });
         const reader = stream.getReader();
         const decoder = new TextDecoder();
-        let full = '';
         let buffer = '';
 
         while (true) {
@@ -218,8 +235,8 @@ Guidelines:
                   const parsed = JSON.parse(data);
                   const content = parsed.choices?.[0]?.delta?.content;
                   if (content) {
-                    full += content;
-                    updateMessage(assistantId, full);
+                    streamedContent += content;
+                    updateMessage(assistantId, streamedContent);
                   }
                 } catch {
                   /* skip malformed lines */
@@ -236,8 +253,8 @@ Guidelines:
               try {
                 const parsed = JSON.parse(line);
                 if (parsed.message?.content) {
-                  full += parsed.message.content;
-                  updateMessage(assistantId, full);
+                  streamedContent += parsed.message.content;
+                  updateMessage(assistantId, streamedContent);
                 }
               } catch {
                 /* skip malformed lines */
@@ -259,8 +276,8 @@ Guidelines:
                 const parsed = JSON.parse(data);
                 const content = parsed.choices?.[0]?.delta?.content;
                 if (content) {
-                  full += content;
-                  updateMessage(assistantId, full);
+                  streamedContent += content;
+                  updateMessage(assistantId, streamedContent);
                 }
               } catch {
                 /* skip malformed lines */
@@ -270,8 +287,8 @@ Guidelines:
             try {
               const parsed = JSON.parse(buffer.trim());
               if (parsed.message?.content) {
-                full += parsed.message.content;
-                updateMessage(assistantId, full);
+                streamedContent += parsed.message.content;
+                updateMessage(assistantId, streamedContent);
               }
             } catch {
               /* skip malformed trailing frame */
@@ -279,19 +296,34 @@ Guidelines:
           }
         }
 
-        if (!full) {
+        if (!streamedContent) {
           updateMessage(
             assistantId,
             "I couldn't generate a response. Please try rephrasing your question."
           );
         }
       } catch (err) {
+        if (streamController.signal.aborted) {
+          if (!streamedContent) {
+            updateMessage(
+              assistantId,
+              'Response stopped.'
+            );
+          }
+          return;
+        }
         console.error('[Chat]', err);
         updateMessage(
           assistantId,
-          '⚠️ Connection error — check that your LLM is running and try again.'
+          err instanceof Error && err.message.toLowerCase().includes('timed out')
+            ? '⚠️ Request timed out — the model took too long to respond.'
+            : '⚠️ Connection error — check that your LLM is running and try again.'
         );
       } finally {
+        if (streamController.signal.aborted) {
+          return;
+        }
+        activeStreamControllerRef.current.abortAll();
         setIsStreaming(false);
         inputRef.current?.focus();
       }
@@ -303,7 +335,7 @@ Guidelines:
       transactions,
       currency,
       activeModel,
-      ollamaUrl,
+      llmServerUrl,
       llmProvider,
       addMessage,
       updateMessage,
@@ -316,6 +348,10 @@ Guidelines:
       handleSend();
     }
   };
+
+  const handleStopStreaming = useCallback(() => {
+    activeStreamControllerRef.current.abortAll('User clicked stop');
+  }, []);
 
   const hasContext = transactions.length > 0;
 
@@ -500,18 +536,14 @@ Guidelines:
             className="resize-none min-h-[44px] max-h-[120px] rounded-xl text-sm"
           />
           <Button
-            type="submit"
+            type={isStreaming ? 'button' : 'submit'}
             size="icon"
-            disabled={!input.trim() || isStreaming || !hasContext}
+            disabled={(!input.trim() && !isStreaming) || !hasContext}
             className="rounded-xl shrink-0 h-[44px] w-[44px] transition-all"
+            onClick={isStreaming ? handleStopStreaming : undefined}
           >
             {isStreaming ? (
-              <motion.div
-                animate={{ rotate: 360 }}
-                transition={{ repeat: Infinity, duration: 1, ease: 'linear' }}
-              >
-                <Sparkles className="w-4 h-4" />
-              </motion.div>
+              <Square className="w-4 h-4" />
             ) : (
               <Send className="w-4 h-4" />
             )}
@@ -541,5 +573,3 @@ Guidelines:
     </div>
   );
 }
-
-

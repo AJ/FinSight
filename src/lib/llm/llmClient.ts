@@ -25,7 +25,7 @@ export async function callLLM(
   prompt: string,
   options: Omit<LLMCallOptions, 'temperature'> = {}
 ): Promise<string> {
-  const { stage = 'unknown', maxTokens = 4096 } = options;
+  const { stage = 'unknown', maxTokens = 4096, signal } = options;
   
   // TEMPERATURE HARD CODED TO 0 - NON-NEGOTIABLE FOR DETERMINISTIC OUTPUT
   const temperature = 0;
@@ -33,7 +33,7 @@ export async function callLLM(
   // Get user's LLM settings
   const settings = useSettingsStore.getState();
   const provider = settings.llmProvider;
-  const baseUrl = settings.ollamaUrl;
+  const baseUrl = settings.llmServerUrl;  // Single URL field for all providers
   const model = settings.llmModel;
 
   // Throw if no model configured - caller should handle fallback
@@ -53,11 +53,13 @@ export async function callLLM(
         raw = await generateOllama(baseUrl, model, prompt, {
           temperature,
           max_tokens: maxTokens,
+          signal,
         });
       } else if (provider === 'lmstudio') {
         raw = await generateLMStudio(baseUrl, model, prompt, {
           temperature,
           max_tokens: maxTokens,
+          signal,
         });
       } else {
         throw new Error(`Unsupported LLM provider: ${provider}`);
@@ -73,6 +75,10 @@ export async function callLLM(
 
     } catch (e: unknown) {
       lastError = e instanceof Error ? e : new Error(String(e));
+
+      if (signal?.aborted) {
+        throw e;
+      }
 
       // Check if error is retryable
       const isRetryable = 

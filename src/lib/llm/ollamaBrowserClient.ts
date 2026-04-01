@@ -7,6 +7,39 @@
  * where "localhost" correctly refers to the user's machine.
  */
 
+const GENERATE_TIMEOUT_MS = 3 * 60 * 1000;
+const CHAT_CONNECT_TIMEOUT_MS = 30 * 1000;
+
+function createAbortSignal(
+  timeoutMs: number,
+  externalSignal?: AbortSignal
+): {
+  signal: AbortSignal;
+  cleanup: () => void;
+} {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(new Error('Request timed out')), timeoutMs);
+  const abortFromExternal = () => controller.abort(externalSignal?.reason);
+
+  if (externalSignal) {
+    if (externalSignal.aborted) {
+      abortFromExternal();
+    } else {
+      externalSignal.addEventListener('abort', abortFromExternal, { once: true });
+    }
+  }
+
+  return {
+    signal: controller.signal,
+    cleanup: () => {
+      clearTimeout(timeoutId);
+      if (externalSignal) {
+        externalSignal.removeEventListener('abort', abortFromExternal);
+      }
+    },
+  };
+}
+
 /* ── Connection check ────────────────────────────────────── */
 
 export async function checkOllamaStatus(
@@ -53,33 +86,50 @@ export async function generate(
   options?: Record<string, unknown>,
 ): Promise<string> {
   const modelOptions = { ...(options || {}) };
+  const externalSignal = modelOptions.signal as AbortSignal | undefined;
   const keepAlive = typeof modelOptions.keep_alive === 'string' ? String(modelOptions.keep_alive) : '10m';
   delete modelOptions.keep_alive;
+  delete modelOptions.signal;
 
-  const res = await fetch(`${baseUrl}/api/generate`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      model,
-      prompt,
-      stream: false,
-      format: "json",
-      keep_alive: keepAlive,
-      options: {
-        num_ctx: 16384,
-        temperature: 0.05,
-        ...modelOptions,
-      },
-    }),
-  });
+  const { signal, cleanup } = createAbortSignal(GENERATE_TIMEOUT_MS, externalSignal);
 
-  if (!res.ok) {
-    const text = await res.text().catch(() => res.statusText);
-    throw new Error(`Ollama generate error: ${text}`);
+  try {
+    const res = await fetch(`${baseUrl}/api/generate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      signal,
+      body: JSON.stringify({
+        model,
+        prompt,
+        stream: false,
+        format: "json",
+        keep_alive: keepAlive,
+        options: {
+          num_ctx: 16384,
+          temperature: 0.05,
+          ...modelOptions,
+        },
+      }),
+    });
+
+    if (!res.ok) {
+      const text = await res.text().catch(() => res.statusText);
+      throw new Error(`Ollama generate error: ${text}`);
+    }
+
+    const data = await res.json();
+    return data.response;
+  } catch (error) {
+    if (signal.aborted) {
+      if (externalSignal?.aborted) {
+        throw new Error('Ollama request was cancelled.');
+      }
+      throw new Error('Ollama request timed out.');
+    }
+    throw error;
+  } finally {
+    cleanup();
   }
-
-  const data = await res.json();
-  return data.response;
 }
 
 /* ── Chat (streaming, used for chat panel) ───────────────── */
@@ -91,30 +141,47 @@ export async function chatStream(
   options?: Record<string, unknown>,
 ): Promise<ReadableStream<Uint8Array>> {
   const modelOptions = { ...(options || {}) };
+  const externalSignal = modelOptions.signal as AbortSignal | undefined;
   const keepAlive = typeof modelOptions.keep_alive === 'string' ? String(modelOptions.keep_alive) : '10m';
   delete modelOptions.keep_alive;
+  delete modelOptions.signal;
 
-  const res = await fetch(`${baseUrl}/api/chat`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      model,
-      messages,
-      stream: true,
-      keep_alive: keepAlive,
-      options: {
-        num_ctx: 8192,
-        temperature: 0.7,
-        ...modelOptions,
-      },
-    }),
-  });
+  const { signal, cleanup } = createAbortSignal(CHAT_CONNECT_TIMEOUT_MS, externalSignal);
 
-  if (!res.ok) {
-    const text = await res.text().catch(() => res.statusText);
-    throw new Error(`Ollama chat error: ${text}`);
+  try {
+    const res = await fetch(`${baseUrl}/api/chat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      signal,
+      body: JSON.stringify({
+        model,
+        messages,
+        stream: true,
+        keep_alive: keepAlive,
+        options: {
+          num_ctx: 8192,
+          temperature: 0.7,
+          ...modelOptions,
+        },
+      }),
+    });
+
+    if (!res.ok) {
+      const text = await res.text().catch(() => res.statusText);
+      throw new Error(`Ollama chat error: ${text}`);
+    }
+
+    if (!res.body) throw new Error("No response body from Ollama");
+    return res.body;
+  } catch (error) {
+    if (signal.aborted) {
+      if (externalSignal?.aborted) {
+        throw new Error('Ollama chat was cancelled.');
+      }
+      throw new Error('Ollama chat connection timed out.');
+    }
+    throw error;
+  } finally {
+    cleanup();
   }
-
-  if (!res.body) throw new Error("No response body from Ollama");
-  return res.body;
 }

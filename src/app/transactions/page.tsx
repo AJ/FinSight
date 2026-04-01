@@ -59,7 +59,7 @@ function TransactionsPageContent() {
 
   const currency = useSettingsStore((state) => state.currency);
   const llmProvider = useSettingsStore((state) => state.llmProvider);
-  const ollamaUrl = useSettingsStore((state) => state.ollamaUrl);
+  const llmServerUrl = useSettingsStore((state) => state.llmServerUrl);
   const llmModel = useSettingsStore((state) => state.llmModel);
 
   const [searchTerm, setSearchTerm] = useState("");
@@ -156,7 +156,7 @@ function TransactionsPageContent() {
             type: t.type,
           })),
           provider: llmProvider,
-          baseUrl: ollamaUrl,
+          baseUrl: llmServerUrl,
           model: llmModel,
         }),
       });

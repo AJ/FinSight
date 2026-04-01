@@ -59,14 +59,14 @@ export default function SettingsPage() {
 
   // LLM settings
   const llmProvider = useSettingsStore((state) => state.llmProvider);
-  const ollamaUrl = useSettingsStore((state) => state.ollamaUrl);
+  const llmServerUrl = useSettingsStore((state) => state.llmServerUrl);
   const llmModel = useSettingsStore((state) => state.llmModel);
   const setLLMProvider = useSettingsStore((state) => state.setLLMProvider);
-  const setOllamaUrl = useSettingsStore((state) => state.setOllamaUrl);
+  const setLLMServerUrl = useSettingsStore((state) => state.setLLMServerUrl);
   const setLLMModel = useSettingsStore((state) => state.setLLMModel);
 
   // Local state for the URL input (so we can edit before saving)
-  const [urlInput, setUrlInput] = useState(ollamaUrl);
+  const [urlInput, setUrlInput] = useState(llmServerUrl);
   const [models, setModels] = useState<string[]>([]);
   const [isConnecting, setIsConnecting] = useState(false);
   const [connectionStatus, setConnectionStatus] = useState<
@@ -80,7 +80,7 @@ export default function SettingsPage() {
 
   // Test connection on mount with saved URL
   useEffect(() => {
-    testConnection(ollamaUrl, true);
+    testConnection(llmServerUrl, true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -114,7 +114,7 @@ export default function SettingsPage() {
         if (status.connected) {
           setConnectionStatus('connected');
           setModels(status.models);
-          setOllamaUrl(url);
+          setLLMServerUrl(url);  // Save the tested URL
 
           // If the currently saved model isn't in the new list, auto-select first
           if (
@@ -134,7 +134,7 @@ export default function SettingsPage() {
         setIsConnecting(false);
       }
     },
-    [llmModel, llmProvider, setOllamaUrl, setLLMModel]
+    [llmModel, setLLMServerUrl, setLLMModel]
   );
 
   // Handle remote URL warning confirmation

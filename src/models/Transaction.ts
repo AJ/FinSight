@@ -7,10 +7,11 @@ import { AnomalyType } from './AnomalyType';
 import { AnomalyDetails } from './AnomalyDetails';
 import { Currency } from '@/types';
 import { ExtractedTransaction } from '@/types/extractedTransaction';
+import { getCurrencyByCode } from '@/lib/currencyFormatter';
 
 // All possible transaction sub-types (for LLM prompts and validation)
 export const TRANSACTION_SUB_TYPES = [
-  'purchase', 'payment', 'refund', 'interest', 'fee',
+  'purchase', 'bill_payment', 'refund', 'interest', 'fee',
   'deposit', 'transfer_in', 'transfer_out',
   'cashback', 'rewards', 'withdrawal',
   'charge', 'adjustment', 'reversal'
@@ -207,6 +208,12 @@ export class Transaction {
     ): Transaction {
       const category = Category.fromId('other') ?? Category.fromId(Category.DEFAULT_ID)!;
       const txnType = extracted.type === 'credit' ? TransactionType.Credit : TransactionType.Debit;
+      const extractedLocalCurrency = extracted.localCurrency
+        ? getCurrencyByCode(String(extracted.localCurrency).trim().toUpperCase())
+        : undefined;
+      const extractedOriginalCurrency = extracted.originalCurrency
+        ? getCurrencyByCode(String(extracted.originalCurrency).trim().toUpperCase())
+        : undefined;
 
       return new Transaction(
         uuidv4(), // id
@@ -227,19 +234,17 @@ export class Transaction {
         undefined, // cardIssuer
         undefined, // cardLastFour
         undefined, // cardHolder
-        settingsCurrency, // localCurrency
-        extracted.originalCurrency ? {
-          code: extracted.originalCurrency,
-          symbol: extracted.originalCurrency,
-          name: extracted.originalCurrency
-        } : undefined, // originalCurrency
+        extractedLocalCurrency ?? settingsCurrency, // localCurrency
+        extractedOriginalCurrency, // originalCurrency
         extracted.originalAmount, // originalAmount
         extracted.isInternationalTransaction ?? false, // isInternational
         undefined, // isAnomaly
         undefined, // anomalyTypes
         undefined, // anomalyDetails
         undefined, // anomalyDismissed
-        extracted.transactionSubType as TransactionSubType | undefined, // transactionSubType
+        (extracted.transactionSubType === 'payment'
+          ? 'bill_payment'
+          : extracted.transactionSubType) as TransactionSubType | undefined, // transactionSubType
         undefined, // suggestedCategory
         extracted.confidence, // llmConfidence
         undefined // verificationConfidence

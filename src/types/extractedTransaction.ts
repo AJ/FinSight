@@ -10,6 +10,7 @@ export interface ExtractedTransaction {
   amount: number;
   type: 'debit' | 'credit';
   transactionSubType?: string;
+  balance?: number | null;
   localCurrency?: string;
   isInternationalTransaction?: boolean;
   originalCurrency?: string;

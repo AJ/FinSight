@@ -14,7 +14,7 @@ import { debugLog } from '@/lib/utils/debug';
 
 export function InsightsPanel() {
   const transactions = useTransactionStore((state) => state.transactions);
-  const { llmProvider, ollamaUrl, llmModel, currency } = useSettingsStore();
+  const { llmProvider, llmServerUrl, llmModel, currency } = useSettingsStore();
   const { insights, isGenerating, error, setGenerating, setInsights, setError, clear } =
     useInsightsStore();
 
@@ -45,7 +45,7 @@ export function InsightsPanel() {
         body: JSON.stringify({
           analytics,
           provider: llmProvider,
-          baseUrl: ollamaUrl,
+          baseUrl: llmServerUrl,
           model: llmModel,
           currency,
         }),
@@ -85,7 +85,7 @@ export function InsightsPanel() {
           : 'Failed to generate insights. Check your AI connection.'
       );
     }
-  }, [analytics, llmModel, llmProvider, ollamaUrl, currency, transactions.length, setError, setGenerating, setInsights]);
+  }, [analytics, llmModel, llmProvider, llmServerUrl, currency, transactions, setError, setGenerating, setInsights]);
 
   const handleRetry = useCallback(() => {
     clear();

@@ -272,7 +272,7 @@ function verifyCCStatementTotals(
   // Log sub-type breakdown for debugging
   const subtypeBreakdown = {
     purchases: transactions.filter(t => t.transactionSubType === 'purchase').reduce((s, t) => s + t.amount, 0),
-    payments: transactions.filter(t => t.transactionSubType === 'payment').reduce((s, t) => s + t.amount, 0),
+    payments: transactions.filter(t => t.transactionSubType === 'bill_payment').reduce((s, t) => s + t.amount, 0),
     refunds: transactions.filter(t => t.transactionSubType === 'refund').reduce((s, t) => s + t.amount, 0),
     cashback: transactions.filter(t => t.transactionSubType === 'cashback').reduce((s, t) => s + t.amount, 0),
     fees: transactions.filter(t => t.transactionSubType === 'fee').reduce((s, t) => s + t.amount, 0),
@@ -310,7 +310,7 @@ function verifyCCTransactionSums(
 ): CCVerificationReport['transactionSums'] {
   // Sum transactions by sub-type (for detailed breakdown)
   const totalPurchases = sumTransactionsBySubType(transactions, ['purchase', 'charge'])
-  const totalPayments = sumTransactionsBySubType(transactions, ['payment'])
+  const totalPayments = sumTransactionsBySubType(transactions, ['bill_payment'])
   const totalFees = sumTransactionsBySubType(transactions, ['fee', 'interest'])
   
   // Sum by base type (for statement column comparison)

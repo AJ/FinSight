@@ -10,6 +10,7 @@ import {
   parseWithLLMExtended,
   isPasswordError,
 } from "@/lib/parsers/llmParser";
+import { AbortManager } from '@/lib/utils/AbortManager';
 import { subscribeToLLMConnection } from '@/lib/store/llmConnectionStore';
 import { normalizeMerchantName, categorizeTransaction } from "@/lib/categorizer";
 import { DEFAULT_CATEGORIES } from "@/lib/categorization/categories";
@@ -44,9 +45,33 @@ interface FileProcessorProps {
   onProcessingChange?: (isProcessing: boolean) => void;
 }
 
+function isAbortError(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+
+  const err = error as Record<string, unknown>;
+  const message = typeof err.message === "string" ? err.message.toLowerCase() : "";
+
+  return (
+    err.name === "AbortError" ||
+    message.includes("cancelled") ||
+    message.includes("canceled")
+  );
+}
+
 export function FileProcessor({ onSuccess, onProcessingChange }: FileProcessorProps) {
   const [isProcessing, setIsProcessing] = useState(false);
   const processingStartTime = useRef<number>(0);
+  const abortManager = useRef<AbortManager>(new AbortManager());
+  const isMountedRef = useRef(true);
+  const wasCancelledRef = useRef(false);
+
+  useEffect(() => {
+    return () => {
+      isMountedRef.current = false;
+      wasCancelledRef.current = true;
+      abortManager.current.abortAll('Component unmounted');
+    };
+  }, []);
 
   // Notify parent when processing state changes
   useEffect(() => {
@@ -99,6 +124,10 @@ export function FileProcessor({ onSuccess, onProcessingChange }: FileProcessorPr
     detectedCurrency: Currency | null,
     verificationReport?: VerificationReport | CCVerificationReport,
   ) => {
+    if (wasCancelledRef.current) {
+      return;
+    }
+
     if (parsed.transactions.length === 0) {
       throw new Error(
         "No transactions found. Check if the file format is supported or try enabling AI parsing in Settings.",
@@ -216,12 +245,25 @@ export function FileProcessor({ onSuccess, onProcessingChange }: FileProcessorPr
 
     let parsed: ParsedStatement;
     let detectedCurrency: Currency | null = null;
+    const abortController = new AbortController();
+    abortManager.current = new AbortManager();
+    abortManager.current.signal(); // Register the signal
+    wasCancelledRef.current = false;
 
     if (ext.endsWith(".pdf")) {
       // Pass statement type to parser (undefined = auto-detect)
       const statementTypeParam = selectedType === 'auto' ? undefined : selectedType;
       try {
-        const result = await parseWithLLMExtended(file, setProgress, password, statementTypeParam);
+        const result = await parseWithLLMExtended(
+          file,
+          setProgress,
+          password,
+          statementTypeParam,
+          abortController.signal,
+        );
+        if (wasCancelledRef.current || abortController.signal.aborted) {
+          return;
+        }
         parsed = result.statement;
         detectedCurrency = result.currency;
         // Store CC statement metadata for the credit cards page
@@ -266,6 +308,9 @@ export function FileProcessor({ onSuccess, onProcessingChange }: FileProcessorPr
         }
         processParsedStatement(parsed, detectedCurrency, result.verification);
       } catch (err) {
+        if (abortController.signal.aborted || wasCancelledRef.current || isAbortError(err)) {
+          return;
+        }
         // debugError('[FileProcessor][PDF Parsing] Error:', err, 'isPasswordError:', isPasswordError(err));
         if (isPasswordError(err)) {
           // PDF needs password - show password dialog
@@ -289,6 +334,9 @@ export function FileProcessor({ onSuccess, onProcessingChange }: FileProcessorPr
     } else if (isCSV) {
       setProgress("Parsing CSV...");
       const result = await parseCSV(file);
+      if (wasCancelledRef.current || abortController.signal.aborted) {
+        return;
+      }
       parsed = result.statement;
       detectedCurrency = result.detectedCurrency;
       
@@ -301,7 +349,7 @@ export function FileProcessor({ onSuccess, onProcessingChange }: FileProcessorPr
           parsed.transactions,
           {
             provider: settings.llmProvider,
-            baseUrl: settings.ollamaUrl,
+            baseUrl: settings.llmServerUrl,
             model: settings.llmModel || '',
           }
         );
@@ -311,11 +359,17 @@ export function FileProcessor({ onSuccess, onProcessingChange }: FileProcessorPr
         console.error('[FileProcessor] Categorization failed:', e);
         // Continue without categories - keyword fallback already applied by parser
       }
+      if (wasCancelledRef.current || abortController.signal.aborted) {
+        return;
+      }
       
       processParsedStatement(parsed, detectedCurrency);
     } else if (isXLS) {
       setProgress("Parsing Excel file...");
       const result = await parseXLS(file);
+      if (wasCancelledRef.current || abortController.signal.aborted) {
+        return;
+      }
       parsed = result.statement;
       detectedCurrency = result.detectedCurrency;
       
@@ -328,7 +382,7 @@ export function FileProcessor({ onSuccess, onProcessingChange }: FileProcessorPr
           parsed.transactions,
           {
             provider: settings.llmProvider,
-            baseUrl: settings.ollamaUrl,
+            baseUrl: settings.llmServerUrl,
             model: settings.llmModel || '',
           }
         );
@@ -337,6 +391,9 @@ export function FileProcessor({ onSuccess, onProcessingChange }: FileProcessorPr
       } catch (e) {
         console.error('[FileProcessor] Categorization failed:', e);
         // Continue without categories - keyword fallback already applied by parser
+      }
+      if (wasCancelledRef.current || abortController.signal.aborted) {
+        return;
       }
       
       processParsedStatement(parsed, detectedCurrency);
@@ -345,6 +402,11 @@ export function FileProcessor({ onSuccess, onProcessingChange }: FileProcessorPr
         "Unsupported file format. Please upload a PDF, CSV, XLS, or XLSX file.",
       );
     }
+
+    if (abortController.signal.aborted) {
+      return;
+    }
+    abortManager.current.abortAll();
   }, [processParsedStatement, addCCStatement]);
 
   // Process a file with optional password (for PDFs)
@@ -483,6 +545,7 @@ export function FileProcessor({ onSuccess, onProcessingChange }: FileProcessorPr
   }, []);
 
   const handleFileSelect = async (file: File) => {
+    wasCancelledRef.current = false;
     setIsProcessing(true);
     setError(null);
     setSuccess(null);
@@ -494,6 +557,9 @@ export function FileProcessor({ onSuccess, onProcessingChange }: FileProcessorPr
       // First attempt - no password
       await processFile(file);
     } catch (err) {
+      if (wasCancelledRef.current || isAbortError(err)) {
+        return;
+      }
       if (isPasswordError(err)) {
         // PDF needs password - show dialog
         setPendingFile(file);
@@ -515,8 +581,10 @@ export function FileProcessor({ onSuccess, onProcessingChange }: FileProcessorPr
       // Only clear processing if not waiting for password
       if (!passwordDialogOpen) {
         // debugError('[FileProcessor][handleFileSelect] Finally block reached. Clearing processing state. passwordDialogOpen:', passwordDialogOpen);
-        setIsProcessing(false);
-        setProgress(null);
+        if (isMountedRef.current) {
+          setIsProcessing(false);
+          setProgress(null);
+        }
       }
     }
   };
@@ -681,4 +749,3 @@ export function FileProcessor({ onSuccess, onProcessingChange }: FileProcessorPr
     </div>
   );
 }
-

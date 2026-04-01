@@ -299,7 +299,7 @@ export const useTransactionStore = create<TransactionStore>()(
           try {
             // Get settings
             const settings = useSettingsStore.getState();
-            const { llmProvider, ollamaUrl, llmModel } = settings;
+            const { llmProvider, llmServerUrl, llmModel } = settings;
 
             // Lazy load categorizer to avoid circular deps
             if (!categorizationPromise) {
@@ -312,7 +312,7 @@ export const useTransactionStore = create<TransactionStore>()(
               get().transactions,
               {
                 provider: llmProvider,
-                baseUrl: ollamaUrl,
+                baseUrl: llmServerUrl,
                 model: llmModel || '',
                 onProgress: (progress) => {
                   set({
