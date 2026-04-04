@@ -12,6 +12,7 @@ import { z } from 'zod';
 export const CategorizeTransactionSchema = z.object({
   id: z.string().min(1, 'Transaction ID is required'),
   description: z.string().default(''),
+  merchant: z.string().optional(),
   amount: z.number().or(z.string()).transform(val => {
     const num = typeof val === 'string' ? parseFloat(val) : val;
     if (isNaN(num)) throw new Error('Amount must be a valid number');
@@ -24,6 +25,9 @@ export const CategorizeTransactionSchema = z.object({
       if (type === 'expense') return 'debit';
       return type;
     }),
+  sourceType: z.enum(['bank', 'credit_card']).optional(),
+  transactionSubType: z.string().optional(),
+  categoryId: z.string().optional(),
 });
 
 export const CategorizeRequestSchema = z.object({
@@ -39,7 +43,7 @@ export const CategorizeResponseSchema = z.object({
     id: z.string(),
     category: z.string(),
     confidence: z.number().min(0).max(1),
-    source: z.enum(['ai', 'keyword']),
+    source: z.enum(['rule', 'ai', 'keyword']),
   })),
 });
 

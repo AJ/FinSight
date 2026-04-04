@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -30,9 +30,11 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Transaction, TransactionJSON, TransactionType, Category } from "@/types";
+import { Transaction, TransactionJSON, TransactionType, Category, CategorizedBy } from "@/types";
 import { useTransactionStore } from "@/lib/store/transactionStore";
 import { useSettingsStore } from "@/lib/store/settingsStore";
+import { merchantRuleRepository } from "@/lib/store/merchantRuleStore";
+import { getMerchantRuleDecision } from "@/lib/categorization/merchantRules";
 import { formatCurrency } from "@/lib/currencyFormatter";
 import { exportTransactionsToCSV } from "@/lib/exportUtils";
 import { format } from "date-fns";
@@ -49,39 +51,18 @@ function loadPendingTransactions(): Transaction[] {
   try {
     const parsed = JSON.parse(stored);
     const settingsCurrency = useSettingsStore.getState().currency;
-    // Reconstruct Transaction instances from JSON
-    return parsed.map((t: TransactionJSON) => {
-      return new Transaction(
-        t.id, // id
-        new Date(t.date), // date
-        t.description, // description
-        Math.abs(t.amount), // amount
-        t.type, // type
-        Category.fromId(t.category) ?? Category.fromId(Category.DEFAULT_ID)!, // category
-        t.balance, // balance
-        t.merchant, // merchant
-        t.originalText, // originalText
-        t.budgetMonth, // budgetMonth
-        t.categoryConfidence, // categoryConfidence
-        t.needsReview, // needsReview
-        t.categorizedBy, // categorizedBy
-        t.sourceType, // sourceType
-        t.statementId, // statementId
-        t.cardIssuer, // cardIssuer
-        t.cardLastFour, // cardLastFour
-        t.cardHolder, // cardHolder
-        t.localCurrency ?? settingsCurrency, // localCurrency
-        t.originalCurrency, // originalCurrency
-        t.originalAmount, // originalAmount
-        t.isInternational ?? false, // isInternational
-        t.isAnomaly, // isAnomaly
-        t.anomalyTypes, // anomalyTypes
-        t.anomalyDetails, // anomalyDetails
-        t.anomalyDismissed, // anomalyDismissed
-        t.transactionSubType, // transactionSubType
-        t.suggestedCategory, // suggestedCategory
-      );
-    });
+    return parsed.map((t: TransactionJSON) =>
+      Transaction.fromJSON({
+        ...t,
+        amount: Math.abs(t.amount),
+        category:
+          typeof t.category === "string"
+            ? t.category
+            : Category.DEFAULT_ID,
+        localCurrency: t.localCurrency ?? settingsCurrency,
+        isInternational: t.isInternational ?? false,
+      })
+    );
   } catch {
     return [];
   }
@@ -107,10 +88,16 @@ export default function ReviewPage() {
   const [verificationReport] = useState<VerificationReport | CCVerificationReport | null>(() => loadVerificationReport());
   const [editingId, setEditingId] = useState<string | null>(null);
   const [showUnsavedModal, setShowUnsavedModal] = useState(false);
+  const [manualCategoryEdits, setManualCategoryEdits] = useState<Record<string, string>>({});
   const addTransactions = useTransactionStore((state) => state.addTransactions);
   const startBackgroundCategorization = useTransactionStore((state) => state.startBackgroundCategorization);
   const runAnomalyDetection = useTransactionStore((state) => state.runAnomalyDetection);
   const currency = useSettingsStore((state) => state.currency);
+  const manuallyEditedTransactions = useMemo(
+    () =>
+      (pendingTransactions ?? []).filter((transaction) => manualCategoryEdits[transaction.id]),
+    [manualCategoryEdits, pendingTransactions]
+  );
 
   // Redirect if no transactions after loading (navigation is a side effect, OK in useEffect)
   useEffect(() => {
@@ -138,46 +125,70 @@ export default function ReviewPage() {
     field: keyof Transaction,
     value: string | number | Date | TransactionType | undefined,
   ) => {
+    if (field === "category") {
+      setManualCategoryEdits((current) => ({
+        ...current,
+        [id]: String(value),
+      }));
+    }
+
     setPendingTransactions((prev) => {
       if (!prev) return prev;
       return prev.map((t) => {
         if (t.id !== id) return t;
-        // Create new Transaction with updated field
-        return new Transaction(
-          field === 'id' ? (value as string) : t.id, // id
-          field === 'date' ? (value as Date) : t.date, // date
-          field === 'description' ? (value as string) : t.description, // description
-          field === 'amount' ? (value as number) : t.amount, // amount
-          field === 'type' ? (value as TransactionType) : t.type, // type
-          field === 'category' ? (Category.fromId(value as string) || t.category) : t.category, // category
-          field === 'balance' ? (value as number | undefined) : t.balance, // balance
-          field === 'merchant' ? (value as string | undefined) : t.merchant, // merchant
-          field === 'originalText' ? (value as string | undefined) : t.originalText, // originalText
-          field === 'budgetMonth' ? (value as string | undefined) : t.budgetMonth, // budgetMonth
-          field === 'categoryConfidence' ? (value as number | undefined) : t.categoryConfidence, // categoryConfidence
-          field === 'needsReview' ? (value as boolean | undefined) : t.needsReview, // needsReview
-          t.categorizedBy, // categorizedBy
-          t.sourceType, // sourceType
-          t.statementId, // statementId
-          t.cardIssuer, // cardIssuer
-          t.cardLastFour, // cardLastFour
-          t.cardHolder, // cardHolder
-          t.localCurrency, // localCurrency
-          t.originalCurrency, // originalCurrency
-          t.originalAmount, // originalAmount
-          t.isInternational, // isInternational
-          t.isAnomaly, // isAnomaly
-          t.anomalyTypes, // anomalyTypes
-          t.anomalyDetails, // anomalyDetails
-          t.anomalyDismissed, // anomalyDismissed
-          field === 'transactionSubType' ? (value as Transaction['transactionSubType']) : t.transactionSubType, // transactionSubType
-          field === 'suggestedCategory' ? (value as string | undefined) : t.suggestedCategory, // suggestedCategory
-        );
+        const updatedTransaction = Transaction.fromJSON({
+          ...t.toJSON(),
+          id: field === "id" ? (value as string) : t.id,
+          date:
+            field === "date"
+              ? (value as Date).toISOString()
+              : t.date.toISOString(),
+          description: field === "description" ? (value as string) : t.description,
+          amount: field === "amount" ? (value as number) : t.amount,
+          type: field === "type" ? (value as TransactionType) : t.type,
+          category:
+            field === "category"
+              ? (Category.fromId(value as string) || t.category).id
+              : t.category.id,
+          balance: field === "balance" ? (value as number | undefined) : t.balance,
+          merchant: field === "merchant" ? (value as string | undefined) : t.merchant,
+          originalText:
+            field === "originalText" ? (value as string | undefined) : t.originalText,
+          budgetMonth:
+            field === "budgetMonth" ? (value as string | undefined) : t.budgetMonth,
+          categoryConfidence:
+            field === "categoryConfidence"
+              ? (value as number | undefined)
+              : t.categoryConfidence,
+          needsReview:
+            field === "category"
+              ? false
+              : field === "needsReview"
+                ? (value as boolean | undefined)
+                : t.needsReview,
+          categorizedBy:
+            field === "category" ? CategorizedBy.Manual : t.categorizedBy,
+          transactionSubType:
+            field === "transactionSubType"
+              ? (value as Transaction["transactionSubType"])
+              : t.transactionSubType,
+          suggestedCategory:
+            field === "suggestedCategory"
+              ? (value as string | undefined)
+              : t.suggestedCategory,
+        });
+
+        return updatedTransaction;
       });
     });
   };
 
   const handleDeleteTransaction = (id: string) => {
+    setManualCategoryEdits((current) => {
+      const next = { ...current };
+      delete next[id];
+      return next;
+    });
     setPendingTransactions((prev) => prev?.filter((t) => t.id !== id) ?? prev);
   };
 
@@ -200,6 +211,13 @@ export default function ReviewPage() {
     if (pendingTransactions.length === 0) {
       alert("No transactions to import!");
       return;
+    }
+
+    for (const transaction of manuallyEditedTransactions) {
+      const decision = getMerchantRuleDecision(transaction);
+      if (decision) {
+        merchantRuleRepository.upsertRule(decision);
+      }
     }
 
     // Append new transactions to existing ones
@@ -462,9 +480,7 @@ export default function ReviewPage() {
                         <SelectContent>
                           {(() => {
                             // Sort categories alphabetically, put "Other" at bottom
-                            const categories = DEFAULT_CATEGORIES.filter(
-                              (c) => !c.isExcluded,
-                            );
+                            const categories = DEFAULT_CATEGORIES;
                             const otherCategory = categories.find(
                               (c) => c.id === "other",
                             );

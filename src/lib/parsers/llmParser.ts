@@ -2,7 +2,7 @@ import { ParsedStatement, Currency, LLMStatus, Transaction, SourceType } from "@
 import { useSettingsStore } from "@/lib/store/settingsStore";
 import { getBrowserClient } from "@/lib/llm/index";
 import { LLMProvider } from "@/lib/llm/types";
-import { debugLog, debugError } from "@/lib/utils/debug";
+import { debugLog, debugWarn, debugError } from "@/lib/utils/debug";
 import { processStatement } from "./pipeline";
 import { detectStatementType } from "./typeDetection";
 import {
@@ -376,7 +376,7 @@ export async function parseWithLLMExtended(
     onProgress?.("Parsing credit card statement...");
 
     // === NEW MULTI-PASS PIPELINE ===
-    console.log('[llmParser] Using NEW multi-pass pipeline for CC statement');
+    debugLog('llmParser', 'Using NEW multi-pass pipeline for CC statement');
     const pipelineResult = await processStatement(rawText, signal, typeResult.statementType);
     
     if (!pipelineResult.success || !pipelineResult.data) {
@@ -392,7 +392,7 @@ export async function parseWithLLMExtended(
       throw new Error(`Transaction validation failed: ${validationResult.errors.join(', ')}`);
     }
     if (validationResult.warnings.length > 0) {
-      console.warn('[LLM Parser] Transaction validation warnings:', validationResult.warnings);
+      debugWarn('llmParser', 'Transaction validation warnings:', validationResult.warnings);
     }
 
     // Map pipeline transactions to app Transaction model
@@ -476,7 +476,7 @@ export async function parseWithLLMExtended(
     onProgress?.("Parsing bank statement...");
 
     // === NEW MULTI-PASS PIPELINE ===
-    console.log('[llmParser] Using NEW multi-pass pipeline for bank statement');
+    debugLog('llmParser', 'Using NEW multi-pass pipeline for bank statement');
     const pipelineResult = await processStatement(rawText, signal, typeResult.statementType);
 
     if (!pipelineResult.success || !pipelineResult.data) {
@@ -492,7 +492,7 @@ export async function parseWithLLMExtended(
       throw new Error(`Transaction validation failed: ${validationResult.errors.join(', ')}`);
     }
     if (validationResult.warnings.length > 0) {
-      console.warn('[LLM Parser] Transaction validation warnings:', validationResult.warnings);
+      debugWarn('llmParser', 'Transaction validation warnings:', validationResult.warnings);
     }
 
     // Map pipeline transactions to app Transaction model

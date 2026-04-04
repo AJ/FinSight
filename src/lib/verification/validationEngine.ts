@@ -336,12 +336,12 @@ export function validateTransactions(data: unknown): ValidationResult<Transactio
 
   // Additional debugging for better visibility into parsing process
   if (errors.length > 0 || warnings.length > 0) {
-    console.log(`Validation Summary - Errors: ${errors.length}, Warnings: ${warnings.length}`);
+    debugLog('validation', `Validation Summary - Errors: ${errors.length}, Warnings: ${warnings.length}`);
     if (errors.length > 0) {
-      console.log('Errors:', errors);
+      debugLog('validation', 'Errors:', errors);
     }
     if (warnings.length > 0) {
-      console.log('Warnings:', warnings);
+      debugLog('validation', 'Warnings:', warnings);
     }
   }
 

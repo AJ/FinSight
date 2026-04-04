@@ -35,9 +35,6 @@ export function InlineCategoryEditor({
   // Filter categories by search term (show all categories, not filtered by type)
   const filteredCategories = useMemo(() => {
     const categories = DEFAULT_CATEGORIES.filter((c) => {
-      // Exclude "excluded" categories (like Investment)
-      if (c.isExcluded) return false;
-
       if (!searchTerm) return true;
 
       const search = searchTerm.toLowerCase();

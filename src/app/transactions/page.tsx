@@ -6,6 +6,7 @@ import { useState, useMemo, useCallback, useEffect, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
 import { useTransactionStore } from "@/lib/store/transactionStore";
 import { useSettingsStore } from "@/lib/store/settingsStore";
+import { debugError } from '@/lib/utils/debug';
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
@@ -41,6 +42,7 @@ import { formatCurrency } from "@/lib/currencyFormatter";
 import { getCategoryDisplay } from "@/components/transactions/CategoryBadge";
 import { InlineCategoryEditor } from "@/components/transactions/InlineCategoryEditor";
 import { DEFAULT_CATEGORIES } from "@/lib/categorization/categories";
+import { Category } from "@/models";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { ANOMALY_LABELS } from "@/lib/anomaly";
@@ -145,39 +147,27 @@ function TransactionsPageContent() {
     const toastId = toast.loading(`Categorizing ${txns.length} transactions...`);
 
     try {
-      const response = await fetch("/api/categorize", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          transactions: txns.map((t) => ({
-            id: t.id,
-            description: t.description,
-            amount: t.amount,
-            type: t.type,
-          })),
-          provider: llmProvider,
-          baseUrl: llmServerUrl,
-          model: llmModel,
-        }),
+      const { categorizeTransactions } = await import("@/lib/categorization/aiCategorizer");
+      const results = await categorizeTransactions(txns, {
+        provider: llmProvider,
+        baseUrl: llmServerUrl,
+        model: llmModel || undefined,
       });
-
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        throw new Error(errorData.error || "Categorization failed");
-      }
-
-      const data = await response.json();
-      const results = data.results || [];
 
       let reviewCount = 0;
       for (const result of results) {
         const needsReview = result.confidence < 0.85;
         if (needsReview) reviewCount++;
         useTransactionStore.getState().updateTransaction(result.id, {
-          category: result.category,
+          category: Category.fromId(result.category) ?? Category.fromId(Category.DEFAULT_ID),
           categoryConfidence: result.confidence,
           needsReview,
-          categorizedBy: result.source === "ai" ? CategorizedBy.AI : CategorizedBy.Keyword,
+          categorizedBy:
+            result.source === "rule"
+              ? CategorizedBy.Rule
+              : result.source === "ai"
+                ? CategorizedBy.AI
+                : CategorizedBy.Keyword,
         });
       }
 
@@ -186,7 +176,7 @@ function TransactionsPageContent() {
         description: `${results.length} categorized. ${reviewCount} need review.`
       });
     } catch (error) {
-      console.error("[Categorize]", error);
+      debugError('Categorize', error);
       toast.error("Categorization failed", {
         id: toastId,
         description: error instanceof Error ? error.message : "Please try again"
@@ -643,4 +633,3 @@ export default function TransactionsPage() {
     </Suspense>
   );
 }
-

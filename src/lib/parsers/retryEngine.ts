@@ -104,9 +104,9 @@ export async function runWithRetry<T>(
 
       // Log the normalized text sent to LLM (for debugging)
       if (attempt === 1 && (config.stage === 'cc_transactions' || config.stage === 'bank_transactions')) {
-        console.log('[RetryEngine] Normalized text sent to LLM for transaction extraction:');
-        console.log(normalizedText);
-        console.log('--- END NORMALIZED TEXT ---');
+        debugLog(config.stage, 'Normalized text sent to LLM for transaction extraction:');
+        debugLog(config.stage, normalizedText);
+        debugLog(config.stage, '--- END NORMALIZED TEXT ---');
       }
 
       const rawResponse = await callLLM(prompt, callOptions);
@@ -122,25 +122,22 @@ export async function runWithRetry<T>(
         if (config.stage === 'cc_transactions' || config.stage === 'bank_transactions') {
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           const anyParsed = parsed as any;
-          console.log('[RetryEngine] Parsed transaction response keys:', Object.keys(anyParsed));
+          debugLog(config.stage, 'Parsed transaction response keys:', Object.keys(anyParsed));
           if (anyParsed?._debug) {
-            console.log('[RetryEngine] Transaction extraction debug:', anyParsed._debug);
+            debugLog(config.stage, 'Transaction extraction debug:', anyParsed._debug);
             lastDebugInfo = anyParsed._debug;
             // Strip _debug before validation
             delete anyParsed._debug;
           } else {
-            console.log('[RetryEngine] No _debug field in response');
+            debugLog(config.stage, 'No _debug field in response');
             lastDebugInfo = undefined;
           }
         }
 
         // Log raw summary response for debugging (only on first parse attempt)
-        // DEBUG: Commented out to avoid leaking statement content
-        /*
         if (config.stage === 'cc_summary' && attempt === 1) {
-          console.log('[RetryEngine cc_summary] Raw LLM response:', rawResponse);
+          debugLog(config.stage, 'Raw LLM response:', rawResponse);
         }
-        */
       } catch (parseErr: unknown) {
         errors.length = 0;
         errors.push(`Invalid JSON: ${parseErr instanceof Error ? parseErr.message : 'Unknown error'}`);

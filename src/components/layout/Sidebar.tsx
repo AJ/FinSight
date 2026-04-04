@@ -19,6 +19,7 @@ import {
 } from 'lucide-react';
 import { useUpload } from './UploadContext';
 import { checkLLMConnection, subscribeToLLMConnection } from '@/lib/store/llmConnectionStore';
+import { useOnboardingStore } from '@/lib/store/onboardingStore';
 
 const navItems = [
   { href: '/', label: 'Dashboard', icon: LayoutDashboard },
@@ -36,22 +37,26 @@ const bottomItems = [
 export function Sidebar() {
   const [collapsed, setCollapsed] = useState(false);
   const [llmConnected, setLlmConnected] = useState<boolean | null>(null); // null = checking
+  const hasCompletedOnboarding = useOnboardingStore((state) => state.hasCompletedOnboarding);
   const pathname = usePathname();
   const router = useRouter();
   const { openUpload } = useUpload();
 
   // Subscribe to LLM connection status (uses centralized cache)
+  // Only check if user has completed onboarding
   useEffect(() => {
+    if (!hasCompletedOnboarding) return;
+
     // Check connection on mount (uses cache + deduplication)
     checkLLMConnection().catch(() => {
       // Error already handled by store
     });
-    
+
     // Subscribe to status changes
     return subscribeToLLMConnection((status) => {
       setLlmConnected(status?.connected ?? false);
     });
-  }, []);
+  }, [hasCompletedOnboarding]);
 
   const isActive = (href: string) => {
     if (href === '/') return pathname === '/';

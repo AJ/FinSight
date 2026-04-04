@@ -126,7 +126,7 @@ async function processCreditCard(normalizedText: string, signal?: AbortSignal): 
         signal,
         onValidationFailure: (parsed) => {
         const s = parsed as CCSummary;
-        console.log('[RetryEngine cc_summary] Validation failed. LLM returned:', {
+        debugLog('cc_summary', 'Validation failed. LLM returned:', {
           statementDate: s?.statementDate,
           paymentDueDate: s?.paymentDueDate,
           totalDue: s?.totalDue,
@@ -203,7 +203,7 @@ async function processBank(normalizedText: string, signal?: AbortSignal): Promis
         signal,
         onValidationFailure: (parsed) => {
         const s = parsed as BankSummary;
-        console.log('[RetryEngine bank_summary] Validation failed. LLM returned:', {
+        debugLog('bank_summary', 'Validation failed. LLM returned:', {
           statementDate: s?.statementDate,
           openingBalance: s?.openingBalance,
           closingBalance: s?.closingBalance,
@@ -261,7 +261,7 @@ async function runTransactionExtraction(
         signal,
         onValidationFailure: (parsed) => {
           const t = parsed as TransactionsOutput;
-          console.log(`[RetryEngine ${stage}] Validation failed. LLM returned:`, {
+          debugLog(stage, `Validation failed. LLM returned:`, {
             transactionCount: t?.transactions?.length,
           });
         }
@@ -284,7 +284,7 @@ async function runTransactionExtraction(
         signal,
         onValidationFailure: (parsed) => {
           const t = parsed as TransactionsOutput;
-          console.log(`[RetryEngine ${stage}] Validation failed. LLM returned:`, {
+          debugLog(stage, `Validation failed. LLM returned:`, {
             transactionCount: t?.transactions?.length,
           });
         }
@@ -319,7 +319,7 @@ async function runTransactionExtraction(
         signal,
         onValidationFailure: (parsed) => {
           const t = parsed as TransactionsOutput;
-          console.log(`[RetryEngine ${stage} chunk ${chunk.index + 1}/${chunk.totalChunks}] Validation failed. LLM returned:`, {
+          debugLog(stage, `chunk ${chunk.index + 1}/${chunk.totalChunks} Validation failed. LLM returned:`, {
             transactionCount: t?.transactions?.length,
           });
         }

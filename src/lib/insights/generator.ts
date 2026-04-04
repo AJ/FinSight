@@ -24,7 +24,7 @@ import { getBrowserClient } from '@/lib/llm/index';
 import { Insight, InsightsGenerationOptions, TransactionAnalytics } from './types';
 import { buildInsightsPrompt, parseInsightsResponse } from './prompts';
 import { Currency } from '@/types';
-import { debugLog, debugSensitive } from '@/lib/utils/debug';
+import { debugLog, debugSensitive, debugError } from '@/lib/utils/debug';
 
 /**
  * Generate spending insights from transaction analytics.
@@ -79,8 +79,8 @@ export async function generateInsights(
 
     return insights;
   } catch (error) {
-    console.error('[Insights] ========== GENERATION FAILED ==========');
-    console.error('[Insights] Error:', error);
+    debugError('Insights', '========== GENERATION FAILED ==========');
+    debugError('Insights', 'Error:', error);
     throw new Error(
       error instanceof Error
         ? `Failed to generate insights: ${error.message}`

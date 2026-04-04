@@ -15,6 +15,7 @@ import type { CCSummary, BankSummary } from '@/lib/parsers/extractSummary';
 import type { TransactionsOutput } from '@/lib/parsers/extractTransactions';
 import type { RewardsOutput } from '@/lib/parsers/extractRewards';
 import { Transaction } from '@/models/Transaction';
+import { debugLog } from '@/lib/utils/debug';
 
 /**
  * Simple string similarity comparison (Dice coefficient).
@@ -83,12 +84,12 @@ function deduplicateTransactions(transactions: Transaction[]): {
 
   // Log potential duplicates for debugging
   if (potentialDuplicates.length > 0) {
-    console.log('[MergeEngine] Found potential duplicates (keeping all transactions):');
+    debugLog('mergeEngine', 'Found potential duplicates (keeping all transactions):');
     potentialDuplicates.forEach(({ tx, matchedWith }, idx) => {
-      console.log(`  Potential Duplicate ${idx + 1}:`);
-      console.log(`    Tx1: ${tx.date} | ${tx.description} | ₹${tx.amount} | ${tx.type}`);
-      console.log(`    Tx2: ${matchedWith.date} | ${matchedWith.description} | ₹${matchedWith.amount} | ${matchedWith.type}`);
-      console.log(`    Similarity: ${compareTwoStrings(tx.description.toLowerCase(), matchedWith.description.toLowerCase()).toFixed(2)}`);
+      debugLog('mergeEngine', `  Potential Duplicate ${idx + 1}:`);
+      debugLog('mergeEngine', `    Tx1: ${tx.date} | ${tx.description} | ₹${tx.amount} | ${tx.type}`);
+      debugLog('mergeEngine', `    Tx2: ${matchedWith.date} | ${matchedWith.description} | ₹${matchedWith.amount} | ${matchedWith.type}`);
+      debugLog('mergeEngine', `    Similarity: ${compareTwoStrings(tx.description.toLowerCase(), matchedWith.description.toLowerCase()).toFixed(2)}`);
     });
   }
 
@@ -207,14 +208,14 @@ export function mergeOutputs(
 
   // Step 1: Deduplicate transactions
   const rawTransactions: Transaction[] = (txData?.transactions as unknown as Transaction[]) ?? [];
-  
+
   // DEBUG: Log transaction count before deduplication
-  console.log(`[MergeEngine] ${statementType}: ${rawTransactions.length} transactions from LLM`);
-  
+  debugLog('mergeEngine', `${statementType}: ${rawTransactions.length} transactions from LLM`);
+
   const { deduped, duplicatesRemoved } = deduplicateTransactions(rawTransactions);
 
   // DEBUG: Log transaction count after deduplication
-  console.log(`[MergeEngine] ${statementType}: ${deduped.length} transactions after deduplication (removed ${duplicatesRemoved} duplicates)`);
+  debugLog('mergeEngine', `${statementType}: ${deduped.length} transactions after deduplication (removed ${duplicatesRemoved} duplicates)`);
 
   if (duplicatesRemoved > 0) {
     warnings.push(`Deduplication removed ${duplicatesRemoved} near-duplicate transaction(s)`);

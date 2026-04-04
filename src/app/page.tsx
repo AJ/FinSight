@@ -28,6 +28,7 @@ import { format } from 'date-fns';
 import { useUpload } from '@/components/layout/UploadContext';
 import { toast } from 'sonner';
 import { checkLLMConnection } from '@/lib/store/llmConnectionStore';
+import { useOnboardingStore } from '@/lib/store/onboardingStore';
 
 // Currency symbol icon component
 function CurrencySymbol({ symbol }: { symbol: string }) {
@@ -57,9 +58,10 @@ export default function DashboardPage() {
 
   // Check LLM connection and show toast if offline (only once)
   const [hasCheckedLLM, setHasCheckedLLM] = useState(false);
+  const hasCompletedOnboarding = useOnboardingStore((state) => state.hasCompletedOnboarding);
 
   useEffect(() => {
-    if (hasCheckedLLM) return;
+    if (hasCheckedLLM || !hasCompletedOnboarding) return;
 
     const checkConnection = async () => {
       try {
@@ -88,7 +90,7 @@ export default function DashboardPage() {
     // Delay check slightly to avoid race conditions
     const timer = setTimeout(checkConnection, 500);
     return () => clearTimeout(timer);
-  }, [hasCheckedLLM]);
+  }, [hasCheckedLLM, hasCompletedOnboarding]);
 
   // Calculate stats
   const stats = useMemo(() => {

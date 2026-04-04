@@ -12,12 +12,12 @@ import {
 } from "@/lib/parsers/llmParser";
 import { AbortManager } from '@/lib/utils/AbortManager';
 import { subscribeToLLMConnection } from '@/lib/store/llmConnectionStore';
-import { normalizeMerchantName, categorizeTransaction } from "@/lib/categorizer";
-import { DEFAULT_CATEGORIES } from "@/lib/categorization/categories";
+import { normalizeMerchantName } from "@/lib/categorizer";
+import { categorizeByKeywords } from "@/lib/categorization/aiCategorizer";
 import { useSettingsStore } from "@/lib/store/settingsStore";
 import { useChatStore } from "@/lib/store/chatStore";
 import { useCreditCardStore } from "@/lib/store/creditCardStore";
-import { LLMStatus, ParsedStatement, Currency, Transaction, Category } from "@/types";
+import { LLMStatus, ParsedStatement, Currency, Transaction, CategorizedBy } from "@/types";
 import type { CCSummary } from "@/lib/parsers/extractSummary";
 import type { VerificationReport, CCVerificationReport } from "@/lib/verification/verificationEngine";
 import { useRouter } from "next/navigation";
@@ -36,7 +36,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Label } from "@/components/ui/label";
-import { debugLog } from "@/lib/utils/debug";
+import { debugLog, debugWarn, debugError } from "@/lib/utils/debug";
 
 const MAX_PASSWORD_ATTEMPTS = 3;
 
@@ -141,8 +141,9 @@ export function FileProcessor({ onSuccess, onProcessingChange }: FileProcessorPr
           "Try re-uploading with a different AI model, or check the browser console for details.",
         duration: 10000,
       });
-      console.warn(
-        `[Parser] ${parsed.failedChunks.length} chunks failed to parse. Transactions from these sections are missing:`,
+      debugWarn(
+        'parser',
+        `${parsed.failedChunks.length} chunks failed to parse. Transactions from these sections are missing:`,
         parsed.failedChunks
       );
     }
@@ -160,39 +161,33 @@ export function FileProcessor({ onSuccess, onProcessingChange }: FileProcessorPr
       setCurrency(detectedCurrency);
     }
 
-    // Categorize transactions using keyword matching
+    // Preserve existing categorization from prior steps (CSV/XLSX AI or parser output).
+    // Only fall back when categorization is genuinely missing.
     const categorized = parsed.transactions.map((txn) => {
-      const category = categorizeTransaction(txn.description, txn.amount, DEFAULT_CATEGORIES);
-      return new Transaction(
-        txn.id,
-        txn.date,
-        txn.description,
-        txn.amount,
-        txn.type,
-        Category.fromId(category) ?? Category.fromId(Category.DEFAULT_ID)!,
-        txn.balance,
-        normalizeMerchantName(txn.description), // merchant
-        txn.originalText,
-        txn.budgetMonth,
-        txn.categoryConfidence,
-        txn.needsReview,
-        txn.categorizedBy,
-        txn.sourceType,
-        txn.statementId,
-        txn.cardIssuer,
-        txn.cardLastFour,
-        txn.cardHolder,
-        txn.localCurrency,
-        txn.originalCurrency,
-        txn.originalAmount,
-        txn.isInternational,
-        txn.isAnomaly,
-        txn.anomalyTypes,
-        txn.anomalyDetails,
-        txn.anomalyDismissed,
-        txn.transactionSubType,
-        txn.suggestedCategory,
-      );
+      const hasExistingCategorization =
+        txn.category.id !== "other" ||
+        txn.categorizedBy !== undefined ||
+        txn.categoryConfidence !== undefined ||
+        txn.needsReview !== undefined;
+
+      const fallbackCategory = categorizeByKeywords({
+        description: txn.description,
+        amount: txn.amount,
+        type: txn.type,
+      });
+
+      return Transaction.fromJSON({
+        ...txn.toJSON(),
+        merchant: normalizeMerchantName(txn.description),
+        category: hasExistingCategorization ? txn.category.id : fallbackCategory,
+        categoryConfidence: hasExistingCategorization
+          ? txn.categoryConfidence
+          : 0.3,
+        needsReview: hasExistingCategorization ? txn.needsReview : true,
+        categorizedBy: hasExistingCategorization
+          ? txn.categorizedBy
+          : CategorizedBy.Keyword,
+      });
     });
 
     // Store for review page
@@ -350,13 +345,13 @@ export function FileProcessor({ onSuccess, onProcessingChange }: FileProcessorPr
           {
             provider: settings.llmProvider,
             baseUrl: settings.llmServerUrl,
-            model: settings.llmModel || '',
+            model: settings.llmModel || undefined,
           }
         );
         // Apply categories to transactions
         parsed.transactions = categorizer.applyCategorizationResults(parsed.transactions, categories);
       } catch (e) {
-        console.error('[FileProcessor] Categorization failed:', e);
+        debugError('FileProcessor', 'Categorization failed:', e);
         // Continue without categories - keyword fallback already applied by parser
       }
       if (wasCancelledRef.current || abortController.signal.aborted) {
@@ -383,13 +378,13 @@ export function FileProcessor({ onSuccess, onProcessingChange }: FileProcessorPr
           {
             provider: settings.llmProvider,
             baseUrl: settings.llmServerUrl,
-            model: settings.llmModel || '',
+            model: settings.llmModel || undefined,
           }
         );
         // Apply categories to transactions
         parsed.transactions = categorizer.applyCategorizationResults(parsed.transactions, categories);
       } catch (e) {
-        console.error('[FileProcessor] Categorization failed:', e);
+        debugError('FileProcessor', 'Categorization failed:', e);
         // Continue without categories - keyword fallback already applied by parser
       }
       if (wasCancelledRef.current || abortController.signal.aborted) {

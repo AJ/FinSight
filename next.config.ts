@@ -6,6 +6,8 @@ const nextConfig: NextConfig = {
   turbopack: {
     root: __dirname,
   },
+  // Allow access via IP address during development
+  allowedDevOrigins: ['127.0.0.1', 'localhost'],
   // API route body size limits (10MB max)
   experimental: {
     serverActions: {

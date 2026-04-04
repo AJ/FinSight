@@ -2,6 +2,7 @@ import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import { Currency, Settings } from "@/types";
 import { LLMProvider, DEFAULT_URLS } from "@/lib/llm/types";
+import { debugWarn } from '@/lib/utils/debug';
 
 /* ============================================================
    URL Validation for LLM Server Connections (Ollama, LM Studio)
@@ -99,7 +100,7 @@ export function confirmRemoteUrl(url: string): void {
     localStorage.setItem('confirmedRemoteLlmUrls', JSON.stringify([...confirmed]));
   } catch {
     // localStorage might be unavailable or full
-    console.warn('[SettingsStore] Could not save confirmed remote URL');
+    debugWarn('SettingsStore', 'Could not save confirmed remote URL');
   }
 }
 

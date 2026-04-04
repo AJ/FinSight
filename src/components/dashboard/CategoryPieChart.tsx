@@ -8,6 +8,7 @@ import { Transaction, Category, CategoryType } from '@/types';
 import { useSettingsStore } from '@/lib/store/settingsStore';
 import { formatCurrency } from '@/lib/currencyFormatter';
 import { DEFAULT_CATEGORIES } from '@/lib/categorization/categories';
+import { debugLog } from '@/lib/utils/debug';
 
 ChartJS.register(ArcElement, Tooltip, Legend);
 
@@ -51,14 +52,14 @@ export function CategoryPieChart({ transactions, categories }: CategoryPieChartP
       byCategory[categoryId] = (byCategory[categoryId] || 0) + amount;
     });
 
-    console.log('[CategoryPieChart] By category:', byCategory);
+    debugLog('categoryChart', 'By category:', byCategory);
 
     // Sort by amount and get top categories
     const sortedCategories = Object.entries(byCategory)
       .sort(([, a], [, b]) => b - a)
       .slice(0, 8); // Top 8 categories
 
-    console.log('[CategoryPieChart] Sorted:', sortedCategories);
+    debugLog('categoryChart', 'Sorted:', sortedCategories);
 
     // Calculate total for percentage
     const total = sortedCategories.reduce((sum, [, amount]) => sum + amount, 0);
@@ -77,8 +78,8 @@ export function CategoryPieChart({ transactions, categories }: CategoryPieChartP
       backgroundColors.push(catInfo.color || '#6b7280');
     }
 
-    console.log('[CategoryPieChart] Labels:', labels);
-    console.log('[CategoryPieChart] Colors:', backgroundColors);
+    debugLog('categoryChart', 'Labels:', labels);
+    debugLog('categoryChart', 'Colors:', backgroundColors);
 
     return {
       labels,

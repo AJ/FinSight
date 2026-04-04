@@ -1,10 +1,40 @@
 import { DEFAULT_CATEGORIES } from "./categories";
+import { debugLog } from '@/lib/utils/debug';
+import { normalizeMerchantName } from "@/lib/categorizer";
+import { normalizeTransactionType } from '@/models/TransactionType';
+import type { SourceType } from "@/types";
+import type { TransactionSubType } from "@/models/Transaction";
+import type { CategorizationSource } from "./types";
 
 /**
  * System prompt for transaction categorization.
  * Instructs the LLM on available categories and output format.
  */
-export const CATEGORIZATION_SYSTEM_PROMPT = `You are a financial transaction categorization assistant. Your task is to categorize transactions into the most appropriate category based on the description, amount, and transaction type.
+const CATEGORY_GUIDANCE: Record<string, string> = {
+  groceries: "Supermarkets, grocery stores, fresh produce, food staples, and routine household essentials.",
+  dining: "Restaurants, cafes, coffee shops, bars, takeout, and food delivery.",
+  transportation: "Fuel, public transit, ride-hailing, taxi, parking, tolls, and vehicle upkeep.",
+  utilities: "Electricity, water, gas, internet, mobile, phone, and other utility bills.",
+  housing: "Rent, mortgage, housing maintenance, HOA, and property-related costs.",
+  healthcare: "Pharmacy, doctor, clinic, hospital, medical treatment, and health-related spending.",
+  entertainment: "Streaming, movies, games, concerts, subscriptions, and leisure spending.",
+  shopping: "Retail, e-commerce, electronics, apparel, home goods, and general shopping.",
+  income: "Salary, payroll, freelance income, reimbursements treated as income, and money earned from work.",
+  interest: "Interest credited by a bank or financial institution.",
+  cashback: "Cashback, reward credits, rebates, gift voucher credits, and similar incentive credits.",
+  transfer: "Money moved between accounts or people, including bank transfers and peer-to-peer transfers.",
+  bills: "Credit-card bill payments, loan repayments, EMI, and other bill-payment transactions.",
+  investment: "Brokerage, securities, mutual funds, crypto, dividends, or investment-related flows.",
+  insurance: "Insurance premiums and policy-related payments.",
+  education: "Tuition, courses, books, training, tutoring, and education-related payments.",
+  travel: "Flights, hotels, lodging, rental cars, and trip-related spending.",
+  fees: "Bank fees, service fees, annual fees, processing fees, and similar charges.",
+  taxes: "Tax, GST, VAT, IGST, SGST, duty, cess, and similar tax-related debits.",
+  "interest-expense": "Interest charged as an expense, finance charges, overdue interest, and penal interest.",
+  other: "Use this only when the merchant or purpose is genuinely unclear. Prefer other over guessing.",
+};
+
+export const CATEGORIZATION_SYSTEM_PROMPT = `You are a financial transaction categorization assistant. Your task is to categorize transactions into the most appropriate category based on the description, merchant context, amount, direction, source type, and transaction subtype.
 
 STRICT CATEGORY LIST - You MUST use ONLY these exact category IDs (do not invent new ones):
 ${DEFAULT_CATEGORIES.map((c) => `"${c.id}"`).join(", ")}
@@ -19,15 +49,16 @@ Rules:
    - Below 0.5: Uncertain (use "other" category)
 4. If truly uncertain, use "other" with confidence around 0.4
 5. The "direction" field indicates credit (money in) or debit (money out)
+6. Use "merchant" as the normalized merchant clue when provided; it may be more informative than the raw description
+7. Use "sourceType" and "transactionSubType" as strong hints when present
+8. If the merchant is low-signal and the transaction is ambiguous, prefer "other" with low confidence instead of overconfident guessing
+9. Do NOT infer category from amount alone or from unrelated numeric tokens
+10. If a learned merchant mapping is provided in future prompts, treat it as a strong hint, but still return one of the allowed category IDs
 
 Category guidance:
-- "income": Salary, wages, freelance payments (money earned from work)
-- "transfer": NEFT, IMPS, RTGS, bank transfers, Zelle, Venmo (money moved between accounts/people)
-- "interest": Bank interest credits
-- "bills": Credit card payments, loan payments, EMI, bill payments
-- "insurance": Insurance premium payments`;
-
-import { normalizeTransactionType } from '@/models/TransactionType';
+${Object.entries(CATEGORY_GUIDANCE)
+  .map(([categoryId, guidance]) => `- "${categoryId}": ${guidance}`)
+  .join("\n")}`;
 
 /**
  * Build the user prompt with transaction data.
@@ -35,13 +66,36 @@ import { normalizeTransactionType } from '@/models/TransactionType';
 export type CategorizationTxnType = "credit" | "debit" | "income" | "expense";
 
 export function buildCategorizationPrompt(
-  transactions: { id: string; description: string; amount: number; type: CategorizationTxnType }[]
+  transactions: {
+    id: string;
+    description: string;
+    amount: number;
+    type: CategorizationTxnType;
+    merchant?: string;
+    sourceType?: SourceType;
+    transactionSubType?: TransactionSubType;
+  }[]
 ): string {
   const txnList = transactions
-    .map(
-      (t) =>
-        `{"id": "${t.id}", "description": "${escapeJson(t.description)}", "amount": ${t.amount}, "direction": "${normalizeTransactionType(t.type) ?? 'debit'}"}`
-    )
+    .map((t) => {
+      const payload: Record<string, string | number> = {
+        id: t.id,
+        description: t.description,
+        merchant: (t.merchant && t.merchant.trim()) || normalizeMerchantName(t.description),
+        amount: t.amount,
+        direction: normalizeTransactionType(t.type) ?? "debit",
+      };
+
+      if (t.sourceType) {
+        payload.sourceType = t.sourceType;
+      }
+
+      if (t.transactionSubType) {
+        payload.transactionSubType = t.transactionSubType;
+      }
+
+      return JSON.stringify(payload);
+    })
     .join(",\n  ");
 
   return `${CATEGORIZATION_SYSTEM_PROMPT}
@@ -59,23 +113,11 @@ Important: Return ONLY the JSON array, nothing else.`;
 }
 
 /**
- * Escape special characters for JSON strings.
- */
-function escapeJson(str: string): string {
-  return str
-    .replace(/\\/g, "\\\\")
-    .replace(/"/g, '\\"')
-    .replace(/\n/g, "\\n")
-    .replace(/\r/g, "\\r")
-    .replace(/\t/g, "\\t");
-}
-
-/**
  * Parse the LLM response into structured categorization results.
  */
 export function parseCategorizationResponse(
   response: string
-): { id: string; category: string; confidence: number; source: "ai" | "keyword" }[] {
+): { id: string; category: string; confidence: number; source: CategorizationSource }[] {
   // Try direct parse
   try {
     const parsed = JSON.parse(response);
@@ -135,7 +177,7 @@ export function parseCategorizationResponse(
  */
 function normalizeResult(
   result: unknown
-): { id: string; category: string; confidence: number; source: "ai" | "keyword" } {
+): { id: string; category: string; confidence: number; source: CategorizationSource } {
   const obj = result as Record<string, unknown>;
   const rawCategory = String(obj.category || "other");
   const rawConfidence = obj.confidence;
@@ -167,7 +209,7 @@ function normalizeResult(
  * Validate a categorization result.
  */
 function isValidResult(
-  result: { id: string; category: string; confidence: number; source: "ai" | "keyword" }
+  result: { id: string; category: string; confidence: number; source: CategorizationSource }
 ): boolean {
   const validCategories = DEFAULT_CATEGORIES.map((c) => c.id);
   return (
@@ -241,19 +283,19 @@ export function normalizeCategoryId(categoryId: string): string {
 
   // Check aliases
   if (CATEGORY_ALIASES[normalized]) {
-    console.log(`[Categorize] Mapped alias "${categoryId}" → "${CATEGORY_ALIASES[normalized]}"`);
+    debugLog('categorize', `Mapped alias "${categoryId}" → "${CATEGORY_ALIASES[normalized]}"`);
     return CATEGORY_ALIASES[normalized];
   }
 
   // Check for partial matches in aliases
   for (const [alias, canonical] of Object.entries(CATEGORY_ALIASES)) {
     if (normalized.includes(alias) || alias.includes(normalized)) {
-      console.log(`[Categorize] Mapped partial alias "${categoryId}" → "${canonical}"`);
+      debugLog('categorize', `Mapped partial alias "${categoryId}" → "${canonical}"`);
       return canonical;
     }
   }
 
   // Unknown category
-  console.log(`[Categorize] Unknown category "${categoryId}", using "other"`);
+  debugLog('categorize', `Unknown category "${categoryId}", using "other"`);
   return "other";
 }

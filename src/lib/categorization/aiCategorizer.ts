@@ -1,26 +1,22 @@
-import { Transaction } from "@/types";
+import { Transaction, Category, CategorizedBy } from "@/types";
 import { getBrowserClient } from "@/lib/llm/index";
 import { LLMProvider } from "@/lib/llm/types";
+import { getMerchantRuleInput } from "./merchantRules";
+import { merchantRuleRepository } from "@/lib/store/merchantRuleStore";
 import {
-  buildCategorizationPrompt,
-  parseCategorizationResponse,
-} from "./prompts";
-import { DEFAULT_CATEGORIES, getCategoryById } from "./categories";
+  batchTransactions,
+  categorizeByKeywords,
+  runCategorizationCore,
+  shouldSkipAICategorization,
+} from "./core";
+import {
+  CategorizationProgress,
+  CategorizationResult,
+  CategorizationTransactionInput,
+  toCategorizationInput,
+} from "./types";
 
-const BATCH_SIZE = 20;
-
-export interface CategorizationResult {
-  id: string;
-  category: string;
-  confidence: number;
-  source: "ai" | "keyword";
-}
-
-export interface CategorizationProgress {
-  total: number;
-  processed: number;
-  current: number;
-}
+export type { CategorizationProgress, CategorizationResult } from "./types";
 
 /**
  * Options for categorization.
@@ -28,28 +24,50 @@ export interface CategorizationProgress {
 export interface CategorizationOptions {
   provider: LLMProvider;
   baseUrl: string;
-  model: string;
+  model?: string;
   onProgress?: (progress: CategorizationProgress) => void;
 }
 
-/**
- * Split transactions into batches for LLM processing.
- */
-export function batchTransactions(
-  transactions: Transaction[],
-  batchSize: number = BATCH_SIZE
-): Transaction[][] {
-  const batches: Transaction[][] = [];
-  for (let i = 0; i < transactions.length; i += batchSize) {
-    batches.push(transactions.slice(i, i + batchSize));
-  }
-  return batches;
+function toPromptInput(transaction: Transaction): CategorizationTransactionInput {
+  return toCategorizationInput(transaction);
 }
 
 /**
- * Categorize transactions using the LLM.
- * Returns results with confidence scores.
- * Note: Transfers are not categorized (they don't have income/expense semantics).
+ * @deprecated Falls back to server-side categorization via /api/categorize.
+ * This API route is deprecated. Remove this function when deleting the API route.
+ */
+async function categorizeTransactionsViaApi(
+  transactions: CategorizationTransactionInput[],
+  options: CategorizationOptions
+): Promise<CategorizationResult[]> {
+  if (transactions.length === 0) {
+    return [];
+  }
+
+  const response = await fetch("/api/categorize", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      transactions,
+      provider: options.provider,
+      baseUrl: options.baseUrl,
+      model: options.model,
+    }),
+  });
+
+  if (!response.ok) {
+    const data = await response.json().catch(() => ({}));
+    throw new Error(data.error || "Categorization failed");
+  }
+
+  const data = await response.json();
+  return Array.isArray(data.results) ? data.results : [];
+}
+
+/**
+ * Categorize transactions using learned rules first, then the LLM.
  */
 export async function categorizeTransactions(
   transactions: Transaction[],
@@ -59,187 +77,105 @@ export async function categorizeTransactions(
     return [];
   }
 
-  // Filter out excluded categories (transfers, investments) - they don't need categorization
-  const categorizableTransactions = transactions.filter(t => !t.isExcluded);
+  const inputs = transactions.map(toPromptInput);
+  const eligibleInputs = inputs.filter((transaction) => !shouldSkipAICategorization(transaction));
 
-  if (categorizableTransactions.length === 0) {
+  if (eligibleInputs.length === 0) {
     return [];
   }
 
-  const client = getBrowserClient(options.provider);
-  const batches = batchTransactions(categorizableTransactions);
-  const allResults: CategorizationResult[] = [];
+  const ruleResults: CategorizationResult[] = [];
+  const remainingInputs: CategorizationTransactionInput[] = [];
 
-  for (let i = 0; i < batches.length; i++) {
-    const batch = batches[i];
-
-    // Report progress
-    options.onProgress?.({
-      total: categorizableTransactions.length,
-      processed: allResults.length,
-      current: batch.length,
-    });
-
-    // Build prompt for this batch
-    const batchData = batch.map((t) => ({
-      id: t.id,
-      description: t.description,
-      amount: t.amount,
-      type: t.type as "credit" | "debit",
-    }));
-
-    const prompt = buildCategorizationPrompt(batchData);
-
-    try {
-      // Call LLM (use model's default temperature)
-      const response = await client.generate(
-        options.baseUrl,
-        options.model,
-        prompt
-      );
-
-      // Parse response
-      const results = parseCategorizationResponse(response);
-
-      // Match results to original transactions
-      for (const txn of batch) {
-        const result = results.find((r) => r.id === txn.id);
-        if (result) {
-          allResults.push({
-            ...result,
-            source: "ai",
-          });
-        } else {
-          // Fallback: use keyword matching
-          const fallbackCategory = categorizeByKeywords(txn);
-          allResults.push({
-            id: txn.id,
-            category: fallbackCategory,
-            confidence: 0.3,
-          source: "keyword",
-          });
-        }
-      }
-    } catch (error) {
-      console.error(`[Categorizer] Batch ${i + 1} failed:`, error);
-      // Fallback to keyword matching for entire batch
-      for (const txn of batch) {
-        const fallbackCategory = categorizeByKeywords(txn);
-        allResults.push({
-          id: txn.id,
-          category: fallbackCategory,
-          confidence: 0.3,
-          source: "keyword",
-          });
-      }
-    }
-  }
-
-  // Final progress report
-  options.onProgress?.({
-    total: categorizableTransactions.length,
-    processed: categorizableTransactions.length,
-    current: 0,
-  });
-
-  return allResults;
-}
-
-/**
- * Fallback keyword-based categorization.
- */
-export function categorizeByKeywords(transaction: { description: string; isExcluded?: boolean; category?: { type: string } }): string {
-  const description = transaction.description.toLowerCase();
-
-  // Excluded categories (transfers, investments) don't need expense categorization
-  if (transaction.isExcluded) {
-    return "transfer";
-  }
-
-  // Find matching category by keywords
-  for (const category of DEFAULT_CATEGORIES) {
-    // Skip excluded categories
-    if (category.isExcluded) {
+  for (const transaction of transactions) {
+    const input = toPromptInput(transaction);
+    if (shouldSkipAICategorization(input)) {
       continue;
     }
 
-    for (const keyword of category.keywords) {
-      if (description.includes(keyword.toLowerCase())) {
-        return category.id;
-      }
+    const matchedRule = merchantRuleRepository.getRule(getMerchantRuleInput(transaction));
+    if (matchedRule) {
+      ruleResults.push({
+        id: transaction.id,
+        category: matchedRule.categoryId,
+        confidence: 0.98,
+        source: "rule",
+      });
+      continue;
     }
+
+    remainingInputs.push(input);
   }
 
-  // Default to other
-  return "other";
+  if (remainingInputs.length === 0) {
+    options.onProgress?.({
+      total: eligibleInputs.length,
+      processed: eligibleInputs.length,
+      current: 0,
+    });
+    return ruleResults;
+  }
+
+  const aiResults = options.model?.trim()
+    ? await runCategorizationCore(remainingInputs, {
+        generate: async (prompt) => {
+          const client = getBrowserClient(options.provider);
+          return client.generate(options.baseUrl, options.model!.trim(), prompt);
+        },
+        onProgress: options.onProgress
+          ? (progress) =>
+              options.onProgress?.({
+                total: eligibleInputs.length,
+                processed: ruleResults.length + progress.processed,
+                current: progress.current,
+              })
+          : undefined,
+      })
+    : await categorizeTransactionsViaApi(remainingInputs, options);
+
+  if (!options.model?.trim()) {
+    options.onProgress?.({
+      total: eligibleInputs.length,
+      processed: eligibleInputs.length,
+      current: 0,
+    });
+  }
+
+  return [...ruleResults, ...aiResults];
 }
 
 /**
  * Apply categorization results to transactions.
- * Sets confidence-based flags.
+ * Sets confidence-based flags and preserves all existing metadata.
  */
 export function applyCategorizationResults(
   transactions: Transaction[],
   results: CategorizationResult[]
 ): Transaction[] {
-  const resultsMap = new Map(results.map((r) => [r.id, r]));
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const { Transaction: TxnClass, Category, CategorizedBy } = require("@/types");
+  const resultsMap = new Map(results.map((result) => [result.id, result]));
 
-  return transactions.map((txn) => {
-    const result = resultsMap.get(txn.id);
+  return transactions.map((transaction) => {
+    const result = resultsMap.get(transaction.id);
     if (!result) {
-      return txn;
+      return transaction;
     }
 
-    // Determine if needs review based on confidence
     const needsReview = result.confidence < 0.85;
+    const categorizedBy =
+      result.source === "rule"
+        ? CategorizedBy.Rule
+        : result.source === "ai"
+          ? CategorizedBy.AI
+          : CategorizedBy.Keyword;
 
-    return new TxnClass(
-      txn.id,
-      txn.date,
-      txn.description,
-      txn.amount,
-      txn.type,
-      Category.fromId(result.category) || txn.category,
-      txn.balance,
-      txn.merchant,
-      txn.originalText,
-      txn.budgetMonth,
-      result.confidence,
+    return Transaction.fromJSON({
+      ...transaction.toJSON(),
+      category: (Category.fromId(result.category) ?? transaction.category).id,
+      categoryConfidence: result.confidence,
       needsReview,
-      result.source === "ai" ? CategorizedBy.AI : CategorizedBy.Keyword,
-      txn.sourceType,
-      txn.statementId,
-      txn.cardIssuer,
-      txn.cardLastFour,
-      txn.cardHolder,
-      txn.localCurrency,
-      txn.originalCurrency,
-      txn.originalAmount,
-      txn.isInternational,
-      txn.isAnomaly,
-      txn.anomalyTypes,
-      txn.anomalyDetails,
-      txn.anomalyDismissed,
-    );
+      categorizedBy,
+    });
   });
 }
 
-/**
- * Get category info with icon component name.
- */
-export function getCategoryInfo(categoryId: string): {
-  name: string;
-  icon: string;
-  color: string;
-} {
-  const category = getCategoryById(categoryId);
-  return {
-    name: category?.name || "Unknown",
-    icon: category?.icon || "HelpCircle",
-    color: category?.color || "#6b7280",
-  };
-}
-
-
+export { batchTransactions, categorizeByKeywords };

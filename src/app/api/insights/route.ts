@@ -3,7 +3,7 @@ import { getServerClient } from '@/lib/llm/index';
 import { LLMProvider } from '@/lib/llm/types';
 import { validateLlmServerUrl } from '@/lib/store/settingsStore';
 import { checkRateLimit, getClientIdentifier, STRICT_RATE_LIMIT } from '@/lib/middleware/rateLimit';
-import { debugLog, debugSensitive, debugError } from '@/lib/utils/debug';
+import { debugLog, debugSensitive, debugError, debugWarn } from '@/lib/utils/debug';
 import { TransactionAnalytics } from '@/lib/insights/types';
 import { buildInsightsPrompt, parseInsightsResponse } from '@/lib/insights/prompts';
 import { InsightsRequestSchema, InsightsResponseSchema } from '@/lib/validation/llmApiSchemas';
@@ -86,8 +86,9 @@ export async function POST(request: NextRequest) {
       selectedModel = suitableModels[0] || models[0];
       
       if (selectedModel) {
-        console.warn(
-          `[Insights] No model specified. Auto-selected: "${selectedModel}". ` +
+        debugWarn(
+          'Insights',
+          `No model specified. Auto-selected: "${selectedModel}". ` +
           `This should not happen - client should always send a model.`
         );
       }

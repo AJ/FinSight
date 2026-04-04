@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { RecurringPayment, detectRecurringPayments, DEFAULT_DETECTION_CONFIG } from '@/lib/recurring';
 import { Transaction } from '@/types';
+import { debugError } from '@/lib/utils/debug';
 
 /** Rehydrate Date objects from JSON strings */
 function toDate(v: Date | string): Date {
@@ -73,7 +74,7 @@ export const useRecurringStore = create<RecurringStore>()(
             isScanning: false,
           });
         } catch (error) {
-          console.error('[RecurringStore] Scan failed:', error);
+          debugError('RecurringStore', 'Scan failed:', error);
           set({ isScanning: false });
         }
       },

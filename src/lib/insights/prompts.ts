@@ -7,6 +7,7 @@
 
 import { TransactionAnalytics } from './types';
 import { Currency } from '@/types';
+import { debugError } from '@/lib/utils/debug';
 
 /**
  * Get the system prompt for insight generation.
@@ -200,7 +201,7 @@ export function parseInsightsResponse(response: string): {
   }
 
   // Return empty if all parsing fails
-  console.error('[Insights] Failed to parse LLM response');
+  debugError('Insights', 'Failed to parse LLM response');
   return { insights: [] };
 }
 

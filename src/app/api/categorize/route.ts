@@ -1,33 +1,32 @@
+/**
+ * @deprecated Server-side categorization is no longer used.
+ * 
+ * All callers now use direct browser LLM calls via runCategorizationCore().
+ * This route is kept for potential future use but can be safely deleted.
+ * 
+ * Only used when categorizeTransactions() is called WITHOUT a model:
+ * - Browser falls back to this API if options.model is empty/undefined
+ * - Currently all callers (FileProcessor, transactionStore, transactions/page) pass a model
+ * 
+ * To delete safely:
+ * 1. Remove this file
+ * 2. Remove categorizeTransactionsViaApi() from aiCategorizer.ts
+ * 3. Remove the fallback branch: `: await categorizeTransactionsViaApi(...)`
+ */
+
 import { NextRequest, NextResponse } from "next/server";
 import { getServerClient } from "@/lib/llm/index";
 import { LLMProvider } from "@/lib/llm/types";
 import { validateLlmServerUrl } from "@/lib/store/settingsStore";
 import { checkRateLimit, getClientIdentifier, STRICT_RATE_LIMIT } from "@/lib/middleware/rateLimit";
-import { debugLog, debugSensitive, debugError } from "@/lib/utils/debug";
-import {
-  buildCategorizationPrompt,
-  parseCategorizationResponse,
-} from "@/lib/categorization/prompts";
-import { categorizeByKeywords } from "@/lib/categorization/aiCategorizer";
+import { debugLog, debugSensitive, debugError, debugWarn } from "@/lib/utils/debug";
+import { runCategorizationCore } from "@/lib/categorization/core";
 import { normalizeTransactionTypeStrict } from '@/models/TransactionType';
 import { CategorizeRequestSchema, CategorizeResponseSchema } from '@/lib/validation/llmApiSchemas';
 import { fromZodError } from 'zod-validation-error';
-
-const BATCH_SIZE = 20;
-
-interface TransactionInput {
-  id: string;
-  description: string;
-  amount: number;
-  type: "credit" | "debit";
-}
-
-interface CategorizationResult {
-  id: string;
-  category: string;
-  confidence: number;
-  source: "ai" | "keyword";
-}
+import type { SourceType } from '@/types';
+import type { TransactionSubType } from '@/models/Transaction';
+import type { CategorizationResult, CategorizationTransactionInput } from "@/lib/categorization/types";
 
 export async function POST(request: NextRequest) {
   const startTime = Date.now();
@@ -72,7 +71,7 @@ export async function POST(request: NextRequest) {
     const llmProvider = (provider as LLMProvider) || "ollama";
     
     // Normalize transactions with validation
-    const normalizedTransactions: TransactionInput[] = [];
+    const normalizedTransactions: CategorizationTransactionInput[] = [];
     const rejectedTransactions: Array<{ txn: unknown; reason: string }> = [];
 
     for (const txn of transactions) {
@@ -80,8 +79,12 @@ export async function POST(request: NextRequest) {
         normalizedTransactions.push({
           id: String(txn.id),
           description: String(txn.description || ""),
+          merchant: txn.merchant ? String(txn.merchant) : undefined,
           amount: typeof txn.amount === "number" ? txn.amount : Number(txn.amount) || 0,
           type: normalizeTransactionTypeStrict(txn.type),
+          sourceType: txn.sourceType as SourceType | undefined,
+          transactionSubType: txn.transactionSubType as TransactionSubType | undefined,
+          categoryId: txn.categoryId,
         });
       } catch (error) {
         rejectedTransactions.push({
@@ -93,8 +96,9 @@ export async function POST(request: NextRequest) {
 
     // Log rejected transactions
     if (rejectedTransactions.length > 0) {
-      console.warn(
-        `[Categorize] Rejected ${rejectedTransactions.length}/${transactions.length} transactions with invalid types:`,
+      debugWarn(
+        'Categorize',
+        `Rejected ${rejectedTransactions.length}/${transactions.length} transactions with invalid types:`,
         rejectedTransactions
       );
     }
@@ -128,67 +132,19 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Process in batches
-    const results: CategorizationResult[] = [];
-    const batches: TransactionInput[][] = [];
+    debugLog(`[Categorize] Processing ${normalizedTransactions.length} transactions`);
 
-    for (let i = 0; i < normalizedTransactions.length; i += BATCH_SIZE) {
-      batches.push(normalizedTransactions.slice(i, i + BATCH_SIZE));
-    }
-
-    debugLog(`[Categorize] Processing ${normalizedTransactions.length} transactions in ${batches.length} batch(es)`);
-
-    for (let i = 0; i < batches.length; i++) {
-      const batch = batches[i];
-      const batchStart = Date.now();
-      debugLog(`[Categorize] Batch ${i + 1}/${batches.length}: ${batch.length} transactions`);
-
-      const prompt = buildCategorizationPrompt(batch);
-      debugSensitive(`Categorize Batch ${i + 1} Prompt`, prompt);
-
-      try {
-        const response = await client.generate(llmUrl, selectedModel, prompt);
-        const batchDuration = Date.now() - batchStart;
-
-        debugLog(`[Categorize] Batch ${i + 1} completed in ${batchDuration}ms`);
-        debugSensitive(`Categorize Batch ${i + 1} Response`, response);
-
-        const batchResults = parseCategorizationResponse(response);
-        debugLog(`[Categorize] Batch ${i + 1} parsed ${batchResults.length} results`);
-
-        // Match results to transactions
-        for (const txn of batch) {
-          const result = batchResults.find((r) => r.id === txn.id);
-          if (result) {
-            results.push({
-              ...result,
-              source: "ai",
-            });
-          } else {
-            // Fallback
-            const fallbackCat = categorizeByKeywords(txn);
-            debugLog(`[Categorize] Fallback for ${txn.id}: ${fallbackCat}`);
-            results.push({
-              id: txn.id,
-              category: fallbackCat,
-              confidence: 0.3,
-              source: "keyword",
-            });
-          }
-        }
-      } catch (err) {
-        debugError(`[Categorize] Batch ${i + 1} failed:`, err);
-        // Fallback for entire batch
-        for (const txn of batch) {
-          results.push({
-            id: txn.id,
-            category: categorizeByKeywords(txn),
-            confidence: 0.3,
-            source: "keyword",
-          });
-        }
+    const results: CategorizationResult[] = await runCategorizationCore(
+      normalizedTransactions,
+      {
+        generate: async (prompt) => {
+          debugSensitive("Categorize Prompt", prompt);
+          const response = await client.generate(llmUrl, selectedModel!, prompt);
+          debugSensitive("Categorize Response", response);
+          return response;
+        },
       }
-    }
+    );
 
     const totalDuration = Date.now() - startTime;
     debugLog(`[Categorize] Completed: ${results.length} results in ${totalDuration}ms`);

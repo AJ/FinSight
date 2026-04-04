@@ -31,6 +31,7 @@ import {
   Square,
 } from 'lucide-react';
 import { getBrowserClient } from '@/lib/llm/index';
+import { debugError } from '@/lib/utils/debug';
 
 const messageVariants = {
   hidden: (isUser: boolean) => ({
@@ -312,7 +313,7 @@ Guidelines:
           }
           return;
         }
-        console.error('[Chat]', err);
+        debugError('Chat', err);
         updateMessage(
           assistantId,
           err instanceof Error && err.message.toLowerCase().includes('timed out')
