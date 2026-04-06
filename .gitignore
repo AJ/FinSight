@@ -46,8 +46,6 @@ mockups/
 .claude/
 public/2026*.png
 public/test*
-CLAUDE.md
-GEMINI.md
 public/Transaction-Table-with-anomalies-2026-02-26_09-50.png
 public/pdf.mjs.bak
 public/samples/
@@ -56,6 +54,12 @@ public/transaction-table-with-anomalies-2026-02-26_09-47.png
 # docs (except README)
 docs/*
 !docs/README.md
+CLAUDE.md
+GEMINI.md
 
 # running commit message draft (not for committing)
 docs/COMMIT_MESSAGE_DRAFT.md
+
+*.bak
+*.bkp
+*.log
