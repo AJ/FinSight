@@ -14,6 +14,7 @@ Upload a PDF / CSV / Excel bank or credit card statement → AI extracts and cat
 | **Any Model** | Works with *any* model — Gemma, Llama, Mistral, Phi, Qwen, DeepSeek, etc. |
 | **Multiple Providers** | Choose between Ollama or LM Studio — whichever fits your workflow |
 | **Auto Currency** | AI detects the currency from your statement automatically |
+| **Learned Rules** | Remembers your manual categorization corrections for specific merchants, improving accuracy over time |
 | **Smart Categorization** | AI-powered transaction categorization with confidence scores and review flags |
 | **Credit Card Support** | Parses credit card statements, detects international transactions, and tracks card-wise spending |
 | **Recurring Payments** | Automatically detects subscriptions and recurring payments — spot forgotten subscriptions |
@@ -168,11 +169,12 @@ Open [http://localhost:3000](http://localhost:3000).
 
 ### Connect
 
-1. Go to **Settings** (in the sidebar)
-2. Select your **LLM Provider** (Ollama or LM Studio)
-3. Click **Connect** — the default URL should work automatically
-4. Select your preferred model from the dropdown
-5. Done — go back to the dashboard and upload a statement!
+On your **first visit**, a **Setup Wizard** will guide you through:
+1. Choosing your **LLM Provider** (Ollama or LM Studio)
+2. Connecting to the server and selecting a model
+3. Choosing your **Currency**
+
+*To reconfigure these settings later, go to **Settings** in the sidebar.*
 
 ---
 
@@ -265,6 +267,7 @@ src/
 │   └── budget/               # Budget planning
 │
 ├── components/
+│   ├── onboarding/           # Setup wizard (Provider, Model, Currency)
 │   ├── chat/                 # Chat UI (ChatPanel, MarkdownRenderer)
 │   ├── creditCard/           # Credit card widgets (10+ components)
 │   ├── dashboard/            # Charts (Pie, Trend, StatCard, ScoreRing)
@@ -276,6 +279,7 @@ src/
 │   └── upload/               # File upload, AIConnectionBar, PasswordDialog
 │
 ├── lib/
+│   ├── validation/           # API schema validation
 │   ├── categorization/       # AI categorization logic
 │   │   ├── categories.ts     # Category definitions
 │   │   ├── aiCategorizer.ts  # LLM-based categorization
@@ -289,8 +293,7 @@ src/
 │   │   ├── ollamaClient.ts         # Ollama (server)
 │   │   ├── ollamaBrowserClient.ts  # Ollama (browser)
 │   │   ├── lmstudioClient.ts       # LM Studio (server)
-│   │   ├── lmstudioBrowserClient.ts # LM Studio (browser)
-│   │   └── ccPrompts.ts      # Credit card parsing prompts
+│   │   └── lmstudioBrowserClient.ts # LM Studio (browser)
 │   ├── parsers/              # File parsing
 │   │   ├── llmParser.ts      # LLM-powered parser
 │   │   ├── pdfParser.ts      # PDF column-based parser
@@ -372,6 +375,7 @@ This is useful for:
 - **Framework:** Next.js 16 (React 19, App Router)
 - **UI:** shadcn/ui + Tailwind CSS v4
 - **State:** Zustand (persisted to localStorage / sessionStorage)
+- **Validation:** Zod (Runtime schema validation for API routes)
 - **Charts:** Chart.js + react-chartjs-2
 - **PDF:** pdfjs-dist (text extraction)
 - **AI:** Ollama or LM Studio (local LLM inference)
