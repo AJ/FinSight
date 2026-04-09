@@ -25,11 +25,15 @@ export interface TransactionsOutput {
  */
 export function buildTransactionsPrompt(
   normalizedText: string,
-  statementType: 'credit_card' | 'bank'
+  statementType: 'credit_card' | 'bank',
+  bankName?: string | null,
 ): string {
+  const bankContext = bankName ? ` issued by ${bankName.toUpperCase()}` : '';
   const promptTemplate = statementType === 'credit_card'
     ? CC_TRANSACTIONS_PROMPT
     : BANK_TRANSACTIONS_PROMPT;
-  
-  return promptTemplate.replace('{RAW_TEXT}', normalizedText);
+
+  return promptTemplate
+    .replace('{RAW_TEXT}', normalizedText)
+    .replace('{BANK_CONTEXT}', bankContext);
 }

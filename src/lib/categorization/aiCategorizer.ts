@@ -1,8 +1,8 @@
 import { Transaction, Category, CategorizedBy } from "@/types";
 import { getBrowserClient } from "@/lib/llm/index";
 import { LLMProvider } from "@/lib/llm/types";
-import { getMerchantRuleInput } from "./merchantRules";
-import { merchantRuleRepository } from "@/lib/store/merchantRuleStore";
+import { findMerchantRuleForTransaction } from "@/lib/services/merchantRuleService";
+import type { StatementType } from "@/types/creditCard";
 import {
   batchTransactions,
   categorizeByKeywords,
@@ -25,6 +25,7 @@ export interface CategorizationOptions {
   provider: LLMProvider;
   baseUrl: string;
   model?: string;
+  statementType?: StatementType;
   onProgress?: (progress: CategorizationProgress) => void;
 }
 
@@ -54,6 +55,7 @@ async function categorizeTransactionsViaApi(
       provider: options.provider,
       baseUrl: options.baseUrl,
       model: options.model,
+      statementType: options.statementType,
     }),
   });
 
@@ -93,11 +95,11 @@ export async function categorizeTransactions(
       continue;
     }
 
-    const matchedRule = merchantRuleRepository.getRule(getMerchantRuleInput(transaction));
+    const matchedRule = findMerchantRuleForTransaction(transaction);
     if (matchedRule) {
       ruleResults.push({
         id: transaction.id,
-        category: matchedRule.categoryId,
+        category: matchedRule.activeCategoryId!,
         confidence: 0.98,
         source: "rule",
       });
@@ -130,6 +132,7 @@ export async function categorizeTransactions(
                 current: progress.current,
               })
           : undefined,
+        statementType: options.statementType,
       })
     : await categorizeTransactionsViaApi(remainingInputs, options);
 

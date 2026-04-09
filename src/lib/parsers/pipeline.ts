@@ -67,11 +67,13 @@ export async function processStatement(
 
     // Step 2: Detect statement type
     let resolvedStatementType: PipelineStatementType;
+    let bankName: string | null = null;
     if (statementType) {
       resolvedStatementType = statementType;
     } else {
       const typeResult = await detectStatementType(normalized, signal);
-      
+      bankName = typeResult.bankName;
+
       if (typeResult.confidence < CONFIDENCE_THRESHOLD) {
         return {
           success: false,
@@ -89,9 +91,9 @@ export async function processStatement(
 
     // Step 3: Run extraction passes based on type
     if (resolvedStatementType === 'credit_card') {
-      return processCreditCard(normalized, signal);
+      return processCreditCard(normalized, bankName || null, signal);
     } else {
-      return processBank(normalized, signal);
+      return processBank(normalized, bankName || null, signal);
     }
 
   } catch (e: unknown) {
@@ -109,12 +111,12 @@ export async function processStatement(
  * Credit card statement pipeline.
  * Three passes: Summary → Transactions → Rewards
  */
-async function processCreditCard(normalizedText: string, signal?: AbortSignal): Promise<PipelineResult> {
+async function processCreditCard(normalizedText: string, bankName: string | null, signal?: AbortSignal): Promise<PipelineResult> {
   const warnings: string[] = [];
   const errors: string[] = [];
 
   // Pass 1: Summary extraction
-  const summaryPrompt = buildSummaryPrompt(normalizedText, 'credit_card');
+  const summaryPrompt = buildSummaryPrompt(normalizedText, 'credit_card', bankName);
   const summaryResult = await runWithRetry(
     summaryPrompt,
     normalizedText,
@@ -143,7 +145,7 @@ async function processCreditCard(normalizedText: string, signal?: AbortSignal): 
   }
 
   // Pass 2: Transaction extraction
-  const transactionsResult = await runTransactionExtraction(normalizedText, 'credit_card', signal);
+  const transactionsResult = await runTransactionExtraction(normalizedText, 'credit_card', bankName, signal);
   warnings.push(...transactionsResult.warnings);
 
   if (!transactionsResult.success) {
@@ -186,12 +188,12 @@ async function processCreditCard(normalizedText: string, signal?: AbortSignal): 
  * Bank statement pipeline.
  * Two passes: Summary → Transactions (no rewards)
  */
-async function processBank(normalizedText: string, signal?: AbortSignal): Promise<PipelineResult> {
+async function processBank(normalizedText: string, bankName: string | null, signal?: AbortSignal): Promise<PipelineResult> {
   const warnings: string[] = [];
   const errors: string[] = [];
 
   // Pass 1: Summary extraction
-  const summaryPrompt = buildSummaryPrompt(normalizedText, 'bank');
+  const summaryPrompt = buildSummaryPrompt(normalizedText, 'bank', bankName);
   const summaryResult = await runWithRetry(
     summaryPrompt,
     normalizedText,
@@ -217,7 +219,7 @@ async function processBank(normalizedText: string, signal?: AbortSignal): Promis
   }
 
   // Pass 2: Transaction extraction
-  const transactionsResult = await runTransactionExtraction(normalizedText, 'bank', signal);
+  const transactionsResult = await runTransactionExtraction(normalizedText, 'bank', bankName, signal);
   warnings.push(...transactionsResult.warnings);
 
   if (!transactionsResult.success) {
@@ -244,12 +246,13 @@ async function processBank(normalizedText: string, signal?: AbortSignal): Promis
 async function runTransactionExtraction(
   normalizedText: string,
   statementType: 'credit_card' | 'bank',
+  bankName: string | null,
   signal?: AbortSignal,
 ) {
   const stage = statementType === 'credit_card' ? 'cc_transactions' : 'bank_transactions';
 
   if (statementType === 'credit_card') {
-    const transactionsPrompt = buildTransactionsPrompt(normalizedText, statementType);
+    const transactionsPrompt = buildTransactionsPrompt(normalizedText, statementType, bankName);
     return runWithRetry(
       transactionsPrompt,
       normalizedText,
@@ -272,7 +275,7 @@ async function runTransactionExtraction(
   const chunkPlan = createTransactionChunkPlan(normalizedText);
 
   if (!chunkPlan.chunkingUsed) {
-    const transactionsPrompt = buildTransactionsPrompt(normalizedText, statementType);
+    const transactionsPrompt = buildTransactionsPrompt(normalizedText, statementType, bankName);
     return runWithRetry(
       transactionsPrompt,
       normalizedText,
@@ -307,7 +310,7 @@ async function runTransactionExtraction(
   let successfulChunks = 0;
 
   for (const chunk of chunkPlan.chunks) {
-    const transactionsPrompt = buildTransactionsPrompt(chunk.text, statementType);
+    const transactionsPrompt = buildTransactionsPrompt(chunk.text, statementType, bankName);
     const chunkResult = await runWithRetry(
       transactionsPrompt,
       chunk.text,

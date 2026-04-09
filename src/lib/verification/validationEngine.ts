@@ -29,22 +29,24 @@ const MONTH_NAMES: Record<string, number> = {
  * Returns null if invalid.
  */
 function parseDate(dateStr: string): Date | null {
-  if (!DATE_REGEX.test(dateStr)) {
+  // Strip time/pipe artifacts if present (e.g., "2025-10-04|00:00" -> "2025-10-04")
+  const cleaned = dateStr.split('|')[0].split('T')[0].trim();
+  if (!DATE_REGEX.test(cleaned)) {
     return null;
   }
 
   // Handle month name formats: "02 Nov, 2025", "02 Nov 2025", "02-Nov-2025"
-  const monthNameMatch = dateStr.match(/^(\d{1,2})\s*[- ]?\s*([A-Za-z]{3})\s*[, ]?\s*(\d{4})$/);
+  const monthNameMatch = cleaned.match(/^(\d{1,2})\s*[- ]?\s*([A-Za-z]{3})\s*[, ]?\s*(\d{4})$/);
   if (monthNameMatch) {
     const day = parseInt(monthNameMatch[1], 10);
     const monthStr = monthNameMatch[2].toLowerCase();
     const year = parseInt(monthNameMatch[3], 10);
     const month = MONTH_NAMES[monthStr];
-    
+
     if (month === undefined || day < 1 || day > 31 || year < 1900 || year > 2100) {
       return null;
     }
-    
+
     const date = new Date(year, month, day);
     if (date.getFullYear() !== year || date.getMonth() !== month || date.getDate() !== day) {
       return null;
@@ -53,7 +55,7 @@ function parseDate(dateStr: string): Date | null {
   }
 
   // Normalize separators
-  const normalized = dateStr.replace(/\//g, '-');
+  const normalized = cleaned.replace(/\//g, '-');
   const parts = normalized.split('-');
 
   if (parts.length !== 3) return null;

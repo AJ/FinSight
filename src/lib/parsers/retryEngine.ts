@@ -5,6 +5,7 @@
  * Each retry tells the LLM exactly what was wrong with its previous output.
  */
 
+import { parseLLMJsonResponse } from '@/lib/utils/llm-response-parser';
 import { callLLM } from '../llm/llmClient';
 import { debugLog } from '@/lib/utils/debug';
 
@@ -115,7 +116,7 @@ export async function runWithRetry<T>(
       // Parse JSON
       let parsed: T;
       try {
-        parsed = JSON.parse(rawResponse);
+        parsed = parseLLMJsonResponse(rawResponse);
         lastParsedData = parsed;
 
         // Log dropped transactions for debugging (transaction extraction only)

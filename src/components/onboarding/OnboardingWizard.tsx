@@ -12,6 +12,7 @@ import { OnboardingStep1 } from './OnboardingStep1';
 import { OnboardingStep2 } from './OnboardingStep2';
 import { OnboardingStep3 } from './OnboardingStep3';
 import { useOnboardingStore } from '@/lib/store/onboardingStore';
+import { useSettingsStore } from '@/lib/store/settingsStore';
 import { LLMProvider } from '@/lib/llm/types';
 import { Currency } from '@/types';
 import { cn } from '@/lib/utils';
@@ -82,13 +83,15 @@ export function OnboardingWizard({ open, onOpenChange }: OnboardingWizardProps) 
   }, [setCurrentStep]);
 
   const handleStep3Complete = useCallback((currency: Currency) => {
-    setState((prev) => ({
-      ...prev,
-      currency,
-    }));
+    const settings = useSettingsStore.getState();
+    settings.setLLMProvider(state.provider!);
+    settings.setLLMServerUrl(state.serverUrl);
+    settings.setLLMModel(state.model || null);
+    settings.setCurrency(currency);
+
     markOnboardingComplete();
     onOpenChange(false);
-  }, [markOnboardingComplete, onOpenChange]);
+  }, [markOnboardingComplete, onOpenChange, state]);
 
   const handleBack = useCallback(() => {
     setCurrentStep(currentStep - 1);

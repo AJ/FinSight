@@ -42,7 +42,6 @@ import { formatCurrency } from "@/lib/currencyFormatter";
 import { getCategoryDisplay } from "@/components/transactions/CategoryBadge";
 import { InlineCategoryEditor } from "@/components/transactions/InlineCategoryEditor";
 import { DEFAULT_CATEGORIES } from "@/lib/categorization/categories";
-import { Category } from "@/models";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { ANOMALY_LABELS } from "@/lib/anomaly";
@@ -147,33 +146,28 @@ function TransactionsPageContent() {
     const toastId = toast.loading(`Categorizing ${txns.length} transactions...`);
 
     try {
-      const { categorizeTransactions } = await import("@/lib/categorization/aiCategorizer");
-      const results = await categorizeTransactions(txns, {
+      const { recategorizeStoredTransactions } = await import("@/lib/services/transactionEnrichmentService");
+      const recategorizedTransactions = await recategorizeStoredTransactions(txns, {
         provider: llmProvider,
         baseUrl: llmServerUrl,
         model: llmModel || undefined,
       });
 
       let reviewCount = 0;
-      for (const result of results) {
-        const needsReview = result.confidence < 0.85;
-        if (needsReview) reviewCount++;
-        useTransactionStore.getState().updateTransaction(result.id, {
-          category: Category.fromId(result.category) ?? Category.fromId(Category.DEFAULT_ID),
-          categoryConfidence: result.confidence,
-          needsReview,
-          categorizedBy:
-            result.source === "rule"
-              ? CategorizedBy.Rule
-              : result.source === "ai"
-                ? CategorizedBy.AI
-                : CategorizedBy.Keyword,
+      for (const transaction of recategorizedTransactions) {
+        if (transaction.needsReview) reviewCount++;
+        useTransactionStore.getState().updateTransaction(transaction.id, {
+          merchant: transaction.merchant,
+          category: transaction.category,
+          categoryConfidence: transaction.categoryConfidence,
+          needsReview: transaction.needsReview,
+          categorizedBy: transaction.categorizedBy,
         });
       }
 
       toast.success("Categorization complete", {
         id: toastId,
-        description: `${results.length} categorized. ${reviewCount} need review.`
+        description: `${recategorizedTransactions.length} categorized. ${reviewCount} need review.`
       });
     } catch (error) {
       debugError('Categorize', error);

@@ -147,7 +147,9 @@ function verifyTransaction(
 ): VerifiedTransaction {
 
   const amountMatched = matchAmount(rawText, tx.amount)
-  const dateMatched = matchDate(rawText, format(tx.date, 'yyyy-MM-dd'))
+  // Guard against invalid dates from LLM extraction
+  const isValidDate = tx.date instanceof Date && !isNaN(tx.date.getTime())
+  const dateMatched = isValidDate ? matchDate(rawText, format(tx.date, 'yyyy-MM-dd')) : false
   const descriptionMatched = matchDescription(rawText, tx.description)
   const contextMatch = matchContext(rawText, tx)
   const contextMatched = contextMatch.matched
@@ -548,7 +550,9 @@ function matchContext(raw: string, tx: Transaction): {
   anchors: number[]
 } {
   const amountVariants = generateAmountVariants(tx.amount)
-  const dateVariants = generateDateVariants(format(tx.date, 'yyyy-MM-dd'))
+  // Guard against invalid dates
+  const isValidDate = tx.date instanceof Date && !isNaN(tx.date.getTime())
+  const dateVariants = isValidDate ? generateDateVariants(format(tx.date, 'yyyy-MM-dd')) : []
   const anchors: number[] = []
 
   for (const amount of amountVariants) {

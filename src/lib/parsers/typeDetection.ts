@@ -6,12 +6,14 @@
  */
 
 import { callLLM } from '../llm/llmClient';
+import { parseLLMJsonResponse } from '@/lib/utils/llm-response-parser';
 import { TYPE_DETECTION_PROMPT } from './prompts';
 
 export interface TypeDetectionResult {
   statementType: 'credit_card' | 'bank';
   confidence: number;
   reason: string;
+  bankName: string | null;
 }
 
 /**
@@ -58,20 +60,25 @@ export async function detectStatementType(normalizedText: string, signal?: Abort
   const rawResponse = await callLLM(prompt, { stage: 'type_detection', maxTokens: 512, signal });
 
   try {
-    const parsed = JSON.parse(rawResponse);
-    
+    const parsed = parseLLMJsonResponse<{ type: string; confidence: number; reason?: string; bankName?: string }>(rawResponse);
+
     // Normalize the type value to handle LLM variations
     const normalizedType = normalizeTypeValue(parsed.type);
-    
+
     // If type is unknown, throw error for manual selection
     if (normalizedType === 'unknown') {
       throw new Error(`Unknown statement type: ${parsed.type}`);
     }
-    
+
+    // Parse bank name (null if "unknown", null, or empty)
+    const rawBank = parsed.bankName;
+    const bankName = rawBank && rawBank.toLowerCase() !== 'unknown' ? rawBank : null;
+
     return {
       statementType: normalizedType,
       confidence: parsed.confidence,
-      reason: parsed.reason || ''
+      reason: parsed.reason || '',
+      bankName,
     };
   } catch (error) {
     // Re-throw if it's our unknown type error

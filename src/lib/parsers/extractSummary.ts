@@ -55,11 +55,15 @@ export type Summary = CCSummary | BankSummary;
  */
 export function buildSummaryPrompt(
   normalizedText: string,
-  statementType: 'credit_card' | 'bank'
+  statementType: 'credit_card' | 'bank',
+  bankName?: string | null,
 ): string {
-  const promptTemplate = statementType === 'credit_card' 
-    ? CC_SUMMARY_PROMPT 
+  const bankContext = bankName ? ` issued by ${bankName.toUpperCase()}` : '';
+  const promptTemplate = statementType === 'credit_card'
+    ? CC_SUMMARY_PROMPT
     : BANK_SUMMARY_PROMPT;
-  
-  return promptTemplate.replace('{RAW_TEXT}', normalizedText);
+
+  return promptTemplate
+    .replace('{RAW_TEXT}', normalizedText)
+    .replace('{BANK_CONTEXT}', bankContext);
 }

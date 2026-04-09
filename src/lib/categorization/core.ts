@@ -12,6 +12,8 @@ import {
   parseCategorizationResponse,
 } from "./prompts";
 
+import type { StatementType } from "@/types/creditCard";
+
 export const CATEGORIZATION_BATCH_SIZE = 20;
 const NON_CATEGORIZABLE_CATEGORY_IDS = new Set(["transfer", "investment"]);
 
@@ -38,6 +40,7 @@ export interface CategorizationCoreOptions {
   generate: (prompt: string) => Promise<string>;
   onProgress?: (progress: CategorizationProgress) => void;
   batchSize?: number;
+  statementType?: StatementType;
 }
 
 export function batchTransactions<T>(
@@ -82,7 +85,7 @@ export async function runCategorizationCore(
       current: batch.length,
     });
 
-    const prompt = buildCategorizationPrompt(batch);
+    const prompt = buildCategorizationPrompt(batch, options.statementType);
 
     try {
       const response = await options.generate(prompt);

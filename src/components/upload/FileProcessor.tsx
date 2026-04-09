@@ -4,22 +4,13 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { FileUpload } from "./FileUpload";
 import { PasswordDialog } from "./PasswordDialog";
-import { parseCSV } from "@/lib/parsers/csvParser";
-import { parseXLS } from "@/lib/parsers/xlsParser";
-import {
-  parseWithLLMExtended,
-  isPasswordError,
-} from "@/lib/parsers/llmParser";
+import { isPasswordError } from "@/lib/parsers/llmParser";
+import { runPreReviewPipeline } from "@/lib/pipelines/preReviewPipeline";
 import { AbortManager } from '@/lib/utils/AbortManager';
 import { subscribeToLLMConnection } from '@/lib/store/llmConnectionStore';
-import { normalizeMerchantName } from "@/lib/categorizer";
-import { categorizeByKeywords } from "@/lib/categorization/aiCategorizer";
 import { useSettingsStore } from "@/lib/store/settingsStore";
 import { useChatStore } from "@/lib/store/chatStore";
-import { useCreditCardStore } from "@/lib/store/creditCardStore";
-import { LLMStatus, ParsedStatement, Currency, Transaction, CategorizedBy } from "@/types";
-import type { CCSummary } from "@/lib/parsers/extractSummary";
-import type { VerificationReport, CCVerificationReport } from "@/lib/verification/verificationEngine";
+import { LLMStatus } from "@/types";
 import { useRouter } from "next/navigation";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Card, CardContent } from "@/components/ui/card";
@@ -36,7 +27,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Label } from "@/components/ui/label";
-import { debugLog, debugWarn, debugError } from "@/lib/utils/debug";
+import { debugLog, debugWarn } from "@/lib/utils/debug";
 
 const MAX_PASSWORD_ATTEMPTS = 3;
 
@@ -108,7 +99,6 @@ export function FileProcessor({ onSuccess, onProcessingChange }: FileProcessorPr
   const setCurrency = useSettingsStore((state) => state.setCurrency);
   const llmModel = useSettingsStore((state) => state.llmModel);
   const setModel = useChatStore((state) => state.setModel);
-  const addCCStatement = useCreditCardStore((state) => state.addStatement);
   const router = useRouter();
 
   // Subscribe to LLM connection status (uses centralized cache)
@@ -118,83 +108,35 @@ export function FileProcessor({ onSuccess, onProcessingChange }: FileProcessorPr
     });
   }, []);
 
-  // Common processing logic for parsed statements
-  const processParsedStatement = useCallback((
-    parsed: ParsedStatement,
-    detectedCurrency: Currency | null,
-    verificationReport?: VerificationReport | CCVerificationReport,
+  // Common processing logic for staged review sessions
+  const processReviewSession = useCallback((
+    transactionCount: number,
+    detectedCurrencyCode?: string,
+    failedChunks?: string[],
   ) => {
     if (wasCancelledRef.current) {
       return;
     }
 
-    if (parsed.transactions.length === 0) {
+    if (transactionCount === 0) {
       throw new Error(
         "No transactions found. Check if the file format is supported or try enabling AI parsing in Settings.",
       );
     }
 
     // Warn about failed chunks
-    if (parsed.failedChunks && parsed.failedChunks.length > 0) {
-      toast.warning(`${parsed.failedChunks.length} sections could not be parsed`, {
+    if (failedChunks && failedChunks.length > 0) {
+      toast.warning(`${failedChunks.length} sections could not be parsed`, {
         description: "Some transactions are missing from your statement. " +
           "Try re-uploading with a different AI model, or check the browser console for details.",
         duration: 10000,
       });
       debugWarn(
         'parser',
-        `${parsed.failedChunks.length} chunks failed to parse. Transactions from these sections are missing:`,
-        parsed.failedChunks
+        `${failedChunks.length} chunks failed to parse. Transactions from these sections are missing:`,
+        failedChunks
       );
     }
-
-    // Save verification report if available
-    if (verificationReport) {
-      sessionStorage.setItem(
-        "pendingVerificationReport",
-        JSON.stringify(verificationReport),
-      );
-    }
-
-    // Auto-set detected currency
-    if (detectedCurrency) {
-      setCurrency(detectedCurrency);
-    }
-
-    // Preserve existing categorization from prior steps (CSV/XLSX AI or parser output).
-    // Only fall back when categorization is genuinely missing.
-    const categorized = parsed.transactions.map((txn) => {
-      const hasExistingCategorization =
-        txn.category.id !== "other" ||
-        txn.categorizedBy !== undefined ||
-        txn.categoryConfidence !== undefined ||
-        txn.needsReview !== undefined;
-
-      const fallbackCategory = categorizeByKeywords({
-        description: txn.description,
-        amount: txn.amount,
-        type: txn.type,
-      });
-
-      return Transaction.fromJSON({
-        ...txn.toJSON(),
-        merchant: normalizeMerchantName(txn.description),
-        category: hasExistingCategorization ? txn.category.id : fallbackCategory,
-        categoryConfidence: hasExistingCategorization
-          ? txn.categoryConfidence
-          : 0.3,
-        needsReview: hasExistingCategorization ? txn.needsReview : true,
-        categorizedBy: hasExistingCategorization
-          ? txn.categorizedBy
-          : CategorizedBy.Keyword,
-      });
-    });
-
-    // Store for review page
-    sessionStorage.setItem(
-      "pendingTransactions",
-      JSON.stringify(categorized),
-    );
 
     // Store the model used for chat
     const activeModel = llmModel || llmStatus?.selectedModel;
@@ -202,10 +144,10 @@ export function FileProcessor({ onSuccess, onProcessingChange }: FileProcessorPr
       setModel(activeModel);
     }
 
-    const currencyInfo = detectedCurrency
-      ? ` (${detectedCurrency.code})`
+    const currencyInfo = detectedCurrencyCode
+      ? ` (${detectedCurrencyCode})`
       : "";
-    const successMessage = `Parsed ${categorized.length} transactions${currencyInfo}! Redirecting to review…`;
+    const successMessage = `Parsed ${transactionCount} transactions${currencyInfo}! Redirecting to review…`;
     setSuccess(successMessage);
 
     // Show processing time toast
@@ -226,7 +168,7 @@ export function FileProcessor({ onSuccess, onProcessingChange }: FileProcessorPr
     onSuccess?.();
 
     setTimeout(() => router.push("/review"), 1000);
-  }, [setCurrency, llmModel, llmStatus?.selectedModel, setModel, onSuccess, router]);
+  }, [llmModel, llmStatus?.selectedModel, setModel, onSuccess, router]);
 
   // Process file after statement type is selected
   const processFileWithStatementType = useCallback(async (
@@ -234,175 +176,58 @@ export function FileProcessor({ onSuccess, onProcessingChange }: FileProcessorPr
     selectedType: 'auto' | 'bank' | 'credit_card',
     password?: string
   ) => {
-    const ext = file.name.toLowerCase();
-    const isCSV = ext.endsWith(".csv");
-    const isXLS = ext.endsWith(".xls") || ext.endsWith(".xlsx");
-
-    let parsed: ParsedStatement;
-    let detectedCurrency: Currency | null = null;
     const abortController = new AbortController();
     abortManager.current = new AbortManager();
     abortManager.current.signal(); // Register the signal
     wasCancelledRef.current = false;
 
-    if (ext.endsWith(".pdf")) {
-      // Pass statement type to parser (undefined = auto-detect)
-      const statementTypeParam = selectedType === 'auto' ? undefined : selectedType;
-      try {
-        const result = await parseWithLLMExtended(
-          file,
-          setProgress,
-          password,
-          statementTypeParam,
-          abortController.signal,
-        );
-        if (wasCancelledRef.current || abortController.signal.aborted) {
-          return;
-        }
-        parsed = result.statement;
-        detectedCurrency = result.currency;
-        // Store CC statement metadata for the credit cards page
-        // Note: Transform CCSummary (new pipeline type) to CreditCardStatement (store type)
-        if (result.ccStatement) {
-          const ccStatement = result.ccStatement as CCSummary;  // Type transformation - temporary
-          addCCStatement({
-            id: crypto.randomUUID(),
-            fileName: file.name,
-            parseDate: new Date(),
-            cardLastFour: ccStatement.cardLastFour || '',
-            cardIssuer: ccStatement.cardIssuer || '',
-            cardHolder: ccStatement.cardHolder || undefined,
-            statementPeriod: ccStatement.statementPeriodStart && ccStatement.statementPeriodEnd ? {
-              start: new Date(ccStatement.statementPeriodStart),
-              end: new Date(ccStatement.statementPeriodEnd),
-            } : { start: new Date(), end: new Date() },
-            statementDate: ccStatement.statementDate ? new Date(ccStatement.statementDate) : new Date(),
-            paymentDueDate: ccStatement.paymentDueDate ? new Date(ccStatement.paymentDueDate) : new Date(),
-            totalDue: ccStatement.totalDue ?? 0,
-            minimumDue: ccStatement.minimumDue ?? 0,
-            creditLimit: ccStatement.creditLimit ?? 0,
-            availableCredit: ccStatement.availableCredit ?? 0,
-            previousBalance: ccStatement.previousBalance ?? 0,
-            paymentsReceived: ccStatement.paymentsReceived ?? 0,
-            purchasesAndCharges: ccStatement.purchasesAndCharges ?? 0,
-            interestCharged: ccStatement.interestCharged ?? 0,
-            lateFee: ccStatement.lateFee ?? 0,
-            otherCharges: ccStatement.otherCharges ?? 0,
-            cashbackEarned: ccStatement.cashbackEarned ?? 0,
-            rewardPoints: ccStatement.rewardPoints ? {
-              openingBalance: ccStatement.rewardPoints.opening ?? 0,
-              earned: ccStatement.rewardPoints.earned ?? 0,
-              redeemed: ccStatement.rewardPoints.redeemed ?? 0,
-              expired: 0,
-              closingBalance: ccStatement.rewardPoints.closing ?? 0,
-              expiringNext: undefined,
-              expiringNextDate: undefined,
-            } : undefined,
-            isPaid: false,
-          });
-        }
-        processParsedStatement(parsed, detectedCurrency, result.verification);
-      } catch (err) {
-        if (abortController.signal.aborted || wasCancelledRef.current || isAbortError(err)) {
-          return;
-        }
-        // debugError('[FileProcessor][PDF Parsing] Error:', err, 'isPasswordError:', isPasswordError(err));
-        if (isPasswordError(err)) {
-          // PDF needs password - show password dialog
-          setPendingFile(file);
-          setPasswordDialogOpen(true);
-          // Also save the statement type selection for retry
-          setPendingTypeFile(file);
-          setPendingTypePassword(password);
-          setStatementType(selectedType);
-          // ========== FIX (2026-03-16) START ==========
-          // Re-throw password error so caller knows it failed.
-          // Old code did not re-throw, causing success branch to run after wrong password.
-          throw err;
-          // ========== FIX (2026-03-16) END ==========
-        } else {
-          // Other error
-          debugLog('[FileProcessor][PDF Parsing] "other" error:', err);
-          throw err;
-        }
-      }
-    } else if (isCSV) {
-      setProgress("Parsing CSV...");
-      const result = await parseCSV(file);
-      if (wasCancelledRef.current || abortController.signal.aborted) {
-        return;
-      }
-      parsed = result.statement;
-      detectedCurrency = result.detectedCurrency;
-      
-      // Categorize transactions using LLM
-      setProgress("Categorizing transactions...");
+    try {
       const settings = useSettingsStore.getState();
-      try {
-        const categorizer = await import('@/lib/categorization/aiCategorizer');
-        const categories = await categorizer.categorizeTransactions(
-          parsed.transactions,
-          {
-            provider: settings.llmProvider,
-            baseUrl: settings.llmServerUrl,
-            model: settings.llmModel || undefined,
-          }
-        );
-        // Apply categories to transactions
-        parsed.transactions = categorizer.applyCategorizationResults(parsed.transactions, categories);
-      } catch (e) {
-        debugError('FileProcessor', 'Categorization failed:', e);
-        // Continue without categories - keyword fallback already applied by parser
-      }
+      const reviewSession = await runPreReviewPipeline({
+        file,
+        provider: settings.llmProvider,
+        baseUrl: settings.llmServerUrl,
+        model: settings.llmModel || undefined,
+        defaultCurrency: settings.currency,
+        password,
+        statementType: selectedType === 'auto' ? undefined : selectedType,
+        onProgress: setProgress,
+        signal: abortController.signal,
+      });
+
       if (wasCancelledRef.current || abortController.signal.aborted) {
         return;
       }
-      
-      processParsedStatement(parsed, detectedCurrency);
-    } else if (isXLS) {
-      setProgress("Parsing Excel file...");
-      const result = await parseXLS(file);
-      if (wasCancelledRef.current || abortController.signal.aborted) {
-        return;
-      }
-      parsed = result.statement;
-      detectedCurrency = result.detectedCurrency;
-      
-      // Categorize transactions using LLM
-      setProgress("Categorizing transactions...");
-      const settings = useSettingsStore.getState();
-      try {
-        const categorizer = await import('@/lib/categorization/aiCategorizer');
-        const categories = await categorizer.categorizeTransactions(
-          parsed.transactions,
-          {
-            provider: settings.llmProvider,
-            baseUrl: settings.llmServerUrl,
-            model: settings.llmModel || undefined,
-          }
-        );
-        // Apply categories to transactions
-        parsed.transactions = categorizer.applyCategorizationResults(parsed.transactions, categories);
-      } catch (e) {
-        debugError('FileProcessor', 'Categorization failed:', e);
-        // Continue without categories - keyword fallback already applied by parser
-      }
-      if (wasCancelledRef.current || abortController.signal.aborted) {
-        return;
-      }
-      
-      processParsedStatement(parsed, detectedCurrency);
-    } else {
-      throw new Error(
-        "Unsupported file format. Please upload a PDF, CSV, XLS, or XLSX file.",
+
+      setCurrency(reviewSession.currency);
+      processReviewSession(
+        reviewSession.transactions.length,
+        reviewSession.currency.code,
+        reviewSession.sourceMetadata?.failedChunks,
       );
+    } catch (err) {
+      if (abortController.signal.aborted || wasCancelledRef.current || isAbortError(err)) {
+        return;
+      }
+
+      if (isPasswordError(err)) {
+        setPendingFile(file);
+        setPasswordDialogOpen(true);
+        setPendingTypeFile(file);
+        setPendingTypePassword(password);
+        setStatementType(selectedType);
+        throw err;
+      }
+
+      debugLog('[FileProcessor][PreReviewPipeline] Error:', err);
+      throw err;
     }
 
     if (abortController.signal.aborted) {
       return;
     }
     abortManager.current.abortAll();
-  }, [processParsedStatement, addCCStatement]);
+  }, [processReviewSession, setCurrency]);
 
   // Process a file with optional password (for PDFs)
   const processFile = useCallback(async (file: File, password?: string) => {

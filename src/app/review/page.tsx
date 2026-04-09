@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -30,74 +30,31 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Transaction, TransactionJSON, TransactionType, Category, CategorizedBy } from "@/types";
+import { Transaction, TransactionType, Category, CategorizedBy } from "@/types";
 import { useTransactionStore } from "@/lib/store/transactionStore";
+import { useCreditCardStore } from "@/lib/store/creditCardStore";
 import { useSettingsStore } from "@/lib/store/settingsStore";
-import { merchantRuleRepository } from "@/lib/store/merchantRuleStore";
-import { getMerchantRuleDecision } from "@/lib/categorization/merchantRules";
 import { formatCurrency } from "@/lib/currencyFormatter";
 import { exportTransactionsToCSV } from "@/lib/exportUtils";
 import { format } from "date-fns";
 import { DEFAULT_CATEGORIES } from "@/lib/categorization/categories";
 import { getCategoryDisplay } from "@/components/transactions/CategoryBadge";
 import { VerificationSummary } from "@/components/upload/VerificationSummary";
-import type { VerificationReport, CCVerificationReport } from "@/lib/verification/verificationEngine";
-
-// Helper to load transactions from sessionStorage
-function loadPendingTransactions(): Transaction[] {
-  if (typeof window === "undefined") return [];
-  const stored = sessionStorage.getItem("pendingTransactions");
-  if (!stored) return [];
-  try {
-    const parsed = JSON.parse(stored);
-    const settingsCurrency = useSettingsStore.getState().currency;
-    return parsed.map((t: TransactionJSON) =>
-      Transaction.fromJSON({
-        ...t,
-        amount: Math.abs(t.amount),
-        category:
-          typeof t.category === "string"
-            ? t.category
-            : Category.DEFAULT_ID,
-        localCurrency: t.localCurrency ?? settingsCurrency,
-        isInternational: t.isInternational ?? false,
-      })
-    );
-  } catch {
-    return [];
-  }
-}
-
-// Helper to load verification report from sessionStorage
-function loadVerificationReport(): VerificationReport | CCVerificationReport | null {
-  if (typeof window === "undefined") return null;
-  const stored = sessionStorage.getItem("pendingVerificationReport");
-  if (!stored) return null;
-  try {
-    return JSON.parse(stored);
-  } catch {
-    return null;
-  }
-}
+import { reviewSessionRepository } from "@/lib/review/reviewSessionRepository";
+import { finalizeReviewImport } from "@/lib/pipelines/postReviewPipeline";
 
 export default function ReviewPage() {
   const router = useRouter();
-  // null = not loaded yet, empty array = loaded but no transactions
-  // Use lazy initialization to read from sessionStorage once on mount
-  const [pendingTransactions, setPendingTransactions] = useState<Transaction[] | null>(() => loadPendingTransactions());
-  const [verificationReport] = useState<VerificationReport | CCVerificationReport | null>(() => loadVerificationReport());
+  const [reviewSession] = useState(() => reviewSessionRepository.load());
+  const [pendingTransactions, setPendingTransactions] = useState<Transaction[] | null>(
+    () => reviewSession?.transactions ?? []
+  );
   const [editingId, setEditingId] = useState<string | null>(null);
   const [showUnsavedModal, setShowUnsavedModal] = useState(false);
-  const [manualCategoryEdits, setManualCategoryEdits] = useState<Record<string, string>>({});
   const addTransactions = useTransactionStore((state) => state.addTransactions);
-  const startBackgroundCategorization = useTransactionStore((state) => state.startBackgroundCategorization);
-  const runAnomalyDetection = useTransactionStore((state) => state.runAnomalyDetection);
+  const addCCStatement = useCreditCardStore((state) => state.addStatement);
   const currency = useSettingsStore((state) => state.currency);
-  const manuallyEditedTransactions = useMemo(
-    () =>
-      (pendingTransactions ?? []).filter((transaction) => manualCategoryEdits[transaction.id]),
-    [manualCategoryEdits, pendingTransactions]
-  );
+  const verificationReport = reviewSession?.verificationReport ?? null;
 
   // Redirect if no transactions after loading (navigation is a side effect, OK in useEffect)
   useEffect(() => {
@@ -125,13 +82,6 @@ export default function ReviewPage() {
     field: keyof Transaction,
     value: string | number | Date | TransactionType | undefined,
   ) => {
-    if (field === "category") {
-      setManualCategoryEdits((current) => ({
-        ...current,
-        [id]: String(value),
-      }));
-    }
-
     setPendingTransactions((prev) => {
       if (!prev) return prev;
       return prev.map((t) => {
@@ -184,11 +134,6 @@ export default function ReviewPage() {
   };
 
   const handleDeleteTransaction = (id: string) => {
-    setManualCategoryEdits((current) => {
-      const next = { ...current };
-      delete next[id];
-      return next;
-    });
     setPendingTransactions((prev) => prev?.filter((t) => t.id !== id) ?? prev);
   };
 
@@ -204,37 +149,25 @@ export default function ReviewPage() {
       return;
     }
 
-    proceedWithImport();
+    void proceedWithImport();
   };
 
-  const proceedWithImport = () => {
+  const proceedWithImport = async () => {
     if (pendingTransactions.length === 0) {
       alert("No transactions to import!");
       return;
     }
 
-    for (const transaction of manuallyEditedTransactions) {
-      const decision = getMerchantRuleDecision(transaction);
-      if (decision) {
-        merchantRuleRepository.upsertRule(decision);
-      }
-    }
-
-    // Append new transactions to existing ones
-    addTransactions(pendingTransactions);
-    sessionStorage.removeItem("pendingTransactions");
-
-    // Start background categorization (5 second delay)
-    startBackgroundCategorization();
-
-    // Run anomaly detection on all transactions
-    runAnomalyDetection();
+    await finalizeReviewImport(pendingTransactions, {
+      addTransactions,
+      addCreditCardStatement: addCCStatement,
+    });
 
     router.push("/dashboard");
   };
 
   const handleCancel = () => {
-    sessionStorage.removeItem("pendingTransactions");
+    reviewSessionRepository.clear();
     router.push("/");
   };
 
@@ -616,7 +549,7 @@ export default function ReviewPage() {
               onClick={() => {
                 setEditingId(null);
                 setShowUnsavedModal(false);
-                proceedWithImport();
+                void proceedWithImport();
               }}
             >
               Save & Continue
@@ -627,3 +560,5 @@ export default function ReviewPage() {
     </div>
   );
 }
+
+

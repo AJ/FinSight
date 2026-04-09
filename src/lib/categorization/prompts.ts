@@ -4,6 +4,7 @@ import { normalizeMerchantName } from "@/lib/categorizer";
 import { normalizeTransactionType } from '@/models/TransactionType';
 import type { SourceType } from "@/types";
 import type { TransactionSubType } from "@/models/Transaction";
+import type { StatementType } from "@/types/creditCard";
 import type { CategorizationSource } from "./types";
 
 /**
@@ -74,8 +75,13 @@ export function buildCategorizationPrompt(
     merchant?: string;
     sourceType?: SourceType;
     transactionSubType?: TransactionSubType;
-  }[]
+  }[],
+  statementType?: StatementType
 ): string {
+  const statementContext = statementType
+    ? `Statement context: These transactions are from a ${statementType === "bank" ? "Bank" : "Credit Card"} statement. Use this to interpret keywords appropriately (e.g., "Credit" means a refund/deposit in bank statements, but a purchase in credit card statements).\n\n`
+    : "";
+
   const txnList = transactions
     .map((t) => {
       const payload: Record<string, string | number> = {
@@ -100,7 +106,7 @@ export function buildCategorizationPrompt(
 
   return `${CATEGORIZATION_SYSTEM_PROMPT}
 
-Categorize these transactions:
+${statementContext}Categorize these transactions:
 
 [
   ${txnList}

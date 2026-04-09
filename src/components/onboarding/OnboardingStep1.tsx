@@ -64,9 +64,20 @@ export function OnboardingStep1({
         setModels(status.models);
         onModelsChange(status.models);
         onErrorChange(null);
+        setError(null); // Clear local error on success
       } else {
         setConnectionStatus('failed');
-        const msg = 'Cannot reach the server. Make sure ' + (selectedProvider === 'ollama' ? 'Ollama' : 'LM Studio') + ' is running.';
+        const providerName = selectedProvider === 'ollama' ? 'Ollama' : 'LM Studio';
+        let msg = '';
+
+        // Check if we get models back (server running but no models loaded)
+        if (status.models && status.models.length > 0) {
+          msg = `Connected to ${providerName}, but no models are loaded. Please load a model and try again.`;
+        } else {
+          // Could be server starting up or not running at all
+          msg = `Cannot reach ${providerName}. Make sure it is running and the server has fully started.`;
+        }
+
         setError(msg);
         onErrorChange(msg);
       }
@@ -202,7 +213,10 @@ export function OnboardingStep1({
             ) : connectionStatus === 'connected' ? (
               <CheckCircle2 className="w-4 h-4 text-green-500" />
             ) : connectionStatus === 'failed' ? (
-              <XCircle className="w-4 h-4 text-red-500" />
+              <>
+                <XCircle className="w-4 h-4 text-red-500" />
+                Retry
+              </>
             ) : (
               'Connect'
             )}

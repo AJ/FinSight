@@ -1,15 +1,12 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { Transaction, Category, TransactionJSON, CategorizedBy } from '@/types';
-import { useSettingsStore } from './settingsStore';
 import { deduplicateTransactions } from '@/lib/transactionUtils';
-import { merchantRuleRepository } from './merchantRuleStore';
-import { getMerchantRuleDecision } from '@/lib/categorization/merchantRules';
-import { debugError } from '@/lib/utils/debug';
+import {
+  buildStoredTransactionCategoryUpdate,
+  handleStoredTransactionManualCategoryEdit,
+} from '@/lib/services/storedTransactionEditService';
 import '@/lib/categorization/categories'; // Ensure categories are registered before store hydrates
-
-// Lazy import to avoid circular dependencies
-let categorizationPromise: Promise<typeof import('@/lib/categorization/aiCategorizer')> | null = null;
 
 /**
  * Ensure a value is a proper Date object.
@@ -60,12 +57,9 @@ interface TransactionStore {
   // Category actions
   updateCategory: (id: string, categoryId: string, categorizedBy?: CategorizedBy) => void;
   getTransactionsNeedingReview: () => Transaction[];
-  // Background categorization
-  startBackgroundCategorization: () => void;
   // Anomaly actions
   dismissAnomaly: (id: string) => void;
   restoreAnomaly: (id: string) => void;
-  runAnomalyDetection: () => void;
   getActiveAnomalies: () => Transaction[];
 }
 
@@ -208,99 +202,25 @@ export const useTransactionStore = create<TransactionStore>()(
 
       // Category actions
       updateCategory: (id, categoryId, categorizedBy = CategorizedBy.Manual) => {
-        let learnedTransaction: Transaction | null = null;
+        const currentTransaction = get().transactions.find((txn) => txn.id === id);
+        if (!currentTransaction) {
+          return;
+        }
+
+        const updatedTransaction =
+          categorizedBy === CategorizedBy.Manual
+            ? handleStoredTransactionManualCategoryEdit(currentTransaction, categoryId)
+            : buildStoredTransactionCategoryUpdate(currentTransaction, categoryId, categorizedBy);
 
         set((state) => ({
-          transactions: state.transactions.map((txn) => {
-            if (txn.id !== id) return txn;
-
-            const updated = Transaction.fromJSON({
-              ...txn.toJSON(),
-              category: (Category.fromId(categoryId) ?? txn.category).id,
-              needsReview: false,
-              categorizedBy,
-            });
-
-            learnedTransaction = updated;
-            return updated;
-          }),
+          transactions: state.transactions.map((txn) =>
+            txn.id === id ? updatedTransaction : txn
+          ),
         }));
-
-        if (categorizedBy === CategorizedBy.Manual && learnedTransaction) {
-          const decision = getMerchantRuleDecision(learnedTransaction);
-          if (decision) {
-            merchantRuleRepository.upsertRule(decision);
-          }
-        }
       },
 
       getTransactionsNeedingReview: () => {
         return get().transactions.filter((txn) => txn.needsReview === true);
-      },
-
-      // Background categorization
-      startBackgroundCategorization: () => {
-        const { transactions, isCategorizing } = get();
-        if (isCategorizing || transactions.length === 0) return;
-
-        // Delay start by 5 seconds to let user see import complete first
-        setTimeout(async () => {
-          set({ isCategorizing: true, categorizeProgress: 'Starting categorization...' });
-
-          try {
-            const autoCategorizeCandidates = get().transactions.filter(
-              (transaction) => transaction.categorizedBy !== CategorizedBy.Manual
-            );
-
-            if (autoCategorizeCandidates.length === 0) {
-              set({ isCategorizing: false, categorizeProgress: '' });
-              return;
-            }
-
-            // Get settings
-            const settings = useSettingsStore.getState();
-            const { llmProvider, llmServerUrl, llmModel } = settings;
-
-            // Lazy load categorizer to avoid circular deps
-            if (!categorizationPromise) {
-              categorizationPromise = import('@/lib/categorization/aiCategorizer');
-            }
-            const { categorizeTransactions, applyCategorizationResults } = await categorizationPromise;
-
-            // Run categorization
-            const results = await categorizeTransactions(
-              autoCategorizeCandidates,
-              {
-                provider: llmProvider,
-                baseUrl: llmServerUrl,
-                model: llmModel || undefined,
-                onProgress: (progress) => {
-                  set({
-                    categorizeProgress: `Categorizing... ${progress.processed}/${progress.total}`
-                  });
-                },
-              }
-            );
-
-            // Apply results
-            const categorized = applyCategorizationResults(get().transactions, results);
-            set({
-              transactions: categorized,
-              isCategorizing: false,
-              categorizeProgress: `Completed: ${results.length} transactions categorized`
-            });
-
-            // Clear progress after 3 seconds
-            setTimeout(() => set({ categorizeProgress: '' }), 3000);
-          } catch (error) {
-            debugError('BackgroundCategorization', error);
-            set({
-              isCategorizing: false,
-              categorizeProgress: 'Categorization failed'
-            });
-            setTimeout(() => set({ categorizeProgress: '' }), 5000);
-          }
-        }, 5000);
       },
 
       // Anomaly actions
@@ -325,17 +245,6 @@ export const useTransactionStore = create<TransactionStore>()(
             });
           }),
         })),
-
-      runAnomalyDetection: () => {
-        const { transactions } = get();
-        if (transactions.length === 0) return;
-
-        // Dynamic import to avoid circular dependency
-        import('@/lib/anomaly/detector').then(({ detectAnomalies }) => {
-          const updated = detectAnomalies(transactions);
-          set({ transactions: updated });
-        });
-      },
 
       getActiveAnomalies: () => {
         return get().transactions.filter(
