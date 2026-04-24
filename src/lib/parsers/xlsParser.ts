@@ -1,257 +1,136 @@
 import * as XLSX from "xlsx";
-import { Transaction, ParsedStatement, Currency, TransactionType, Category, SourceType } from "@/types";
+import { Transaction, Currency, TransactionType, Category, SourceType } from "@/types";
+import type { StatementType } from "@/types/creditCard";
 import { v4 as uuidv4 } from "uuid";
 import { parseDate, excelSerialToDate } from "./dateParser";
 import { detectCurrencyFromText } from "./currencyDetector";
-import { debugLog } from "@/lib/utils/debug";
+import type { ExtractionBundle, ParsingError } from "./contracts";
+import { debugLog, debugWarn } from '@/lib/utils/debug';
+import { detectColumns, type ColumnMapping } from "./columnDetection";
 
-/* ============================================================
-   UNIVERSAL EXCEL PARSER
-   Handles .xls and .xlsx from any bank in any country.
-   Strategy: convert sheet → JSON rows then use the same
-   column-detection logic as the CSV parser.
-   ============================================================ */
-
-export interface XLSParseResult {
-  statement: ParsedStatement;
-  detectedCurrency: Currency | null;
-}
-
-export async function parseXLS(file: File): Promise<XLSParseResult> {
+export async function parseXLS(file: File, options?: { statementType?: StatementType }): Promise<ExtractionBundle> {
+  const statementType = options?.statementType ?? null;
+  const sourceType = statementType === 'credit_card' ? SourceType.CreditCard : SourceType.Bank;
   try {
     const arrayBuffer = await file.arrayBuffer();
-    // Hardened XLSX parsing: disable potentially dangerous features
     const workbook = XLSX.read(arrayBuffer, {
-      type: "array",
-      cellFormula: false,    // Disable formula parsing
-      cellHTML: false,       // Disable HTML parsing
-      cellStyles: false,     // Disable style parsing
-      cellNF: false,         // Disable number format parsing
-      sheetStubs: false,     // Disable stub cells
+      type: 'array',
+      cellFormula: false,
+      cellHTML: false,
+      cellStyles: false,
+      cellNF: false,
+      sheetStubs: false,
     });
 
-    // Try every sheet — use the one that yields the most transactions
-    let best: { transactions: Transaction[]; currency: Currency | null } = {
+    let best: { transactions: Transaction[]; currency: Currency | null; parsingErrors: ParsingError[]; warnings: string[] } = {
       transactions: [],
       currency: null,
+      parsingErrors: [],
+      warnings: [],
     };
+    let rawText = '';
 
     for (const sheetName of workbook.SheetNames) {
       const worksheet = workbook.Sheets[sheetName];
+      const csv = XLSX.utils.sheet_to_csv(worksheet);
+      rawText += `Sheet: ${sheetName}\n${csv}\n\n`;
 
-      // First, try header mode, then raw mode if header yields nothing
-      const { transactions, currency } = parseSheet(worksheet);
-      if (transactions.length > best.transactions.length) {
-        best = { transactions, currency };
+      const result = parseSheet(worksheet, sourceType);
+      if (result.transactions.length > best.transactions.length) {
+        best = result;
       }
     }
 
-    const format = file.name.endsWith(".xls") ? "xls" : "xlsx";
+    const format = file.name.endsWith('.xls') ? 'xls' : 'xlsx';
 
     return {
-      statement: {
-        transactions: best.transactions,
-        format,
-        fileName: file.name,
-        parseDate: new Date(),
-      },
-      detectedCurrency: best.currency,
+      transactions: best.transactions,
+      currency: best.currency,
+      format,
+      fileName: file.name,
+      parseDate: new Date(),
+      statementType,
+      statementSummary: null,
+      verificationInputs: undefined,
+      warnings: best.warnings,
+      errors: [],
+      parsingErrors: best.parsingErrors,
+      rawText,
     };
   } catch (error) {
-    console.error("Error parsing XLS/XLSX:", error);
-    throw new Error("Failed to parse Excel file");
+    console.error('Error parsing XLS/XLSX:', error);
+    throw new Error('Failed to parse Excel file');
   }
 }
 
-/* ── Sheet parsing ────────────────────────────────────────── */
-
-function parseSheet(ws: XLSX.WorkSheet): {
+function parseSheet(ws: XLSX.WorkSheet, sourceType: SourceType): {
   transactions: Transaction[];
   currency: Currency | null;
+  parsingErrors: ParsingError[];
+  warnings: string[];
 } {
-  // Convert to JSON with header row
   const rawRows: Record<string, unknown>[] = XLSX.utils.sheet_to_json(ws, {
-    defval: "",
+    defval: '',
   });
-  if (rawRows.length === 0) return { transactions: [], currency: null };
+  if (rawRows.length === 0) return { transactions: [], currency: null, parsingErrors: [], warnings: [] };
 
   const headers = Object.keys(rawRows[0]);
   const mapping = detectColumns(headers);
 
-  if (
-    !mapping.dateCol ||
-    (!mapping.amountCol && !mapping.debitCol && !mapping.creditCol)
-  ) {
-    return { transactions: [], currency: null };
+  if (!mapping.dateCol || (!mapping.amountCol && !mapping.debitCol && !mapping.creditCol)) {
+    return { transactions: [], currency: null, parsingErrors: [], warnings: [] };
   }
 
-  // Detect currency from headers + first few rows
   const sampleText =
-    headers.join(" ") +
-    " " +
+    headers.join(' ') +
+    ' ' +
     rawRows
       .slice(0, 20)
-      .map((r) => Object.values(r).join(" "))
-      .join(" ");
+      .map((r) => Object.values(r).join(' '))
+      .join(' ');
   const currency = detectCurrencyFromText(sampleText);
 
   const transactions: Transaction[] = [];
-  for (const row of rawRows) {
-    const txn = parseRow(row, mapping);
-    if (txn) transactions.push(txn);
+  const parsingErrors: ParsingError[] = [];
+
+  rawRows.forEach((row, index) => {
+    const result = parseRow(row, mapping, index, sourceType);
+    if (result.transaction) transactions.push(result.transaction);
+    if (result.error) parsingErrors.push(result.error);
+  });
+
+  debugLog(`[XLS] Parsed ${transactions.length} transactions from ${rawRows.length} rows`);
+
+  const warnings: string[] = [];
+  if (parsingErrors.length > 0) {
+    warnings.push(`${parsingErrors.length} row(s) failed to parse. Check debug logs for details.`);
   }
 
-  debugLog(
-    `[XLS] Parsed ${transactions.length} transactions from ${rawRows.length} rows`,
-  );
-  return { transactions, currency };
+  return { transactions, currency, parsingErrors, warnings };
 }
-
-/* ── Column detection (mirrors CSV parser) ──────────────── */
-
-const DATE_KEYWORDS = [
-  "date",
-  "txn date",
-  "transaction date",
-  "trans date",
-  "value date",
-  "posting date",
-  "book date",
-  "datum",
-  "fecha",
-];
-const DESC_KEYWORDS = [
-  "description",
-  "narration",
-  "particulars",
-  "details",
-  "memo",
-  "reference",
-  "remark",
-  "transaction details",
-  "merchant",
-  "payee",
-  "beneficiary",
-  "name",
-];
-const AMOUNT_KEYWORDS = ["amount", "transaction amount", "txn amount"];
-const DEBIT_KEYWORDS = [
-  "debit",
-  "withdrawal",
-  "dr",
-  "debit amount",
-  "withdrawal amount",
-  "money out",
-];
-const CREDIT_KEYWORDS = [
-  "credit",
-  "deposit",
-  "cr",
-  "credit amount",
-  "deposit amount",
-  "money in",
-];
-const TYPE_KEYWORDS = [
-  "type",
-  "transaction type",
-  "txn type",
-  "cr/dr",
-  "dr/cr",
-];
-const BALANCE_KEYWORDS = ["balance", "closing balance", "running balance"];
-
-interface ColumnMapping {
-  dateCol: string | null;
-  descriptionCols: string[];
-  amountCol: string | null;
-  debitCol: string | null;
-  creditCol: string | null;
-  typeCol: string | null;
-  balanceCol: string | null;
-}
-
-function normalizeHeader(h: string): string {
-  return h
-    .toLowerCase()
-    .replace(/[^a-z0-9\s/]/g, "")
-    .trim();
-}
-
-function matchesAny(header: string, keywords: string[]): boolean {
-  const norm = normalizeHeader(header);
-  return keywords.some((kw) => norm === kw || norm.includes(kw));
-}
-
-function findColumn(headers: string[], keywords: string[]): string | null {
-  for (const h of headers) {
-    if (matchesAny(h, keywords)) return h;
-  }
-  return null;
-}
-
-function detectColumns(headers: string[]): ColumnMapping {
-  const dateCol = findColumn(headers, DATE_KEYWORDS);
-  const amountCol = findColumn(headers, AMOUNT_KEYWORDS);
-  const debitCol = findColumn(headers, DEBIT_KEYWORDS);
-  const creditCol = findColumn(headers, CREDIT_KEYWORDS);
-  const typeCol = findColumn(headers, TYPE_KEYWORDS);
-  const balanceCol = findColumn(headers, BALANCE_KEYWORDS);
-
-  const descriptionCols: string[] = [];
-  for (const h of headers) {
-    if (matchesAny(h, DESC_KEYWORDS)) descriptionCols.push(h);
-  }
-  if (descriptionCols.length === 0) {
-    const usedCols = new Set(
-      [dateCol, amountCol, debitCol, creditCol, typeCol, balanceCol].filter(
-        Boolean,
-      ),
-    );
-    for (const h of headers) {
-      if (!usedCols.has(h)) {
-        descriptionCols.push(h);
-        break;
-      }
-    }
-  }
-
-  return {
-    dateCol,
-    descriptionCols,
-    amountCol,
-    debitCol,
-    creditCol,
-    typeCol,
-    balanceCol,
-  };
-}
-
-/* ── Row parsing ──────────────────────────────────────────── */
 
 function cleanAmount(raw: unknown): number | null {
-  if (raw === null || raw === undefined || raw === "") return null;
-  if (typeof raw === "number") return raw === 0 ? null : raw;
+  if (raw === null || raw === undefined || raw === '') return null;
+  if (typeof raw === 'number') return raw === 0 ? null : raw;
 
   const s = String(raw).trim();
-  if (s === "" || s === "-" || s === "--") return null;
+  if (s === '' || s === '-' || s === '--') return null;
 
-  // Remove currency symbols and letters
-  let cleaned = s.replace(/[₹$€£¥₺₽₩₪₦₱₫৳฿A-Za-z\s]/g, "");
-  const isNeg = cleaned.startsWith("(") && cleaned.endsWith(")");
+  let cleaned = s.replace(/[₹$€£¥₺₽₩₪₦₱₫৳฿A-Za-z\s]/g, '');
+  const isNeg = cleaned.startsWith('(') && cleaned.endsWith(')');
   if (isNeg) cleaned = cleaned.slice(1, -1);
 
-  // Handle decimal separator
-  const lastComma = cleaned.lastIndexOf(",");
-  const lastDot = cleaned.lastIndexOf(".");
+  const lastComma = cleaned.lastIndexOf(',');
+  const lastDot = cleaned.lastIndexOf('.');
   if (lastComma > lastDot && lastComma > 0) {
     const after = cleaned.substring(lastComma + 1);
     if (after.length <= 2 && /^\d+$/.test(after)) {
-      cleaned = cleaned.replace(/\./g, "").replace(",", ".");
+      cleaned = cleaned.replace(/\./g, '').replace(',', '.');
     } else {
-      cleaned = cleaned.replace(/,/g, "");
+      cleaned = cleaned.replace(/,/g, '');
     }
   } else {
-    cleaned = cleaned.replace(/,/g, "");
+    cleaned = cleaned.replace(/,/g, '');
   }
 
   const num = parseFloat(cleaned);
@@ -262,28 +141,27 @@ function cleanAmount(raw: unknown): number | null {
 function parseRow(
   row: Record<string, unknown>,
   mapping: ColumnMapping,
-): Transaction | null {
+  rowIndex: number,
+  sourceType: SourceType,
+): { transaction: Transaction | null; error: ParsingError | null } {
   try {
-    // --- Date ---
     const rawDate = row[mapping.dateCol!];
     let date: Date | null = null;
-    if (typeof rawDate === "number") {
+    if (typeof rawDate === 'number') {
       date = excelSerialToDate(rawDate);
     } else {
       date = parseDate(String(rawDate));
     }
-    if (!date) return null;
+    if (!date) return { transaction: null, error: null };
 
-    // --- Description ---
     const descParts: string[] = [];
     for (const col of mapping.descriptionCols) {
-      const val = String(row[col] ?? "").trim();
+      const val = String(row[col] ?? '').trim();
       if (val.length > 0) descParts.push(val);
     }
-    let description = descParts.join(" — ").trim();
-    if (!description) description = "Transaction";
+    let description = descParts.join(' — ').trim();
+    if (!description) description = 'Transaction';
 
-    // --- Amount ---
     let amount: number | null = null;
     let type: TransactionType = TransactionType.Debit;
 
@@ -297,28 +175,18 @@ function parseRow(
         amount = Math.abs(credit);
         type = TransactionType.Credit;
       } else {
-        return null;
+        return { transaction: null, error: null };
       }
     } else if (mapping.amountCol) {
       amount = cleanAmount(row[mapping.amountCol]);
-      if (amount === null || amount === 0) return null;
+      if (amount === null || amount === 0) return { transaction: null, error: null };
 
       if (mapping.typeCol) {
-        const rawType = String(row[mapping.typeCol] || "")
-          .toLowerCase()
-          .trim();
-        if (
-          rawType.includes("debit") ||
-          rawType.includes("dr") ||
-          rawType.includes("withdrawal")
-        ) {
+        const rawType = String(row[mapping.typeCol] || '').toLowerCase().trim();
+        if (rawType.includes('debit') || rawType.includes('dr') || rawType.includes('withdrawal')) {
           amount = Math.abs(amount);
           type = TransactionType.Debit;
-        } else if (
-          rawType.includes("credit") ||
-          rawType.includes("cr") ||
-          rawType.includes("deposit")
-        ) {
+        } else if (rawType.includes('credit') || rawType.includes('cr') || rawType.includes('deposit')) {
           amount = Math.abs(amount);
           type = TransactionType.Credit;
         } else {
@@ -329,56 +197,66 @@ function parseRow(
       }
     } else if (mapping.debitCol) {
       const debit = cleanAmount(row[mapping.debitCol]);
-      if (debit === null || debit === 0) return null;
+      if (debit === null || debit === 0) return { transaction: null, error: null };
       amount = Math.abs(debit);
       type = TransactionType.Debit;
     } else if (mapping.creditCol) {
       const credit = cleanAmount(row[mapping.creditCol]);
-      if (credit === null || credit === 0) return null;
+      if (credit === null || credit === 0) return { transaction: null, error: null };
       amount = Math.abs(credit);
       type = TransactionType.Credit;
     } else {
-      return null;
+      return { transaction: null, error: null };
     }
 
-    // Capture balance value if available
-    let balance: number | undefined = undefined;
+    let balance: number | undefined;
     if (mapping.balanceCol) {
       const bal = cleanAmount(row[mapping.balanceCol]);
       if (bal !== null) balance = bal;
     }
 
-    return new Transaction(
-      uuidv4(), // id
-      date, // date
-      description, // description
-      amount, // amount
-      type, // type
-      Category.fromId("other")!, // category
-      balance, // balance
-      undefined, // merchant
-      JSON.stringify(row), // originalText
-      undefined, // budgetMonth
-      undefined, // categoryConfidence
-      undefined, // needsReview
-      undefined, // categorizedBy
-      SourceType.Bank, // sourceType
-      undefined, // statementId
-      undefined, // cardIssuer
-      undefined, // cardLastFour
-      undefined, // cardHolder
-      undefined, // localCurrency
-      undefined, // originalCurrency
-      undefined, // originalAmount
-      false, // isInternational
-      undefined, // isAnomaly
-      undefined, // anomalyTypes
-      undefined, // anomalyDetails
-      undefined, // anomalyDismissed
-      undefined, // transactionSubType
-      undefined, // suggestedCategory
-    );
-  } catch {
-    return null;
+    return {
+      transaction: new Transaction(
+        uuidv4(),
+        date,
+        description,
+        amount,
+        type,
+        Category.fromId('other')!,
+        balance,
+        undefined,
+        JSON.stringify(row),
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        sourceType,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        false,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        1.0,
+        undefined,
+      ),
+      error: null,
+    };
+  } catch (e) {
+    const errorMessage = e instanceof Error ? e.message : String(e);
+    debugWarn('xlsParser', `Row ${rowIndex} failed to parse: ${errorMessage}`, row);
+    return { 
+      transaction: null, 
+      error: { rowIndex, rawRow: row, errorMessage } 
+    };
   }
 }

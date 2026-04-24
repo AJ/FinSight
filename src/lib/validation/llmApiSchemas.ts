@@ -4,6 +4,7 @@
  */
 
 import { z } from 'zod';
+import { DEFAULT_URLS } from '@/lib/llm/types';
 
 // ─────────────────────────────────────────────────────────────
 // Categorize Endpoint
@@ -34,7 +35,7 @@ export const CategorizeRequestSchema = z.object({
   transactions: z.array(CategorizeTransactionSchema)
     .min(1, 'At least one transaction is required'),
   provider: z.enum(['ollama', 'lmstudio']).optional().default('ollama'),
-  baseUrl: z.string().url('Invalid base URL').optional().default('http://localhost:11434'),
+  baseUrl: z.string().url('Invalid base URL').optional().default(DEFAULT_URLS.ollama),
   model: z.string().min(1, 'Model name is required').optional(),
 });
 
@@ -102,7 +103,7 @@ export const TransactionAnalyticsSchema = z.object({
 export const InsightsRequestSchema = z.object({
   analytics: TransactionAnalyticsSchema,
   provider: z.enum(['ollama', 'lmstudio']).optional().default('ollama'),
-  baseUrl: z.string().url('Invalid base URL').optional().default('http://localhost:11434'),
+  baseUrl: z.string().url('Invalid base URL').optional().default(DEFAULT_URLS.ollama),
   model: z.string().min(1, 'Model name is required').optional(),
   currency: z.object({
     code: z.string().length(3, 'Currency code must be 3 characters'),

@@ -3,7 +3,6 @@
 import { LLMCallOptions } from './types';
 import { generate as generateOllama } from './ollamaClient';
 import { generate as generateLMStudio } from './lmstudioClient';
-import { useSettingsStore } from '@/lib/store/settingsStore';
 
 export type { LLMCallOptions };
 
@@ -23,30 +22,25 @@ export type { LLMCallOptions };
  */
 export async function callLLM(
   prompt: string,
-  options: Omit<LLMCallOptions, 'temperature'> = {}
+  options: Omit<LLMCallOptions, 'temperature' | 'runtime'> & { runtime: NonNullable<LLMCallOptions['runtime']> }
 ): Promise<string> {
-  const { stage = 'unknown', maxTokens = 4096, signal } = options;
-  
+  const { stage = 'unknown', maxTokens = 4096, signal, runtime } = options;
+
   // TEMPERATURE HARD CODED TO 0 - NON-NEGOTIABLE FOR DETERMINISTIC OUTPUT
   const temperature = 0;
 
-  // Get user's LLM settings
-  const settings = useSettingsStore.getState();
-  const provider = settings.llmProvider;
-  const baseUrl = settings.llmServerUrl;  // Single URL field for all providers
-  const model = settings.llmModel;
+  const provider = runtime.provider;
+  const baseUrl = runtime.baseUrl;
+  const model = runtime.model;
 
-  // Throw if no model configured - caller should handle fallback
-  if (!model) {
-    throw new Error(`LLM model not configured. Provider: ${provider}, URL: ${baseUrl}`);
+  if (!provider || !baseUrl || !model) {
+    throw new Error(`LLM model not configured. Provider: ${provider ?? 'unknown'}, URL: ${baseUrl ?? 'unknown'}`);
   }
 
-  // Network-level retry (1-2 attempts for transient failures only)
   let lastError: Error | null = null;
 
   for (let attempt = 1; attempt <= 2; attempt++) {
     try {
-      // Call appropriate provider
       let raw: string;
 
       if (provider === 'ollama') {
@@ -65,14 +59,11 @@ export async function callLLM(
         throw new Error(`Unsupported LLM provider: ${provider}`);
       }
 
-      // Validate response is non-empty
       if (!raw || typeof raw !== 'string' || raw.trim().length === 0) {
         throw new Error(`LLM returned empty response [${stage}]`);
       }
 
-      // Return raw string — JSON parsing happens in runWithRetry
       return raw.trim();
-
     } catch (e: unknown) {
       lastError = e instanceof Error ? e : new Error(String(e));
 
@@ -80,8 +71,7 @@ export async function callLLM(
         throw e;
       }
 
-      // Check if error is retryable
-      const isRetryable = 
+      const isRetryable =
         (e instanceof Error && e.name === 'AbortError') ||
         (e instanceof Error && (
           e.message.includes('timed out') ||
@@ -89,21 +79,17 @@ export async function callLLM(
           e.message.includes('server error')
         ));
 
-      // Don't retry on non-retryable errors
       if (!isRetryable) {
         throw e;
       }
 
-      // Don't retry on last attempt
       if (attempt === 2) {
         throw e;
       }
 
-      // Exponential backoff: 1s, then 2s
       await new Promise(r => setTimeout(r, 1000 * attempt));
     }
   }
 
-  // Should never reach here — loop always throws or returns
   throw lastError!;
 }

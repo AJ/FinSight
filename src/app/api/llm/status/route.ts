@@ -17,7 +17,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { getServerClient } from '@/lib/llm/index';
-import { LLMProvider } from '@/lib/llm/types';
+import { LLMProvider, DEFAULT_URLS } from '@/lib/llm/types';
 import { validateLlmServerUrl } from '@/lib/store/settingsStore';
 import { checkRateLimit, getClientIdentifier, LLM_RATE_LIMIT } from '@/lib/middleware/rateLimit';
 
@@ -35,7 +35,7 @@ export async function GET(request: NextRequest) {
   }
 
   const urlParam =
-    request.nextUrl.searchParams.get('url') || 'http://localhost:11434';
+    request.nextUrl.searchParams.get('url') || DEFAULT_URLS.ollama;
   const provider = (request.nextUrl.searchParams.get('provider') || 'ollama') as LLMProvider;
 
   // Validate URL to prevent SSRF

@@ -333,12 +333,10 @@ export interface RewardPointsSummary {
   totalRedeemed: number;
   totalExpired: number;
   earningRate: number;
-  estimatedValue: number;
 }
 
 export interface RewardPointsAnalysis {
   totalPointsAllCards: number;
-  estimatedTotalValue: number;
   byCard: RewardPointsSummary[];
   expiringSoon: {
     cardIssuer: string;

@@ -11,8 +11,6 @@ import {
   Clock,
 } from "lucide-react";
 import { useCreditCardStore } from "@/lib/store/creditCardStore";
-import { useSettingsStore } from "@/lib/store/settingsStore";
-import { formatCurrency } from "@/lib/currencyFormatter";
 import { format } from "date-fns";
 
 /**
@@ -23,7 +21,6 @@ import { format } from "date-fns";
  */
 export function RewardPointsCard() {
   const getRewardPointsAnalysis = useCreditCardStore((state) => state.getRewardPointsAnalysis);
-  const currency = useSettingsStore((state) => state.currency);
 
   const analysis = useMemo(() => getRewardPointsAnalysis(), [getRewardPointsAnalysis]);
 
@@ -58,17 +55,11 @@ export function RewardPointsCard() {
         {hasPoints ? (
           <>
             {/* Total points and value */}
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 gap-3">
               <div className="p-3 bg-muted/50 rounded-lg border border-border">
                 <div className="text-xs text-muted-foreground">Total Points</div>
                 <div className="font-mono text-xl font-bold text-primary">
                   {formatPoints(analysis.totalPointsAllCards)}
-                </div>
-              </div>
-              <div className="p-3 bg-muted/50 rounded-lg border border-border">
-                <div className="text-xs text-muted-foreground">Est. Value</div>
-                <div className="font-mono text-xl font-bold text-success">
-                  {formatCurrency(analysis.estimatedTotalValue, currency)}
                 </div>
               </div>
             </div>
@@ -121,9 +112,6 @@ export function RewardPointsCard() {
                       <div className="text-right">
                         <div className="font-mono text-sm font-bold text-primary">
                           {formatPoints(card.currentBalance)} pts
-                        </div>
-                        <div className="text-xs text-muted-foreground">
-                          ≈ {formatCurrency(card.estimatedValue, currency)}
                         </div>
                       </div>
                     </div>

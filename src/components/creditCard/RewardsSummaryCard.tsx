@@ -47,9 +47,6 @@ export function RewardsSummaryCard() {
 
   const formatPercent = (rate: number) => `${(rate * 100).toFixed(2)}%`;
 
-  // Calculate total value (cashback + estimated points value)
-  const totalValue = cashback.totalCashbackAllCards + points.estimatedTotalValue;
-
   return (
     <Card>
       <CardHeader className="pb-3">
@@ -65,23 +62,6 @@ export function RewardsSummaryCard() {
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
-        {/* Total Value Highlight */}
-        {totalValue > 0 && (
-          <div className="p-4 bg-gradient-to-br from-amber-50 to-orange-50 dark:from-amber-950/30 dark:to-orange-950/30 rounded-xl border border-amber-200 dark:border-amber-800/50">
-            <div className="flex items-center justify-between">
-              <div>
-                <div className="text-xs text-muted-foreground uppercase tracking-wide">Total Value</div>
-                <div className="font-mono text-2xl font-bold text-amber-700 dark:text-amber-400">
-                  {formatCurrency(totalValue, currency)}
-                </div>
-              </div>
-              <div className="w-12 h-12 rounded-full bg-amber-100 dark:bg-amber-900/50 flex items-center justify-center">
-                <Gift className="w-6 h-6 text-amber-600 dark:text-amber-400" />
-              </div>
-            </div>
-          </div>
-        )}
-
         {/* Cashback Section */}
         {hasCashback && (
           <div className="space-y-3">
@@ -147,17 +127,11 @@ export function RewardsSummaryCard() {
               Reward Points
             </div>
 
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 gap-3">
               <div className="p-3 bg-purple-50/50 dark:bg-purple-950/20 rounded-lg border border-purple-100 dark:border-purple-900/50">
                 <div className="text-xs text-muted-foreground">Total Points</div>
                 <div className="font-mono text-lg font-semibold text-purple-600 dark:text-purple-400">
                   {formatPoints(points.totalPointsAllCards)}
-                </div>
-              </div>
-              <div className="p-3 bg-muted/30 rounded-lg">
-                <div className="text-xs text-muted-foreground">Est. Value</div>
-                <div className="font-mono text-lg font-semibold text-purple-600 dark:text-purple-400">
-                  {formatCurrency(points.estimatedTotalValue, currency)}
                 </div>
               </div>
             </div>

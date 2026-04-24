@@ -1,6 +1,7 @@
 import { Transaction } from "@/types";
 import type { ReviewSessionPayload } from "@/lib/pipelines/types";
-import type { CCSummary } from "@/lib/parsers/extractSummary";
+import type { Summary } from "@/lib/parsers/extractSummary";
+import { debugError } from "@/lib/utils/debug";
 
 const REVIEW_SESSION_KEY = "review-session-v1";
 const LEGACY_REVIEW_KEYS = ["pendingTransactions", "pendingVerificationReport"] as const;
@@ -12,7 +13,7 @@ interface ReviewSessionPayloadJSON {
   statementType: ReviewSessionPayload["statementType"];
   fileName: string;
   parseDate: string;
-  statementSummary?: CCSummary | null;
+  statementSummary?: Summary | null;
   verificationReport?: ReviewSessionPayload["verificationReport"];
   warnings: string[];
   sourceMetadata?: ReviewSessionPayload["sourceMetadata"];
@@ -82,7 +83,8 @@ export const reviewSessionRepository = {
         warnings: parsed.warnings ?? [],
         sourceMetadata: parsed.sourceMetadata,
       };
-    } catch {
+    } catch (error) {
+      debugError('ReviewSession', 'Failed to parse session payload. Clearing corrupted data.', stored.slice(0, 100) + "...", error);
       sessionStorage.removeItem(REVIEW_SESSION_KEY);
       return null;
     }

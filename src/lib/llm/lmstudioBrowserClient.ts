@@ -7,6 +7,7 @@
  * the server. This client makes requests directly from the browser,
  * where "localhost" correctly refers to the user's machine.
  */
+import { debugWarn } from '@/lib/utils/debug';
 
 const GENERATE_TIMEOUT_MS = 3 * 60 * 1000;
 const CHAT_CONNECT_TIMEOUT_MS = 30 * 1000;
@@ -132,7 +133,8 @@ export async function listModels(baseUrl: string): Promise<string[]> {
     const data = await res.json();
     // OpenAI format: { data: [{ id: "model-name" }] }
     return (data.data || []).map((m: { id: string }) => m.id);
-  } catch {
+  } catch (error) {
+    debugWarn('LMStudioBrowser', 'listModels failed:', error);
     return [];
   }
 }

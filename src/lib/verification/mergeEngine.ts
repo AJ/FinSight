@@ -1,26 +1,15 @@
 /**
  * Merge engine - combines multi-pass outputs into canonical dataset.
- * 
- * Responsibilities:
- * 1. Deduplicate transactions
- * 2. Resolve conflicts
- * 3. Cross-link rewards to transactions
- * 4. Compute derived totals
- * 5. Cross-section validation
- * 6. Confidence scoring
  */
 
+import type { ExtractedTransaction } from '@/types/extractedTransaction';
 import { validateCCCrossSection, validateBankCrossSection } from './verificationEngine';
+import type { StatementExtractionData } from '@/lib/parsers/extractionResult';
 import type { CCSummary, BankSummary } from '@/lib/parsers/extractSummary';
 import type { TransactionsOutput } from '@/lib/parsers/extractTransactions';
 import type { RewardsOutput } from '@/lib/parsers/extractRewards';
-import { Transaction } from '@/models/Transaction';
 import { debugLog } from '@/lib/utils/debug';
 
-/**
- * Simple string similarity comparison (Dice coefficient).
- * Returns value between 0 and 1, where 1 is exact match.
- */
 function compareTwoStrings(a: string, b: string): number {
   if (a === b) return 1;
   if (a.length < 2 || b.length < 2) return 0;
@@ -36,111 +25,58 @@ function compareTwoStrings(a: string, b: string): number {
   }
 
   const intersection = new Set([...bigramsA].filter(x => bigramsB.has(x)));
-
   return (2 * intersection.size) / (bigramsA.size + bigramsB.size);
 }
 
-export interface FinalOutput {
-  statementType: 'credit_card' | 'bank';
-  summary: CCSummary | BankSummary | null;
-  transactions: Transaction[];
-  rewards: RewardsOutput | null;
-  derived: {
-    totalDebit: number;
-    totalCredit: number;
-    transactionCount: number;
-  };
-  meta: {
-    warnings: string[];
-    confidence: number;
-  };
-}
-
-/**
- * Deduplicate transactions using fuzzy matching.
- * Three signals: amount match, date within ±1 day, description similarity ≥0.85
- * 
- * NOTE: We no longer remove duplicates - we just log them for review.
- * What looks like a duplicate may be a legitimate second transaction
- * (e.g., multiple UPI payments, transaction + reversal, etc.)
- */
-function deduplicateTransactions(transactions: Transaction[]): {
-  deduped: Transaction[];
+function deduplicateTransactions(transactions: ExtractedTransaction[]): {
+  deduped: ExtractedTransaction[];
   duplicatesRemoved: number;
+  potentialDuplicates: Array<{ tx: ExtractedTransaction; matchedWith: ExtractedTransaction }>;
 } {
-  const result: Transaction[] = [];
-  const potentialDuplicates: Array<{ tx: Transaction; matchedWith: Transaction }> = [];
+  const result: ExtractedTransaction[] = [];
+  const potentialDuplicates: Array<{ tx: ExtractedTransaction; matchedWith: ExtractedTransaction }> = [];
 
   for (const tx of transactions) {
     const match = result.find(existing => isNearDuplicate(existing, tx));
 
     if (match) {
-      // Log potential duplicate but DON'T remove it
       potentialDuplicates.push({ tx, matchedWith: match });
     }
-    // Always keep the transaction
+    // Always keep the transaction — what looks like a duplicate may be legitimate
+    // (e.g., debit+credit to same merchant, or two genuine charges on the same day).
     result.push(tx);
   }
 
-  // Log potential duplicates for debugging
   if (potentialDuplicates.length > 0) {
-    debugLog('mergeEngine', 'Found potential duplicates (keeping all transactions):');
+    debugLog('mergeEngine', `Found ${potentialDuplicates.length} potential duplicate(s) (keeping all transactions):`);
     potentialDuplicates.forEach(({ tx, matchedWith }, idx) => {
-      debugLog('mergeEngine', `  Potential Duplicate ${idx + 1}:`);
-      debugLog('mergeEngine', `    Tx1: ${tx.date} | ${tx.description} | ₹${tx.amount} | ${tx.type}`);
-      debugLog('mergeEngine', `    Tx2: ${matchedWith.date} | ${matchedWith.description} | ₹${matchedWith.amount} | ${matchedWith.type}`);
+      debugLog('mergeEngine', `  Potential duplicate ${idx + 1}:`);
+      debugLog('mergeEngine', `    Tx1: ${matchedWith.date} | ${matchedWith.description} | ₹${matchedWith.amount} | ${matchedWith.type}`);
+      debugLog('mergeEngine', `    Tx2: ${tx.date} | ${tx.description} | ₹${tx.amount} | ${tx.type}`);
       debugLog('mergeEngine', `    Similarity: ${compareTwoStrings(tx.description.toLowerCase(), matchedWith.description.toLowerCase()).toFixed(2)}`);
     });
   }
 
-  // Return all transactions - no longer removing any
-  return { deduped: result, duplicatesRemoved: 0 };
-  
-  /* OLD CODE - Removed duplicates instead of logging
-  const result: Transaction[] = [];
-  let duplicatesRemoved = 0;
-
-  for (const tx of transactions) {
-    const isDup = result.some(existing => isNearDuplicate(existing, tx));
-
-    if (isDup) {
-      duplicatesRemoved++;
-    } else {
-      result.push(tx);
-    }
-  }
-
-  return { deduped: result, duplicatesRemoved };
-  */
+  return { deduped: result, duplicatesRemoved: 0, potentialDuplicates };
 }
 
-function isNearDuplicate(a: Transaction, b: Transaction): boolean {
-  // Signal 1: Amount match (within floating point tolerance)
+function isNearDuplicate(a: ExtractedTransaction, b: ExtractedTransaction): boolean {
   const sameAmount = Math.abs(a.amount - b.amount) < 0.01;
   if (!sameAmount) return false;
 
-  // Signal 2: Date within ±1 day
   const dateA = new Date(a.date).getTime();
   const dateB = new Date(b.date).getTime();
-  const dateDiffDays = Math.abs(dateA - dateB) / (1000 * 60 * 60 * 24);
-  if (dateDiffDays > 1) return false;
+  const dateDiffMs = Math.abs(dateA - dateB);
+  if (dateDiffMs !== 0) return false;
 
-  // Signal 3: Description similarity ≥0.85
   const similarity = compareTwoStrings(
     a.description.toLowerCase(),
-    b.description.toLowerCase()
+    b.description.toLowerCase(),
   );
-  return similarity >= 0.85;
+  return similarity >= 0.95;
 }
 
-/**
- * Compute derived totals from transactions.
- */
-function computeDerived(transactions: Transaction[]): {
-  totalDebit: number;
-  totalCredit: number;
-  transactionCount: number;
-} {
+function computeDerived(transactions: ExtractedTransaction[]): StatementExtractionData['derived'] {
   let totalDebit = 0;
   let totalCredit = 0;
 
@@ -155,50 +91,48 @@ function computeDerived(transactions: Transaction[]): {
   return {
     totalDebit: Math.round(totalDebit * 100) / 100,
     totalCredit: Math.round(totalCredit * 100) / 100,
-    transactionCount: transactions.length
+    transactionCount: transactions.length,
   };
 }
 
-/**
- * Compute confidence score based on warnings.
- */
 function computeConfidence(warnings: string[]): number {
   let score = 1.0;
 
-  // Deduplication warnings
   const dedupWarnings = warnings.filter(w => w.includes('Deduplication'));
   score -= dedupWarnings.length * 0.05;
 
-  // Cross-section warnings
   const crossWarnings = warnings.filter(w => w.includes('cross-section'));
   score -= crossWarnings.length * 0.1;
 
-  // Validation warnings
   const validationWarnings = warnings.filter(w => w.includes('validation'));
   score -= validationWarnings.length * 0.15;
 
-  // Post-pipeline check failures
   const postWarnings = warnings.filter(
-    w => w.includes('previousBalance') || w.includes('balance equation')
+    w => w.includes('previousBalance') || w.includes('balance equation'),
   );
   score -= postWarnings.length * 0.2;
+
+  // Summary extraction failure means critical data is missing
+  const summaryWarnings = warnings.filter(w => w.includes('Summary extraction failed'));
+  score -= summaryWarnings.length * 0.3;
+
+  // Balance reconciliation failure means transaction data doesn't match statement totals
+  const reconciliationWarnings = warnings.filter(w => w.includes('Balance reconciliation'));
+  score -= reconciliationWarnings.length * 0.2;
 
   return Math.max(0, Math.min(1, score));
 }
 
-/**
- * Merge outputs from multiple passes.
- */
 export function mergeOutputs(
   statementType: 'credit_card' | 'bank',
   summary: CCSummary | BankSummary | null,
   txData: TransactionsOutput | null,
   rewardsData: RewardsOutput | null,
-  upstreamWarnings: string[]
-): FinalOutput {
+  upstreamWarnings: string[],
+  failedChunks?: string[],
+): StatementExtractionData {
   const warnings: string[] = [...upstreamWarnings];
 
-  // Null guard upstream pass failures
   if (!summary) {
     warnings.push('Summary extraction failed — summary fields will be null');
   }
@@ -206,66 +140,52 @@ export function mergeOutputs(
     warnings.push('Transaction extraction failed — transaction list will be empty');
   }
 
-  // Step 1: Deduplicate transactions
-  const rawTransactions: Transaction[] = (txData?.transactions as unknown as Transaction[]) ?? [];
+  const rawTransactions = txData?.transactions ?? [];
 
-  // DEBUG: Log transaction count before deduplication
   debugLog('mergeEngine', `${statementType}: ${rawTransactions.length} transactions from LLM`);
 
-  const { deduped, duplicatesRemoved } = deduplicateTransactions(rawTransactions);
+  const { deduped, potentialDuplicates } = deduplicateTransactions(rawTransactions);
 
-  // DEBUG: Log transaction count after deduplication
-  debugLog('mergeEngine', `${statementType}: ${deduped.length} transactions after deduplication (removed ${duplicatesRemoved} duplicates)`);
+  debugLog('mergeEngine', `${statementType}: ${rawTransactions.length} transactions (${potentialDuplicates.length} potential duplicates flagged, keeping all)`);
 
-  if (duplicatesRemoved > 0) {
-    warnings.push(`Deduplication removed ${duplicatesRemoved} near-duplicate transaction(s)`);
+  if (potentialDuplicates.length > 0) {
+    warnings.push(`Found ${potentialDuplicates.length} potential duplicate transaction(s) — kept all for manual review`);
   }
 
-  // Step 2: Compute derived totals
   const derived = computeDerived(deduped);
 
-  // Step 3: Link rewards to transactions (CC only)
   let finalRewards: RewardsOutput | null = null;
-
   if (statementType === 'credit_card' && rewardsData) {
     finalRewards = rewardsData;
-    // Reward linking is informational — not implemented for current schema
-    warnings.push(...[]);
   }
 
-  // Step 4: Balance reconciliation (bank statements only)
   if (statementType === 'bank' && summary && 'openingBalance' in summary) {
     const bankSummary = summary as BankSummary;
     const transactionsWithBalance = deduped.filter(t => t.balance !== undefined && t.balance !== null);
-    
+
     if (transactionsWithBalance.length > 0) {
-      // Check first transaction balance matches opening balance
       const firstBalance = transactionsWithBalance[0].balance;
-      if (bankSummary.openingBalance !== null && firstBalance !== undefined) {
+      if (bankSummary.openingBalance !== null && firstBalance !== undefined && firstBalance !== null) {
         const balanceDiff = Math.abs(firstBalance - bankSummary.openingBalance);
         if (balanceDiff > 1.0) {
           warnings.push(
-            `Balance reconciliation: first transaction balance (${firstBalance}) ` +
-            `does not match opening balance (${bankSummary.openingBalance}) — diff: ${balanceDiff}`
+            `Balance reconciliation: first transaction balance (${firstBalance}) does not match opening balance (${bankSummary.openingBalance}) — diff: ${balanceDiff}`,
           );
         }
       }
-      
-      // Check last transaction balance matches closing balance
+
       const lastBalance = transactionsWithBalance[transactionsWithBalance.length - 1].balance;
-      if (bankSummary.closingBalance !== null && lastBalance !== undefined) {
+      if (bankSummary.closingBalance !== null && lastBalance !== undefined && lastBalance !== null) {
         const balanceDiff = Math.abs(lastBalance - bankSummary.closingBalance);
         if (balanceDiff > 1.0) {
           warnings.push(
-            `Balance reconciliation: last transaction balance (${lastBalance}) ` +
-            `does not match closing balance (${bankSummary.closingBalance}) — diff: ${balanceDiff}`
+            `Balance reconciliation: last transaction balance (${lastBalance}) does not match closing balance (${bankSummary.closingBalance}) — diff: ${balanceDiff}`,
           );
         }
       }
     }
   }
 
-  // Step 5: Cross-section totals check (warning only)
   let crossWarnings: string[] = [];
   if (summary) {
     if (statementType === 'credit_card' && 'totalDue' in summary) {
@@ -276,7 +196,6 @@ export function mergeOutputs(
   }
   warnings.push(...crossWarnings);
 
-  // Step 5: Compute confidence score
   const confidence = computeConfidence(warnings);
 
   return {
@@ -285,6 +204,10 @@ export function mergeOutputs(
     transactions: deduped,
     rewards: finalRewards,
     derived,
-    meta: { warnings, confidence }
+    meta: {
+      warnings,
+      confidence,
+      failedChunks,
+    },
   };
 }

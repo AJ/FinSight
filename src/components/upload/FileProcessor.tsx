@@ -4,13 +4,13 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { FileUpload } from "./FileUpload";
 import { PasswordDialog } from "./PasswordDialog";
-import { isPasswordError } from "@/lib/parsers/llmParser";
+import { isPasswordError } from "@/lib/parsers/documentExtraction";
 import { runPreReviewPipeline } from "@/lib/pipelines/preReviewPipeline";
 import { AbortManager } from '@/lib/utils/AbortManager';
 import { subscribeToLLMConnection } from '@/lib/store/llmConnectionStore';
 import { useSettingsStore } from "@/lib/store/settingsStore";
 import { useChatStore } from "@/lib/store/chatStore";
-import { LLMStatus } from "@/types";
+import { LLMStatus, SourceType } from "@/types";
 import { useRouter } from "next/navigation";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Card, CardContent } from "@/components/ui/card";
@@ -28,6 +28,8 @@ import { Button } from "@/components/ui/button";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Label } from "@/components/ui/label";
 import { debugLog, debugWarn } from "@/lib/utils/debug";
+import { computeFileHash } from "@/lib/utils/fileHash";
+import { useTransactionStore } from "@/lib/store/transactionStore";
 
 const MAX_PASSWORD_ATTEMPTS = 3;
 
@@ -91,14 +93,23 @@ export function FileProcessor({ onSuccess, onProcessingChange }: FileProcessorPr
   const [pendingFile, setPendingFile] = useState<File | null>(null);
 
   // Statement type selector state
+  // For PDFs: 'auto' | 'bank' | 'credit_card', defaulting to 'auto'
+  // For CSV/XLSX: 'bank' | 'credit_card', defaulting to undefined (no selection)
   const [statementTypeDialogOpen, setStatementTypeDialogOpen] = useState(false);
-  const [statementType, setStatementType] = useState<'auto' | 'bank' | 'credit_card'>('auto');
+  const [statementType, setStatementType] = useState<'auto' | 'bank' | 'credit_card' | undefined>(undefined);
   const [pendingTypeFile, setPendingTypeFile] = useState<File | null>(null);
   const [pendingTypePassword, setPendingTypePassword] = useState<string | undefined>();
+
+  // Duplicate file detection state
+  const [duplicateDialogOpen, setDuplicateDialogOpen] = useState(false);
+  const [duplicateImportDate, setDuplicateImportDate] = useState<Date | null>(null);
+  const [duplicateSourceType, setDuplicateSourceType] = useState<SourceType | null>(null);
+  const [pendingHash, setPendingHash] = useState<string | null>(null);
 
   const setCurrency = useSettingsStore((state) => state.setCurrency);
   const llmModel = useSettingsStore((state) => state.llmModel);
   const setModel = useChatStore((state) => state.setModel);
+  const hasFileImported = useTransactionStore((state) => state.hasFileImported);
   const router = useRouter();
 
   // Subscribe to LLM connection status (uses centralized cache)
@@ -174,7 +185,8 @@ export function FileProcessor({ onSuccess, onProcessingChange }: FileProcessorPr
   const processFileWithStatementType = useCallback(async (
     file: File,
     selectedType: 'auto' | 'bank' | 'credit_card',
-    password?: string
+    password?: string,
+    sourceFileHash?: string,
   ) => {
     const abortController = new AbortController();
     abortManager.current = new AbortManager();
@@ -193,6 +205,7 @@ export function FileProcessor({ onSuccess, onProcessingChange }: FileProcessorPr
         statementType: selectedType === 'auto' ? undefined : selectedType,
         onProgress: setProgress,
         signal: abortController.signal,
+        sourceFileHash,
       });
 
       if (wasCancelledRef.current || abortController.signal.aborted) {
@@ -234,23 +247,20 @@ export function FileProcessor({ onSuccess, onProcessingChange }: FileProcessorPr
     const ext = file.name.toLowerCase();
     const isPDF = ext.endsWith(".pdf");
 
-    // Show statement type selector for PDF files
-    if (isPDF) {
-      setPendingTypeFile(file);
-      setPendingTypePassword(password);
-      setStatementType('auto');  // Reset to auto-detect default
-      setStatementTypeDialogOpen(true);
-      return;  // Wait for user selection
-    }
-
-    // For CSV/XLS, proceed with parsing (no type selector needed yet)
-    await processFileWithStatementType(file, 'auto', password);
-  }, [processFileWithStatementType]);
+    // Show statement type selector for ALL file types
+    setPendingTypeFile(file);
+    setPendingTypePassword(password);
+    // PDFs default to 'auto-detect'; CSV/XLSX have no default (user must choose)
+    setStatementType(isPDF ? 'auto' : undefined);
+    setStatementTypeDialogOpen(true);
+    // Wait for user selection
+  }, []);
 
   // Handle password submission - retry with password
   const handlePasswordSubmit = useCallback(async (password: string) => {
-    debugLog('[fileprocesser][PasswordSubmit] pendingFile:', pendingFile, 'password:', password ? '***' : 'empty');
-    if (!pendingFile) return;
+    // Try pendingFile first (from old flow), fall back to pendingTypeFile (from statement type flow)
+    const fileToProcess = pendingFile ?? pendingTypeFile;
+    if (!fileToProcess) return;
 
     setPasswordDialogOpen(false);
     setIsProcessing(true);
@@ -258,8 +268,8 @@ export function FileProcessor({ onSuccess, onProcessingChange }: FileProcessorPr
 
     try {
       // Use the saved statement type from the type dialog (or 'auto' if coming from old flow)
-      const typeToUse = pendingTypeFile ? statementType : 'auto';
-      await processFileWithStatementType(pendingFile, typeToUse, password);
+      const typeToUse = statementType ?? 'auto';
+      await processFileWithStatementType(fileToProcess, typeToUse, password);
       // Success - clear password state
       debugLog('[FileProcessor][PasswordSubmit] Password correct, file processed successfully. Clearing password state and setpendingfile to null');
       setPendingFile(null);
@@ -272,9 +282,9 @@ export function FileProcessor({ onSuccess, onProcessingChange }: FileProcessorPr
       if (isPasswordError(err)) {
         const newAttempts = passwordAttempts + 1;
         setPasswordAttempts(newAttempts);
-        debugLog(`[FileProcessor][PasswordSubmit] Password attempt ${newAttempts} failed for file:`, pendingFile.name, 'max attempts:', MAX_PASSWORD_ATTEMPTS);
+        debugLog(`[FileProcessor][PasswordSubmit] Password attempt ${newAttempts} failed for file:`, fileToProcess.name, 'max attempts:', MAX_PASSWORD_ATTEMPTS);
         if (newAttempts >= MAX_PASSWORD_ATTEMPTS) {
-          debugLog(`[FileProcessor][PasswordSubmit] Max password attempts reached for file:`, pendingFile.name, ' newAttempts:', newAttempts);
+          debugLog(`[FileProcessor][PasswordSubmit] Max password attempts reached for file:`, fileToProcess.name, ' newAttempts:', newAttempts);
           // Too many failed attempts
           debugLog('[FileProcessor][PasswordSubmit] Password correct, file processed successfully. Clearing password state and setpendingfile to null. Attempt counts', newAttempts);
           setPendingFile(null);
@@ -291,7 +301,7 @@ export function FileProcessor({ onSuccess, onProcessingChange }: FileProcessorPr
       } else {
         debugLog('[FileProcessor][PasswordSubmit] "other" error:', err);
         // Other error
-        debugLog('[FileProcessor][PasswordSubmit] Non-password error occurred. Clearing pending file and password state. Error:', err, 'pendingFile:', pendingFile.name, 'passwordAttempts:', passwordAttempts);
+        debugLog('[FileProcessor][PasswordSubmit] Non-password error occurred. Clearing pending file and password state. Error:', err, 'pendingFile:', fileToProcess.name, 'passwordAttempts:', passwordAttempts);
         setPendingFile(null);
         setPasswordAttempts(0);
         setPendingTypeFile(null);
@@ -325,16 +335,20 @@ export function FileProcessor({ onSuccess, onProcessingChange }: FileProcessorPr
   // so we swallow those errors here. Non-password errors are re-thrown.
   const handleStatementTypeContinue = useCallback(async () => {
     setStatementTypeDialogOpen(false);
-    if (pendingTypeFile) {
+    if (pendingTypeFile && statementType) {
       setIsProcessing(true);
       try {
-        await processFileWithStatementType(pendingTypeFile, statementType, pendingTypePassword);
+        await processFileWithStatementType(pendingTypeFile, statementType, pendingTypePassword, pendingHash ?? undefined);
         setPendingTypeFile(null);
         setPendingTypePassword(undefined);
       } catch (err) {
-        // Password errors are handled inside processFileWithStatementType (shows dialog)
-        // Just swallow the error here - don't let it bubble up
-        if (!isPasswordError(err)) {
+        if (isPasswordError(err)) {
+          // Password error — set pendingFile so handlePasswordSubmit can retry
+          setPendingFile(pendingTypeFile);
+          // Clear password attempt state since this is the first password attempt
+          setPasswordAttempts(0);
+          setPasswordError(null);
+        } else {
           // Non-password errors should still be shown
           throw err;
         }
@@ -364,6 +378,32 @@ export function FileProcessor({ onSuccess, onProcessingChange }: FileProcessorPr
     setProgress(null);
   }, []);
 
+  const handleDuplicateContinue = useCallback(() => {
+    setDuplicateDialogOpen(false);
+    if (pendingTypeFile) {
+      setIsProcessing(true);
+      const type = duplicateSourceType === SourceType.CreditCard
+        ? 'credit_card'
+        : 'bank';
+      processFileWithStatementType(
+        pendingTypeFile,
+        type,
+        undefined,
+        pendingHash ?? undefined,
+      );
+    }
+  }, [pendingTypeFile, duplicateSourceType, pendingHash, processFileWithStatementType]);
+
+  const handleDuplicateCancel = useCallback(() => {
+    setDuplicateDialogOpen(false);
+    setPendingTypeFile(null);
+    setPendingHash(null);
+    setDuplicateImportDate(null);
+    setDuplicateSourceType(null);
+    setIsProcessing(false);
+    setProgress(null);
+  }, []);
+
   const handleFileSelect = async (file: File) => {
     wasCancelledRef.current = false;
     setIsProcessing(true);
@@ -374,6 +414,19 @@ export function FileProcessor({ onSuccess, onProcessingChange }: FileProcessorPr
     setPasswordError(null);
 
     try {
+      // Check for duplicate file
+      const hash = await computeFileHash(file);
+      const check = hasFileImported(hash);
+      if (check.alreadyImported) {
+        setDuplicateImportDate(check.importDate ?? null);
+        setDuplicateSourceType(check.sourceType ?? null);
+        setPendingHash(hash);
+        setPendingTypeFile(file);
+        setDuplicateDialogOpen(true);
+        setIsProcessing(false);
+        return;
+      }
+
       // First attempt - no password
       await processFile(file);
     } catch (err) {
@@ -518,25 +571,28 @@ export function FileProcessor({ onSuccess, onProcessingChange }: FileProcessorPr
               How should we detect the statement type?
             </DialogDescription>
           </DialogHeader>
-          <RadioGroup 
-            value={statementType} 
+          <RadioGroup
+            value={statementType}
             onValueChange={(v) => setStatementType(v as 'auto' | 'bank' | 'credit_card')}
             onKeyDown={(e) => {
-              if (e.key === 'Enter') {
+              if (e.key === 'Enter' && statementType) {
                 e.preventDefault();
                 handleStatementTypeContinue();
               }
             }}
           >
-            <div className="flex items-start space-x-2">
-              <RadioGroupItem value="auto" id="auto-detect" />
-              <Label htmlFor="auto-detect" className="flex-1">
-                <div className="font-medium">Auto-detect</div>
-                <div className="text-sm text-muted-foreground">
-                  Uses AI to identify statement type (takes 5-10 seconds)
-                </div>
-              </Label>
-            </div>
+            {/* Auto-detect is only available for PDFs */}
+            {statementType === 'auto' && (
+              <div className="flex items-start space-x-2">
+                <RadioGroupItem value="auto" id="auto-detect" />
+                <Label htmlFor="auto-detect" className="flex-1">
+                  <div className="font-medium">Auto-detect</div>
+                  <div className="text-sm text-muted-foreground">
+                    Uses AI to identify statement type (takes 5-10 seconds)
+                  </div>
+                </Label>
+              </div>
+            )}
             <div className="flex items-start space-x-2">
               <RadioGroupItem value="bank" id="bank-statement" />
               <Label htmlFor="bank-statement" className="flex-1">
@@ -560,8 +616,32 @@ export function FileProcessor({ onSuccess, onProcessingChange }: FileProcessorPr
             <Button variant="outline" onClick={handleStatementTypeCancel}>
               Cancel
             </Button>
-            <Button onClick={handleStatementTypeContinue}>
+            <Button onClick={handleStatementTypeContinue} disabled={!statementType}>
               Continue
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Duplicate File Warning Dialog */}
+      <Dialog open={duplicateDialogOpen} onOpenChange={setDuplicateDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Duplicate Statement Detected</DialogTitle>
+            <DialogDescription>
+              This statement was already imported
+              {duplicateImportDate && (
+                <> on {duplicateImportDate.toLocaleDateString()}</>
+              )}
+              . Importing it again will create duplicate transactions.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="gap-2">
+            <Button variant="outline" onClick={handleDuplicateCancel}>
+              Cancel
+            </Button>
+            <Button onClick={handleDuplicateContinue}>
+              Import Anyway
             </Button>
           </DialogFooter>
         </DialogContent>

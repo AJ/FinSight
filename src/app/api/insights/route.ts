@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getServerClient } from '@/lib/llm/index';
-import { LLMProvider } from '@/lib/llm/types';
+import { LLMProvider, DEFAULT_URLS } from '@/lib/llm/types';
 import { validateLlmServerUrl } from '@/lib/store/settingsStore';
 import { checkRateLimit, getClientIdentifier, STRICT_RATE_LIMIT } from '@/lib/middleware/rateLimit';
 import { debugLog, debugSensitive, debugError, debugWarn } from '@/lib/utils/debug';
@@ -29,7 +29,7 @@ export async function POST(request: NextRequest) {
 
   try {
     const body = await request.json();
-    
+
     // Validate request body against schema
     const parseResult = InsightsRequestSchema.safeParse(body);
     if (!parseResult.success) {
@@ -49,7 +49,7 @@ export async function POST(request: NextRequest) {
     });
 
     // Validate URL to prevent SSRF
-    const defaultUrl = 'http://localhost:11434';
+    const defaultUrl = DEFAULT_URLS.ollama;
     const urlParam = baseUrl || defaultUrl;
     const validation = validateLlmServerUrl(urlParam);
     if (!validation.valid) {

@@ -4,10 +4,10 @@
  */
 
 import { SYSTEM_PROMPT } from './prompts';
-import { LLMCallOptions } from './types';
-import { debugLog } from '@/lib/utils/debug';
+import { LLMCallOptions, DEFAULT_URLS } from './types';
+import { debugLog, debugWarn } from '@/lib/utils/debug';
 
-const DEFAULT_URL = "http://localhost:1234";
+const DEFAULT_URL = DEFAULT_URLS.lmstudio;
 
 /**
  * Error with retry classification.
@@ -50,7 +50,8 @@ export async function listModels(
     const data = await res.json();
     // OpenAI format: { data: [{ id: "model-name" }] }
     return (data.data || []).map((m: { id: string }) => m.id);
-  } catch {
+  } catch (error) {
+    debugWarn('LMStudioServer', 'listModels failed:', error);
     return [];
   }
 }

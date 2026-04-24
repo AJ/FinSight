@@ -1,37 +1,24 @@
-import type { StatementFormat, Currency, Transaction } from "@/types";
-import type { StatementType, CreditCardStatement } from "@/types/creditCard";
-import type { VerificationReport, CCVerificationReport } from "@/lib/verification/verificationEngine";
-import type { CCSummary } from "@/lib/parsers/extractSummary";
-
-export interface ExtractionBundle {
-  transactions: Transaction[];
-  currency: Currency | null;
-  format: StatementFormat;
-  fileName: string;
-  parseDate: Date;
-  statementType: StatementType | null;
-  statementSummary?: CCSummary | null;
-  verificationReport?: VerificationReport | CCVerificationReport;
-  warnings: string[];
-  errors: string[];
-  rawText?: string;
-  sourceMetadata?: {
-    failedChunks?: string[];
-  };
-}
+import type { Currency, Transaction } from "@/types";
+import type { CreditCardStatement, StatementType } from "@/types/creditCard";
+import type {
+  CCVerificationReport,
+  VerificationReport,
+} from "@/lib/verification/verificationEngine";
+import type { Summary } from "@/lib/parsers/extractSummary";
 
 export interface ReviewSessionPayload {
   transactions: Transaction[];
   currency: Currency;
-  format: StatementFormat;
+  format: "csv" | "pdf" | "xlsx" | "xls";
   statementType: StatementType | null;
   fileName: string;
   parseDate: Date;
-  statementSummary?: CCSummary | null;
+  statementSummary?: Summary | null;
   verificationReport?: VerificationReport | CCVerificationReport;
   warnings: string[];
   sourceMetadata?: {
     failedChunks?: string[];
+    sourceFileHash?: string;
   };
 }
 

@@ -1,33 +1,30 @@
 /**
  * Multi-pass statement extraction pipeline.
- * 
+ *
  * Orchestrates the extraction of financial data from statements using
  * independent passes for summary, transactions, and rewards.
- * 
- * Flow:
- * 1. Normalize raw text
- * 2. Detect statement type (CC or Bank)
- * 3. Run extraction passes (sequentially for local LLMs)
- * 4. Validate each pass output
- * 5. Retry failed passes with feedback
- * 6. Merge outputs (dedupe, reconcile, validate)
- * 7. Return final structured data
  */
 
+import type { LLMRuntimeConfig } from '@/lib/llm/types';
+import { debugLog, debugWarn } from '@/lib/utils/debug';
+import type { ExtractedTransaction } from '@/types/extractedTransaction';
+import type { TransactionSubType } from '@/models/Transaction';
+import { Transaction as CanonicalTransaction } from '@/models/Transaction';
+import { SourceType } from '@/types';
+import type { Currency, StatementFormat, Transaction } from '@/types';
 import { normalizeStatementText } from './normalization';
 import { detectStatementType } from './typeDetection';
 import { buildSummaryPrompt } from './extractSummary';
 import { buildTransactionsPrompt } from './extractTransactions';
 import { buildRewardsPrompt } from './extractRewards';
+import type { CCSummary, BankSummary, Summary } from './extractSummary';
+import type { TransactionsOutput } from './extractTransactions';
+import type { RewardsOutput } from './extractRewards';
+import type { StatementExtractionData } from './extractionResult';
 import { mergeOutputs } from '../verification/mergeEngine';
 import { runWithRetry } from './retryEngine';
 import { validateCCSummary, validateBankSummary, validateTransactions } from '../verification/validationEngine';
-import { debugLog, debugWarn } from '@/lib/utils/debug';
-import type { ExtractedTransaction } from '@/types/extractedTransaction';
-import type { FinalOutput } from '../verification/mergeEngine';
-import type { CCSummary, BankSummary } from './extractSummary';
-import type { TransactionsOutput } from './extractTransactions';
-import type { RewardsOutput } from './extractRewards';
+import type { ExtractionBundle, VerificationInputs } from './contracts';
 import {
   createTransactionChunkPlan,
   getDroppedTransactionCount,
@@ -40,38 +37,50 @@ const MAX_RETRIES = 3;
 
 export interface PipelineResult {
   success: boolean;
-  data: FinalOutput | null;
+  data: ExtractionBundle | null;
   warnings: string[];
   errors: string[];
 }
 
 type PipelineStatementType = 'credit_card' | 'bank';
 
-/**
- * Main pipeline entry point.
- * 
- * @param rawText - Raw text extracted from PDF/statement
- * @returns Structured statement data or error
- */
+interface ProcessOptions {
+  format: StatementFormat;
+  defaultCurrency: Currency;
+  fileName: string;
+  statementType?: PipelineStatementType;
+  signal?: AbortSignal;
+  llmConfig: LLMRuntimeConfig;
+}
+
+function buildFailedChunks(diagnostics: ChunkRunDiagnostics[]): string[] | undefined {
+  const totalChunks = diagnostics.length;
+  const failedChunks = diagnostics
+    .filter((diagnostic) => !diagnostic.success)
+    .map(
+      (diagnostic) =>
+        `Chunk ${diagnostic.chunkIndex + 1}/${totalChunks} (lines ${diagnostic.startLine + 1}-${diagnostic.endLine + 1})`,
+    );
+
+  return failedChunks.length > 0 ? failedChunks : undefined;
+}
+
 export async function processStatement(
   rawText: string,
-  signal?: AbortSignal,
-  statementType?: PipelineStatementType,
+  options: ProcessOptions,
 ): Promise<PipelineResult> {
   const warnings: string[] = [];
   const errors: string[] = [];
 
   try {
-    // Step 1: Normalize
     const normalized = normalizeStatementText(rawText);
 
-    // Step 2: Detect statement type
     let resolvedStatementType: PipelineStatementType;
     let bankName: string | null = null;
-    if (statementType) {
-      resolvedStatementType = statementType;
+    if (options.statementType) {
+      resolvedStatementType = options.statementType;
     } else {
-      const typeResult = await detectStatementType(normalized, signal);
+      const typeResult = await detectStatementType(normalized, options.llmConfig, options.signal);
       bankName = typeResult.bankName;
 
       if (typeResult.confidence < CONFIDENCE_THRESHOLD) {
@@ -80,53 +89,50 @@ export async function processStatement(
           data: null,
           warnings: [],
           errors: [
-            `Statement type detection confidence (${typeResult.confidence}) below threshold (${CONFIDENCE_THRESHOLD}). ` +
-            'Manual type selection required.'
-          ]
+            `Statement type detection confidence (${typeResult.confidence}) below threshold (${CONFIDENCE_THRESHOLD}). Manual type selection required.`,
+          ],
         };
       }
 
       resolvedStatementType = typeResult.statementType;
     }
 
-    // Step 3: Run extraction passes based on type
     if (resolvedStatementType === 'credit_card') {
-      return processCreditCard(normalized, bankName || null, signal);
-    } else {
-      return processBank(normalized, bankName || null, signal);
+      return processCreditCard(normalized, bankName || null, options);
     }
 
+    return processBank(normalized, bankName || null, options);
   } catch (e: unknown) {
     errors.push(`Pipeline failed: ${e instanceof Error ? e.message : 'Unknown error'}`);
     return {
       success: false,
       data: null,
       warnings,
-      errors
+      errors,
     };
   }
 }
 
-/**
- * Credit card statement pipeline.
- * Three passes: Summary → Transactions → Rewards
- */
-async function processCreditCard(normalizedText: string, bankName: string | null, signal?: AbortSignal): Promise<PipelineResult> {
+async function processCreditCard(
+  normalizedText: string,
+  bankName: string | null,
+  options: ProcessOptions,
+): Promise<PipelineResult> {
   const warnings: string[] = [];
   const errors: string[] = [];
 
-  // Pass 1: Summary extraction
   const summaryPrompt = buildSummaryPrompt(normalizedText, 'credit_card', bankName);
   const summaryResult = await runWithRetry(
     summaryPrompt,
     normalizedText,
     validateCCSummary,
-      {
-        maxRetries: MAX_RETRIES,
-        stage: 'cc_summary',
-        maxTokens: 2048,
-        signal,
-        onValidationFailure: (parsed) => {
+    {
+      maxRetries: MAX_RETRIES,
+      stage: 'cc_summary',
+      maxTokens: 2048,
+      signal: options.signal,
+      llmConfig: options.llmConfig,
+      onValidationFailure: (parsed) => {
         const s = parsed as CCSummary;
         debugLog('cc_summary', 'Validation failed. LLM returned:', {
           statementDate: s?.statementDate,
@@ -136,30 +142,40 @@ async function processCreditCard(normalizedText: string, bankName: string | null
           purchasesAndCharges: s?.purchasesAndCharges,
           paymentsReceived: s?.paymentsReceived,
         });
-      }
-    }
+      },
+    },
   );
 
   if (!summaryResult.success) {
     warnings.push(`Summary extraction had issues: ${summaryResult.errors.join(', ')}`);
   }
 
-  // Pass 2: Transaction extraction
-  const transactionsResult = await runTransactionExtraction(normalizedText, 'credit_card', bankName, signal);
+  const transactionsResult = await runTransactionExtraction(
+    normalizedText,
+    'credit_card',
+    bankName,
+    options.llmConfig,
+    options.signal,
+  );
   warnings.push(...transactionsResult.warnings);
 
   if (!transactionsResult.success) {
     errors.push(`Transaction extraction failed: ${transactionsResult.errors.join(', ')}`);
   }
 
-  // Pass 3: Rewards extraction (CC only)
   const rewardsPrompt = buildRewardsPrompt(normalizedText);
   const rewardsResult = rewardsPrompt
     ? await runWithRetry(
         rewardsPrompt,
         normalizedText,
-        (data: unknown) => ({ valid: true, errors: [], warnings: [], data: data as RewardsOutput }), // Lenient validation
-        { maxRetries: MAX_RETRIES, stage: 'cc_rewards', maxTokens: 1024, signal }
+        (data: unknown) => ({ valid: true, errors: [], warnings: [], data: data as RewardsOutput }),
+        {
+          maxRetries: MAX_RETRIES,
+          stage: 'cc_rewards',
+          maxTokens: 1024,
+          signal: options.signal,
+          llmConfig: options.llmConfig,
+        },
       )
     : { success: true, data: null, errors: [], warnings: [], attempts: 0 };
 
@@ -167,79 +183,110 @@ async function processCreditCard(normalizedText: string, bankName: string | null
     warnings.push(`Rewards extraction had issues: ${rewardsResult.errors.join(', ')}`);
   }
 
-  // Step 6: Merge outputs
+  const failedChunks = transactionsResult.debugInfo && typeof transactionsResult.debugInfo === 'object'
+    ? buildFailedChunks((transactionsResult.debugInfo as { diagnostics?: ChunkRunDiagnostics[] }).diagnostics ?? [])
+    : undefined;
+
   const merged = mergeOutputs(
     'credit_card',
     summaryResult.data,
     transactionsResult.data,
     rewardsResult.data,
-    warnings
+    warnings,
+    failedChunks,
   );
+
+  const data = buildExtractionBundle({
+    rawText: normalizedText,
+    statementType: 'credit_card',
+    extracted: merged,
+    defaultCurrency: options.defaultCurrency,
+    format: options.format,
+    fileName: options.fileName,
+  });
 
   return {
     success: errors.length === 0,
-    data: merged,
-    warnings: merged.meta.warnings,
-    errors
+    data,
+    warnings: data.warnings,
+    errors,
   };
 }
 
-/**
- * Bank statement pipeline.
- * Two passes: Summary → Transactions (no rewards)
- */
-async function processBank(normalizedText: string, bankName: string | null, signal?: AbortSignal): Promise<PipelineResult> {
+async function processBank(
+  normalizedText: string,
+  bankName: string | null,
+  options: ProcessOptions,
+): Promise<PipelineResult> {
   const warnings: string[] = [];
   const errors: string[] = [];
 
-  // Pass 1: Summary extraction
   const summaryPrompt = buildSummaryPrompt(normalizedText, 'bank', bankName);
   const summaryResult = await runWithRetry(
     summaryPrompt,
     normalizedText,
     validateBankSummary,
-      {
-        maxRetries: MAX_RETRIES,
-        stage: 'bank_summary',
-        maxTokens: 2048,
-        signal,
-        onValidationFailure: (parsed) => {
+    {
+      maxRetries: MAX_RETRIES,
+      stage: 'bank_summary',
+      maxTokens: 2048,
+      signal: options.signal,
+      llmConfig: options.llmConfig,
+      onValidationFailure: (parsed) => {
         const s = parsed as BankSummary;
         debugLog('bank_summary', 'Validation failed. LLM returned:', {
           statementDate: s?.statementDate,
           openingBalance: s?.openingBalance,
           closingBalance: s?.closingBalance,
         });
-      }
-    }
+      },
+    },
   );
 
   if (!summaryResult.success) {
     warnings.push(`Summary extraction had issues: ${summaryResult.errors.join(', ')}`);
   }
 
-  // Pass 2: Transaction extraction
-  const transactionsResult = await runTransactionExtraction(normalizedText, 'bank', bankName, signal);
+  const transactionsResult = await runTransactionExtraction(
+    normalizedText,
+    'bank',
+    bankName,
+    options.llmConfig,
+    options.signal,
+  );
   warnings.push(...transactionsResult.warnings);
 
   if (!transactionsResult.success) {
     errors.push(`Transaction extraction failed: ${transactionsResult.errors.join(', ')}`);
   }
 
-  // Step 6: Merge outputs (no rewards for bank)
+  const failedChunks = transactionsResult.debugInfo && typeof transactionsResult.debugInfo === 'object'
+    ? buildFailedChunks((transactionsResult.debugInfo as { diagnostics?: ChunkRunDiagnostics[] }).diagnostics ?? [])
+    : undefined;
+
   const merged = mergeOutputs(
     'bank',
     summaryResult.data,
     transactionsResult.data,
     null,
-    warnings
+    warnings,
+    failedChunks,
   );
+
+  const data = buildExtractionBundle({
+    rawText: normalizedText,
+    statementType: 'bank',
+    extracted: merged,
+    defaultCurrency: options.defaultCurrency,
+    format: options.format,
+    fileName: options.fileName,
+  });
 
   return {
     success: errors.length === 0,
-    data: merged,
-    warnings: merged.meta.warnings,
-    errors
+    data,
+    warnings: data.warnings,
+    errors,
   };
 }
 
@@ -247,6 +294,7 @@ async function runTransactionExtraction(
   normalizedText: string,
   statementType: 'credit_card' | 'bank',
   bankName: string | null,
+  llmConfig: LLMRuntimeConfig,
   signal?: AbortSignal,
 ) {
   const stage = statementType === 'credit_card' ? 'cc_transactions' : 'bank_transactions';
@@ -262,13 +310,14 @@ async function runTransactionExtraction(
         stage,
         maxTokens: 12288,
         signal,
+        llmConfig,
         onValidationFailure: (parsed) => {
           const t = parsed as TransactionsOutput;
-          debugLog(stage, `Validation failed. LLM returned:`, {
+          debugLog(stage, 'Validation failed. LLM returned:', {
             transactionCount: t?.transactions?.length,
           });
-        }
-      }
+        },
+      },
     );
   }
 
@@ -285,13 +334,14 @@ async function runTransactionExtraction(
         stage,
         maxTokens: 12288,
         signal,
+        llmConfig,
         onValidationFailure: (parsed) => {
           const t = parsed as TransactionsOutput;
-          debugLog(stage, `Validation failed. LLM returned:`, {
+          debugLog(stage, 'Validation failed. LLM returned:', {
             transactionCount: t?.transactions?.length,
           });
-        }
-      }
+        },
+      },
     );
   }
 
@@ -320,13 +370,14 @@ async function runTransactionExtraction(
         stage,
         maxTokens: 12288,
         signal,
+        llmConfig,
         onValidationFailure: (parsed) => {
           const t = parsed as TransactionsOutput;
           debugLog(stage, `chunk ${chunk.index + 1}/${chunk.totalChunks} Validation failed. LLM returned:`, {
             transactionCount: t?.transactions?.length,
           });
-        }
-      }
+        },
+      },
     );
 
     totalAttempts += chunkResult.attempts;
@@ -351,15 +402,11 @@ async function runTransactionExtraction(
     if (chunkResult.success) {
       successfulChunks++;
     } else {
-      transactionErrors.push(
-        `Chunk ${chunk.index + 1}/${chunk.totalChunks} failed: ${chunkResult.errors.join(', ')}`
-      );
+      transactionErrors.push(`Chunk ${chunk.index + 1}/${chunk.totalChunks} failed: ${chunkResult.errors.join(', ')}`);
     }
 
     if (chunkResult.warnings.length > 0) {
-      transactionWarnings.push(
-        `Chunk ${chunk.index + 1}/${chunk.totalChunks}: ${chunkResult.warnings.join(', ')}`
-      );
+      transactionWarnings.push(`Chunk ${chunk.index + 1}/${chunk.totalChunks}: ${chunkResult.warnings.join(', ')}`);
     }
   }
 
@@ -409,6 +456,220 @@ async function runTransactionExtraction(
       extractedAfterDedupe: mergedTransactions.transactions.length,
       duplicatesRemoved: mergedTransactions.duplicatesRemoved,
       diagnostics,
+    },
+  };
+}
+
+const cashbackKeywords = ['cashback', 'valueback', 'reward cash', 'reward cashback'];
+const ccPaymentKeywords = [
+  'credit card',
+  'cc payment',
+  'card payment',
+  'hdfc card',
+  'icici card',
+  'axis card',
+  'sbi card',
+  'kotak card',
+  'citi card',
+  'amex card',
+  'idfc card',
+  'tele-transfer',
+  'tele transfer',
+  'neft-hdfc',
+  'neft-icici',
+  'neft-axis',
+  'neft-sbi',
+  'neft-kotak',
+  'billdesk*hdfc',
+  'billdesk*icici',
+  'billdesk*axis',
+  'autopay cc',
+];
+const ccIssuers = [
+  'hdfc',
+  'icici',
+  'axis',
+  'sbi',
+  'kotak',
+  'citi',
+  'amex',
+  'idfc',
+  'au bank',
+  'bob',
+  'canara',
+  'pnb',
+  'hsbc',
+  'standard chartered',
+  'scb',
+  'rbl',
+  'yes bank',
+];
+
+function normalizeCCTransactionSubTypes(transactions: Transaction[]): Transaction[] {
+  return transactions.map((transaction) => {
+    if (transaction.sourceType !== SourceType.CreditCard) {
+      return transaction;
+    }
+    if (!transaction.isCredit) {
+      return transaction;
+    }
+    if (transaction.transactionSubType !== 'bill_payment') {
+      return transaction;
+    }
+
+    const text = `${transaction.description} ${transaction.originalText ?? ''}`.toLowerCase();
+    const looksLikeCashback = cashbackKeywords.some((keyword) => text.includes(keyword));
+    const looksLikeBillPayment =
+      ccPaymentKeywords.some((keyword) => text.includes(keyword)) ||
+      ccIssuers.some(
+        (issuer) => text.includes(issuer) && (text.includes('card') || text.includes('bill')),
+      );
+
+    if (looksLikeCashback || looksLikeBillPayment) {
+      return transaction;
+    }
+
+    return new CanonicalTransaction(
+      transaction.id,
+      transaction.date,
+      transaction.description,
+      transaction.amount,
+      transaction.type,
+      transaction.category,
+      transaction.balance,
+      transaction.merchant,
+      transaction.originalText,
+      transaction.budgetMonth,
+      transaction.categoryConfidence,
+      transaction.needsReview,
+      transaction.categorizedBy,
+      transaction.sourceType,
+      transaction.statementId,
+      transaction.cardIssuer,
+      transaction.cardLastFour,
+      transaction.cardHolder,
+      transaction.localCurrency,
+      transaction.originalCurrency,
+      transaction.originalAmount,
+      transaction.isInternational,
+      transaction.isAnomaly,
+      transaction.anomalyTypes,
+      transaction.anomalyDetails,
+      transaction.anomalyDismissed,
+      'refund' as TransactionSubType,
+      transaction.suggestedCategory,
+      transaction.llmConfidence,
+      transaction.verificationConfidence,
+    );
+  });
+}
+
+function toCanonicalTransactions(
+  extractedTransactions: ExtractedTransaction[],
+  defaultCurrency: Currency,
+  sourceType: SourceType,
+): Transaction[] {
+  const transactions = extractedTransactions.map((transaction) =>
+    CanonicalTransaction.fromExtracted(transaction, defaultCurrency, sourceType),
+  );
+
+  return sourceType === SourceType.CreditCard
+    ? normalizeCCTransactionSubTypes(transactions)
+    : transactions;
+}
+
+function buildVerificationInputs(
+  rawText: string,
+  statementType: 'bank' | 'credit_card',
+  transactions: Transaction[],
+  currency: Currency,
+  summary: Summary | null,
+): VerificationInputs | undefined {
+  if (statementType === 'bank' && summary && 'openingBalance' in summary) {
+    const bankSummary = summary as BankSummary;
+    return {
+      kind: 'bank',
+      rawText,
+      transactions,
+      meta: {
+        openingBalance: bankSummary.openingBalance ?? undefined,
+        closingBalance: bankSummary.closingBalance ?? undefined,
+        currency: currency.code,
+      },
+      summary: bankSummary,
+    };
+  }
+
+  if (statementType === 'credit_card' && summary && 'totalDue' in summary) {
+    const ccSummary = summary as CCSummary;
+    return {
+      kind: 'credit_card',
+      rawText,
+      transactions,
+      meta: {
+        previousBalance: ccSummary.previousBalance ?? undefined,
+        totalDue: ccSummary.totalDue ?? undefined,
+        paymentsReceived: ccSummary.paymentsReceived ?? undefined,
+        purchasesAndCharges: ccSummary.purchasesAndCharges ?? undefined,
+        interestCharged: ccSummary.interestCharged ?? undefined,
+        lateFee: ccSummary.lateFee ?? undefined,
+        otherCharges: ccSummary.otherCharges ?? undefined,
+        cashbackEarned: ccSummary.cashbackEarned ?? undefined,
+        currency: currency.code,
+      },
+      summary: ccSummary,
+    };
+  }
+
+  return undefined;
+}
+
+function buildExtractionBundle(input: {
+  rawText: string;
+  statementType: 'bank' | 'credit_card';
+  extracted: StatementExtractionData;
+  defaultCurrency: Currency;
+  format: StatementFormat;
+  fileName: string;
+}): ExtractionBundle {
+  const validationResult = validateTransactions({ transactions: input.extracted.transactions });
+  if (!validationResult.valid || !validationResult.data) {
+    throw new Error(`Transaction validation failed: ${validationResult.errors.join(', ')}`);
+  }
+
+  const sourceType =
+    input.statementType === 'credit_card' ? SourceType.CreditCard : SourceType.Bank;
+  const transactions = toCanonicalTransactions(
+    validationResult.data.transactions,
+    input.defaultCurrency,
+    sourceType,
+  );
+  const currency =
+    transactions.find((transaction) => transaction.localCurrency)?.localCurrency ??
+    input.defaultCurrency;
+  const statementSummary = input.extracted.summary ?? null;
+
+  return {
+    transactions,
+    currency,
+    format: input.format,
+    fileName: input.fileName,
+    parseDate: new Date(),
+    statementType: input.statementType,
+    statementSummary,
+    verificationInputs: buildVerificationInputs(
+      input.rawText,
+      input.statementType,
+      transactions,
+      currency,
+      statementSummary,
+    ),
+    warnings: [...input.extracted.meta.warnings, ...validationResult.warnings],
+    errors: [],
+    parsingErrors: [],
+    rawText: input.rawText,
+    sourceMetadata: {
+      failedChunks: input.extracted.meta.failedChunks,
     },
   };
 }

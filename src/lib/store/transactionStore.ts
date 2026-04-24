@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import { Transaction, Category, TransactionJSON, CategorizedBy } from '@/types';
+import { Transaction, Category, TransactionJSON, CategorizedBy, SourceType } from '@/types';
 import { deduplicateTransactions } from '@/lib/transactionUtils';
 import {
   buildStoredTransactionCategoryUpdate,
@@ -61,6 +61,11 @@ interface TransactionStore {
   dismissAnomaly: (id: string) => void;
   restoreAnomaly: (id: string) => void;
   getActiveAnomalies: () => Transaction[];
+  hasFileImported: (hash: string) => {
+    alreadyImported: boolean;
+    importDate?: Date;
+    sourceType?: SourceType;
+  };
 }
 
 export const useTransactionStore = create<TransactionStore>()(
@@ -250,6 +255,23 @@ export const useTransactionStore = create<TransactionStore>()(
         return get().transactions.filter(
           (txn) => txn.isAnomaly && !txn.anomalyDismissed
         );
+      },
+
+      hasFileImported: (hash) => {
+        const matching = get().transactions.filter(
+          (txn) => txn.sourceFileHash === hash
+        );
+        if (matching.length === 0) {
+          return { alreadyImported: false };
+        }
+        const earliest = matching.reduce((a, b) =>
+          a.date < b.date ? a : b
+        );
+        return {
+          alreadyImported: true,
+          importDate: earliest.date,
+          sourceType: earliest.sourceType ?? undefined,
+        };
       },
     }),
     {

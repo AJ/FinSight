@@ -8,6 +8,11 @@ export function categorizeTransaction(
 ): string {
   const lowerDesc = description.toLowerCase();
 
+  // NOTE: First-match-wins on keyword inclusion. Categories registered earlier
+  // take precedence when keywords overlap. E.g., "food" is in groceries (registered
+  // first) so "SWIGGY FOOD ORDER" matches groceries, not dining. Known limitation
+  // of the keyword fallback (0.3 confidence) — the LLM handles these correctly.
+
   // Determine which category types to search based on transaction type
   // credit = likely income (but could be refund to expense category)
   // debit = likely expense

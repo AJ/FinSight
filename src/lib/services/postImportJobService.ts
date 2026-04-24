@@ -97,9 +97,10 @@ async function runBackgroundCategorization(): Promise<void> {
     }, 3000);
   } catch (error) {
     debugError("BackgroundCategorization", error);
+    const errorMessage = error instanceof Error ? error.message : "Unknown error";
     useTransactionStore.setState({
       isCategorizing: false,
-      categorizeProgress: "Categorization failed",
+      categorizeProgress: `Categorization failed: ${errorMessage}`,
     });
     setTimeout(() => {
       if (!useTransactionStore.getState().isCategorizing) {

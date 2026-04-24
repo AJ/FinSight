@@ -391,7 +391,7 @@ IMPORTANT: Determine type FIRST, then subtype:
    - "bill_payment": Use only for card payments from bank/account rails such as PAYMENT, PAYZAPP, UPI, NEFT, IMPS, autopay, or bank transfer-like descriptions
    - "tax" is a subtype of "debit" and indicates tax charged on a purchase. It is NOT the total amount of the transaction, but the tax component. Look for tax keywords in the description to identify this subtype (*Non exclusive HINTS*: GST, IGST, CGST, SGST, UGST, VAT, CESS, DUTY, TAX, TDS)
    - "purchase": Regular spending at merchants (most common for debits)
-   - "FCY MARKUP FEE" is not a bank fee but a currency conversion charge, so classify it as "charge" subtype, not "fee"
+   - "FCY MARKUP FEE" is not a bank fee but a currency conversion charge, so classify it as "charge" subtype, not "fee". FCY markup fees are NOT international transactions — set isInternationalTransaction = false.
    - "fee": Bank charges ONLY (HINTS: FEE, CHARGE, PENALTY, LATE FEE, ANNUAL FEE, SERVICE FEE). NEVER assign this subtype if the description contains IGST, CGST, SGST, UGST, GST, TDS, or VAT — those are always "tax".
    - "interest": Interest charged (HINTS: INTEREST, IGP, FINANCE CHARGE)
    - "adjustment": Account adjustments
@@ -403,7 +403,7 @@ IMPORTANT: Determine type FIRST, then subtype:
 +
 `
 RULE 6 - Non-Bank FEEs:
-- "FCY MARKUP FEE" is not a bank fee but a currency conversion charge and MUST be classifed as "charge" subtype, not "fee"
+- "FCY MARKUP FEE" is not a bank fee but a currency conversion charge and MUST be classifed as "charge" subtype, not "fee". It is NOT an international transaction — it is a fee charged in the statement's local currency, so set isInternationalTransaction = false. Same for: forex charges, dynamic currency conversion (DCC) charges, international transaction fees, foreign transaction fees.
 - "payment": Credit card bill payment; Look for but not exclusive to: PAYMENT, PAID, PAYZAPP, UPI, NEFT, IMPS).
 
 RULE 7 — DATE FORMAT

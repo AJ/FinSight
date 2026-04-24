@@ -29,7 +29,6 @@ import {
 } from '@/lib/creditCard/revolvingDetector';
 import {
   getAPRForIssuer,
-  getPointValueForIssuer,
 } from '@/lib/creditCard/constants';
 
 /** Ensure a value is a proper Date object */
@@ -496,7 +495,6 @@ export const useCreditCardStore = create<CreditCardStore>()(
                 totalRedeemed: 0,
                 totalExpired: 0,
                 earningRate: 0,
-                estimatedValue: 0,
               });
             }
 
@@ -530,18 +528,12 @@ export const useCreditCardStore = create<CreditCardStore>()(
           }
         }
 
-        // Calculate estimated values
-        for (const card of byCard.values()) {
-          card.estimatedValue = card.currentBalance * getPointValueForIssuer(card.cardIssuer);
-        }
-
+        // Calculate totals
         const byCardArray = Array.from(byCard.values());
         const totalPointsAllCards = byCardArray.reduce((sum, c) => sum + c.currentBalance, 0);
-        const estimatedTotalValue = byCardArray.reduce((sum, c) => sum + c.estimatedValue, 0);
 
         return {
           totalPointsAllCards,
-          estimatedTotalValue,
           byCard: byCardArray,
           expiringSoon: expiringSoon.sort((a, b) => a.expiryDate.getTime() - b.expiryDate.getTime()),
         };

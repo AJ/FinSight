@@ -63,17 +63,24 @@ export async function finalizeReviewImport(
     reviewedTransactions,
   );
 
-  dependencies.addTransactions(reviewedTransactions);
+  const sourceFileHash = reviewSession.sourceMetadata?.sourceFileHash;
+  const stampedTransactions = sourceFileHash
+    ? reviewedTransactions.map((t) => t.cloneWith({ sourceFileHash }))
+    : reviewedTransactions;
+
+  dependencies.addTransactions(stampedTransactions);
 
   const postImportJobsTriggered: string[] = [];
-
-  if (
+  const creditCardSummary =
     reviewSession.statementType === "credit_card" &&
     reviewSession.statementSummary &&
-    dependencies.addCreditCardStatement
-  ) {
+    "cardLastFour" in reviewSession.statementSummary
+      ? (reviewSession.statementSummary as CCSummary)
+      : null;
+
+  if (creditCardSummary && dependencies.addCreditCardStatement) {
     dependencies.addCreditCardStatement(
-      toCreditCardStatement(reviewSession.statementSummary, reviewSession.fileName),
+      toCreditCardStatement(creditCardSummary, reviewSession.fileName),
     );
     postImportJobsTriggered.push("credit_card_statement_import");
   }

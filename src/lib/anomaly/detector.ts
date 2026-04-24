@@ -183,7 +183,7 @@ function buildIndexes(transactions: Transaction[]): PrecomputedIndexes {
  */
 export function extractMerchant(description: string): string {
   return description
-    .replace(/^[A-Z]{2,4}\s*\*?\s*/i, '') // Remove codes like "AMZN *", "GOOG *"
+    .replace(/^[A-Z]{2,4}\s*\*\s*/i, '') // Remove codes like "AMZN *", "GOOG *"
     .replace(/^\d+\s+/, '') // Remove leading numbers
     .split(/\s+/)
     .slice(0, 3)
@@ -337,8 +337,6 @@ export function detectFrequencyAnomaly(
 export function detectAnomalies(transactions: Transaction[]): Transaction[] {
   const categoryStats = calculateCategoryStats(transactions);
   const indexes = buildIndexes(transactions);
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const { Transaction: TxnClass } = require('@/types');
 
   return transactions.map((txn) => {
     const anomalies: AnomalyDetail[] = [];
@@ -355,9 +353,9 @@ export function detectAnomalies(transactions: Transaction[]): Transaction[] {
     const frequencyAnomaly = detectFrequencyAnomaly(txn, transactions, indexes);
     if (frequencyAnomaly) anomalies.push(frequencyAnomaly);
 
-    // No anomalies detected - clear flags
+    // No anomalies detected - clear flags but preserve dismissal status
     if (anomalies.length === 0) {
-      return new TxnClass(
+      return new Transaction(
         txn.id,
         txn.date,
         txn.description,
@@ -383,7 +381,12 @@ export function detectAnomalies(transactions: Transaction[]): Transaction[] {
         undefined, // isAnomaly
         undefined, // anomalyTypes
         undefined, // anomalyDetails
-        undefined, // anomalyDismissed
+        txn.anomalyDismissed, // preserve dismissal status on re-scan
+        txn.transactionSubType,
+        txn.suggestedCategory,
+        txn.llmConfidence,
+        txn.verificationConfidence,
+        txn.sourceFileHash,
       );
     }
 
@@ -404,7 +407,7 @@ export function detectAnomalies(transactions: Transaction[]): Transaction[] {
       }
     }
 
-    return new TxnClass(
+    return new Transaction(
       txn.id,
       txn.date,
       txn.description,
@@ -431,6 +434,11 @@ export function detectAnomalies(transactions: Transaction[]): Transaction[] {
       anomalyTypes,
       anomalyDetails,
       txn.anomalyDismissed ?? false,
+      txn.transactionSubType,
+      txn.suggestedCategory,
+      txn.llmConfidence,
+      txn.verificationConfidence,
+      txn.sourceFileHash,
     );
   });
 }

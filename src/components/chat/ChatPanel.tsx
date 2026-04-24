@@ -116,8 +116,9 @@ export function ChatPanel() {
   }, []);
 
   useEffect(() => {
+    const controller = activeStreamControllerRef.current;
     return () => {
-      activeStreamControllerRef.current.abortAll('Component unmounted');
+      controller.abortAll('Component unmounted');
     };
   }, []);
 

@@ -11,9 +11,6 @@ export {
 } from '@/models';
 export type { TransactionJSON, AnomalyDetails } from '@/models';
 
-// Import for local use in type definitions
-import type { Transaction } from '@/models';
-
 // Budget types
 export interface Budget {
   id: string;
@@ -67,14 +64,6 @@ export interface BudgetProgress {
 
 // File upload types
 export type StatementFormat = "csv" | "pdf" | "xlsx" | "xls";
-
-export interface ParsedStatement {
-  transactions: Transaction[];
-  format: StatementFormat;
-  fileName: string;
-  parseDate: Date;
-  failedChunks?: string[];
-}
 
 // Chat types
 export interface ChatMessage {

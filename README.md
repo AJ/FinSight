@@ -211,10 +211,11 @@ Browser
 ### Parsing Flow
 
 1. **Text extraction** — `pdfjs-dist` (for PDFs) or built-in parsers (for CSV/XLS) extract raw text from the document
-2. **Statement type detection** — AI analyzes the content to detect if it's a bank statement or credit card statement
+2. **Statement type detection** — AI analyzes the content to detect if it's a bank statement or credit card statement. CSV/XLS files require manual selection.
 3. **LLM parsing** — The extracted text is sent to your local LLM. The model returns structured JSON with dates, descriptions, amounts, types, and auto-detected currency
 4. **Chunking** — Long statements are automatically split into chunks to fit within the model's context window
-5. **Validation & deduplication** — Every transaction is validated (date, amount, type) and duplicates are removed before being shown
+5. **Validation & verification** — Transactions are validated (date, amount, type), deduplicated, and verified against the raw statement text for confidence scoring
+6. **Review & categorization** — Transactions are categorized (merchant rules → AI → keyword fallback) and presented for review before import
 
 ### Chat Flow
 
@@ -252,10 +253,9 @@ src/
 ├── app/
 │   ├── api/
 │   │   ├── llm/              # LLM communication
-│   │   │   ├── status/       # GET — check connection & list models
-│   │   │   ├── parse/        # POST — parse statement with LLM
-│   │   │   └── chat/         # POST — streaming chat
-│   │   ├── categorize/       # POST — AI transaction categorization
+│   │   │   ├── status/       # GET — check connection & list models (deprecated)
+│   │   │   └── chat/         # POST — streaming chat (deprecated)
+│   │   ├── categorize/       # POST — AI transaction categorization (deprecated)
 │   │   └── insights/         # POST — generate financial insights
 │   ├── chat/                 # Chat with your data
 │   ├── credit-cards/         # Credit card dashboard
@@ -269,7 +269,7 @@ src/
 ├── components/
 │   ├── onboarding/           # Setup wizard (Provider, Model, Currency)
 │   ├── chat/                 # Chat UI (ChatPanel, MarkdownRenderer)
-│   ├── creditCard/           # Credit card widgets (10+ components)
+│   ├── creditCard/           # Credit card widgets (21 components)
 │   ├── dashboard/            # Charts (Pie, Trend, StatCard, ScoreRing)
 │   ├── insights/             # Insight cards and panels
 │   ├── layout/               # AppLayout, Sidebar, UploadDialog
@@ -280,6 +280,19 @@ src/
 │
 ├── lib/
 │   ├── validation/           # API schema validation
+│   ├── verification/         # Post-extraction verification
+│   │   ├── validationEngine.ts    # Schema-level checks (dates, amounts, noise rows)
+│   │   ├── verificationEngine.ts  # Per-transaction matching against raw text
+│   │   └── mergeEngine.ts         # Dedup, cross-section validation, confidence scoring
+│   ├── pipelines/            # Import pipelines
+│   │   ├── preReviewPipeline.ts   # Upload → extract → verify → categorize → session
+│   │   ├── postReviewPipeline.ts  # Review → learn rules → store → post-import jobs
+│   │   └── types.ts               # ReviewSessionPayload
+│   ├── services/             # Business logic services
+│   │   ├── statementVerificationService.ts # Verification orchestration
+│   │   ├── transactionEnrichmentService.ts  # Categorization orchestration
+│   │   ├── merchantRuleService.ts           # Learned rule matching
+│   │   └── postImportJobService.ts          # Background recategorization & anomaly detection
 │   ├── categorization/       # AI categorization logic
 │   │   ├── categories.ts     # Category definitions
 │   │   ├── aiCategorizer.ts  # LLM-based categorization
@@ -290,13 +303,17 @@ src/
 │   │   ├── generator.ts      # Insight generation
 │   │   └── prompts.ts        # Insight prompts
 │   ├── llm/                  # LLM clients
+│   │   ├── llmClient.ts            # Unified dispatcher (routes by provider)
+│   │   ├── types.ts                # LLMRuntimeConfig, DEFAULT_URLS
 │   │   ├── ollamaClient.ts         # Ollama (server)
 │   │   ├── ollamaBrowserClient.ts  # Ollama (browser)
 │   │   ├── lmstudioClient.ts       # LM Studio (server)
 │   │   └── lmstudioBrowserClient.ts # LM Studio (browser)
 │   ├── parsers/              # File parsing
-│   │   ├── llmParser.ts      # LLM-powered parser
-│   │   ├── pdfParser.ts      # PDF column-based parser
+│   │   ├── pipeline.ts       # LLM extraction pipeline (summary, transactions, rewards)
+│   │   ├── extractStatementBundle.ts # File routing & extraction entry point
+│   │   ├── contracts.ts      # ExtractionBundle, VerificationInputs types
+│   │   ├── documentExtraction.ts # PDF text extraction & password handling
 │   │   ├── csvParser.ts      # CSV parser
 │   │   ├── xlsParser.ts      # Excel parser
 │   │   ├── currencyDetector.ts # Currency detection
@@ -380,6 +397,7 @@ This is useful for:
 - **PDF:** pdfjs-dist (text extraction)
 - **AI:** Ollama or LM Studio (local LLM inference)
 - **Language:** TypeScript
+- **Testing:** Vitest (unit), Playwright (integration/e2e)
 
 ---
 

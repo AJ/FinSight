@@ -6,6 +6,7 @@
  * the server. This client makes requests directly from the browser,
  * where "localhost" correctly refers to the user's machine.
  */
+import { debugWarn } from '@/lib/utils/debug';
 
 const GENERATE_TIMEOUT_MS = 3 * 60 * 1000;
 const CHAT_CONNECT_TIMEOUT_MS = 30 * 1000;
@@ -72,7 +73,8 @@ export async function listModels(baseUrl: string): Promise<string[]> {
     if (!res.ok) return [];
     const data = await res.json();
     return (data.models || []).map((m: { name: string }) => m.name);
-  } catch {
+  } catch (error) {
+    debugWarn('OllamaBrowser', 'listModels failed:', error);
     return [];
   }
 }

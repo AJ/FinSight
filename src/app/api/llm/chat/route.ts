@@ -16,7 +16,7 @@
  */
 
 import { getServerClient } from '@/lib/llm/index';
-import { LLMProvider } from '@/lib/llm/types';
+import { LLMProvider, DEFAULT_URLS } from '@/lib/llm/types';
 import { validateLlmServerUrl } from '@/lib/store/settingsStore';
 import { checkRateLimit, getClientIdentifier, LLM_RATE_LIMIT } from '@/lib/middleware/rateLimit';
 import { debugError } from '@/lib/utils/debug';
@@ -34,7 +34,7 @@ export async function POST(request: Request) {
 
   try {
     const { message, context, history, model, ollamaUrl, provider } = await request.json();
-    const urlParam = (ollamaUrl as string) || 'http://localhost:11434';
+    const urlParam = (ollamaUrl as string) || DEFAULT_URLS.ollama;
     const llmProvider = (provider as LLMProvider) || 'ollama';
 
     // Validate URL to prevent SSRF

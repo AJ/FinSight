@@ -10,7 +10,7 @@
  */
 
 import { create } from 'zustand';
-import { checkLLMStatus } from '@/lib/parsers/llmParser';
+import { checkLLMStatus } from '@/lib/llm/checkStatus';
 import { useSettingsStore } from '@/lib/store/settingsStore';
 import type { LLMStatus } from '@/types';
 import type { LLMProvider } from '@/lib/llm/types';

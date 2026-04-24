@@ -5,10 +5,10 @@
  */
 
 import { SYSTEM_PROMPT } from './prompts';
-import { LLMCallOptions } from './types';
-import { debugLog } from '@/lib/utils/debug';
+import { LLMCallOptions, DEFAULT_URLS } from './types';
+import { debugLog, debugWarn } from '@/lib/utils/debug';
 
-const DEFAULT_URL = "http://localhost:11434";
+const DEFAULT_URL = DEFAULT_URLS.ollama;
 
 /**
  * Error with retry classification.
@@ -50,7 +50,8 @@ export async function listModels(
     if (!res.ok) return [];
     const data = await res.json();
     return (data.models || []).map((m: { name: string }) => m.name);
-  } catch {
+  } catch (error) {
+    debugWarn('OllamaServer', 'listModels failed:', error);
     return [];
   }
 }

@@ -2,6 +2,7 @@ import { parse, isValid, format } from "date-fns"
 import { Transaction } from '@/models/Transaction';
 import { debugLog } from '@/lib/utils/debug';
 import type { CCSummary, BankSummary } from '@/lib/parsers/extractSummary';
+import type { ExtractedTransaction } from '@/types/extractedTransaction';
 
 //
 // TYPES
@@ -155,7 +156,7 @@ function verifyTransaction(
   const contextMatched = contextMatch.matched
   const typeMatched = matchType(rawText, tx)  // NEW: Verify credit/debit column
   const currencyMatched = tx.localCurrency
-    ? rawText.includes(tx.localCurrency.code)
+    ? rawText.includes(tx.localCurrency.code.toLowerCase())
     : true
 
   let confidence = 0
@@ -417,7 +418,7 @@ function calculateCCConfidence(
  */
 export function validateCCCrossSection(
   summary: CCSummary,
-  transactions: Transaction[]
+  transactions: ExtractedTransaction[]
 ): string[] {
   const warnings: string[] = [];
 
@@ -426,12 +427,12 @@ export function validateCCCrossSection(
   }
 
   const totalDebit = transactions
-    .filter((t: Transaction) => t.type === 'debit')
-    .reduce((s: number, t: Transaction) => s + t.amount, 0);
+    .filter((t) => t.type === 'debit')
+    .reduce((s: number, t) => s + t.amount, 0);
 
   const totalCredit = transactions
-    .filter((t: Transaction) => t.type === 'credit')
-    .reduce((s: number, t: Transaction) => s + t.amount, 0);
+    .filter((t) => t.type === 'credit')
+    .reduce((s: number, t) => s + t.amount, 0);
 
   // CC debit total vs purchasesAndCharges (15% tolerance)
   if (
@@ -478,7 +479,7 @@ export function validateCCCrossSection(
  */
 export function validateBankCrossSection(
   summary: BankSummary,
-  transactions: Transaction[]
+  transactions: ExtractedTransaction[]
 ): string[] {
   const warnings: string[] = [];
 
@@ -496,12 +497,12 @@ export function validateBankCrossSection(
   }
 
   const totalCredit = transactions
-    .filter((t: Transaction) => t.type === 'credit')
-    .reduce((s: number, t: Transaction) => s + t.amount, 0);
+    .filter((t) => t.type === 'credit')
+    .reduce((s: number, t) => s + t.amount, 0);
 
   const totalDebit = transactions
-    .filter((t: Transaction) => t.type === 'debit')
-    .reduce((s: number, t: Transaction) => s + t.amount, 0);
+    .filter((t) => t.type === 'debit')
+    .reduce((s: number, t) => s + t.amount, 0);
 
   const calculatedClosing = summary.openingBalance + totalCredit - totalDebit;
   const diff = Math.abs(calculatedClosing - summary.closingBalance);
@@ -589,52 +590,77 @@ function matchContext(raw: string, tx: Transaction): {
  * - +/- signs
  * - CR/DR suffix
  * - Keywords (CREDIT, DEBIT, etc.)
+ *
+ * Uses date+amount anchors to bound the search to a single transaction row,
+ * preventing type keywords from adjacent rows from bleeding in.
  */
 function matchType(raw: string, tx: Transaction): boolean {
   const amountVariants = generateAmountVariants(tx.amount)
-  
-  for (const amount of amountVariants) {
-    const idx = raw.indexOf(amount)
-    if (idx === -1) continue
+  const isValidDate = tx.date instanceof Date && !isNaN(tx.date.getTime())
+  const dateVariants = isValidDate ? generateDateVariants(format(tx.date, 'yyyy-MM-dd')) : []
 
-    // Get context window around the amount
-    const windowStart = Math.max(0, idx - 150)
-    const windowEnd = Math.min(raw.length, idx + 150)
-    const contextWindow = raw.slice(windowStart, windowEnd)
-    
-    // Check for separate Credit/Debit columns
-    // Look for column headers and see which column the amount is under
-    const hasCreditHeader = /\b(CREDIT|CR|DEPOSIT|IN)\b/i.test(contextWindow)
-    const hasDebitHeader = /\b(DEBIT|DR|WITHDRAWAL|OUT|PAYMENT)\b/i.test(contextWindow)
-    
-    // Check for CR/DR suffix after amount
-    const hasCRSuffix = new RegExp(`${amount.replace(/[.,]/g, '[$&]')}\\s*(CR|CREDIT)`, 'i').test(contextWindow)
-    const hasDRSuffix = new RegExp(`${amount.replace(/[.,]/g, '[$&]')}\\s*(DR|DEBIT)`, 'i').test(contextWindow)
-    
-    // Check for +/- signs
-    const hasPlusSign = new RegExp(`[+]?${amount.replace(/[.,]/g, '[$&]')}`).test(contextWindow)
-    const hasMinusSign = new RegExp(`[-(]${amount.replace(/[.,]/g, '[$&]')}[)]?`).test(contextWindow)
-    
+  for (const amount of amountVariants) {
+    const amountIdx = raw.indexOf(amount)
+    if (amountIdx === -1) continue
+
+    // Bound the search to the transaction row: from date to amount + padding
+    const rowStart = findRowStart(raw, dateVariants, amountIdx)
+    const rowEnd = Math.min(raw.length, amountIdx + amount.length + 20)
+    const rowContext = raw.slice(rowStart, rowEnd)
+
+    // Check for Credit/Debit keywords within the transaction row only
+    const hasCreditKeyword = /\b(credit|cr|deposit|in)\b/.test(rowContext)
+    const hasDebitKeyword = /\b(debit|dr|withdrawal|out|payment)\b/.test(rowContext)
+
+    // Check for CR/DR suffix immediately after amount (row-scoped)
+    const hasCRSuffix = new RegExp(`${amount.replace(/[.,]/g, '[$&]')}\\s*(cr|credit)`, 'i').test(rowContext)
+    const hasDRSuffix = new RegExp(`${amount.replace(/[.,]/g, '[$&]')}\\s*(dr|debit)`, 'i').test(rowContext)
+
+    // Check for +/- signs (row-scoped)
+    const hasPlusSign = new RegExp(`[+]?${amount.replace(/[.,]/g, '[$&]')}`).test(rowContext)
+    const hasMinusSign = new RegExp(`[-(]${amount.replace(/[.,]/g, '[$&]')}[)]?`).test(rowContext)
+
     // Determine type based on evidence
     if (tx.type === 'credit') {
-      // Credit: money coming in
-      if (hasCreditHeader && !hasDebitHeader) return true
+      if (hasCreditKeyword && !hasDebitKeyword) return true
       if (hasCRSuffix) return true
       if (hasPlusSign && !hasMinusSign) return true
-      if (hasDebitHeader) return false  // Explicitly in debit column
-      if (hasDRSuffix) return false  // Explicitly marked as debit
+      if (hasDebitKeyword && !hasCreditKeyword) return false
+      if (hasDRSuffix) return false
     } else {
-      // Debit: money going out
-      if (hasDebitHeader && !hasCreditHeader) return true
+      if (hasDebitKeyword && !hasCreditKeyword) return true
       if (hasDRSuffix) return true
       if (hasMinusSign) return true
-      if (hasCreditHeader) return false  // Explicitly in credit column
-      if (hasCRSuffix) return false  // Explicitly marked as credit
+      if (hasCreditKeyword && !hasDebitKeyword) return false
+      if (hasCRSuffix) return false
     }
   }
-  
+
   // If no clear evidence, assume match (don't penalize)
   return true
+}
+
+/**
+ * Find the start of the transaction row by locating the nearest date
+ * before the amount. Falls back to a tight window around the amount
+ * if no date anchor is found.
+ */
+function findRowStart(raw: string, dateVariants: string[], amountIdx: number): number {
+  let bestDateIdx = -1
+
+  for (const dateStr of dateVariants) {
+    const dateIdx = raw.lastIndexOf(dateStr, amountIdx)
+    if (dateIdx !== -1 && dateIdx > bestDateIdx) {
+      bestDateIdx = dateIdx
+    }
+  }
+
+  if (bestDateIdx !== -1) {
+    return bestDateIdx
+  }
+
+  // No date anchor found — use a tight fallback window
+  return Math.max(0, amountIdx - 40)
 }
 
 //
@@ -707,4 +733,5 @@ function computeOverallConfidence(
 
   return Math.round(avg + reconciliationBonus)
 }
+
 

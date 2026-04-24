@@ -1,7 +1,13 @@
 /**
  * Credit Card Bill Analyzer - Constants
  *
- * Default values for APR, point valuations, and payment calculations.
+ * ⚠️ WARNING: These values are India-specific and hardcoded.
+ * They are NOT authoritative and will produce incorrect results for
+ * international statements (e.g., USD/EUR floors, different APRs).
+ *
+ * This module is effectively DEFERRED until we have authoritative
+ * data for other regions or a way to configure these per-currency.
+ *
  * Used when extraction from statements fails.
  */
 
@@ -25,21 +31,6 @@ export const DEFAULT_APR_BY_ISSUER: Record<string, number> = {
 // Default minimum payment parameters
 export const DEFAULT_MIN_PAYMENT_PERCENT = 0.05; // 5% of outstanding
 export const DEFAULT_MIN_PAYMENT_FLOOR = 200; // Minimum Rs 200
-
-// Approximate point values (Rs per point)
-export const POINT_VALUE_BY_ISSUER: Record<string, number> = {
-  'HDFC Bank': 0.20,       // ~20p per point
-  'ICICI Bank': 0.25,      // ~25p per point
-  'Axis Bank': 0.20,       // ~20p per point
-  'SBI Card': 0.25,        // ~25p per point
-  'American Express': 0.50, // Higher value
-  'Citibank': 0.30,
-  'Standard Chartered': 0.25,
-  'HSBC': 0.25,
-  'RBL Bank': 0.20,
-  'Yes Bank': 0.20,
-  'default': 0.20,
-};
 
 // Interest calculation constants
 export const MONTHS_IN_YEAR = 12;
@@ -88,24 +79,4 @@ export function getAPRForIssuer(issuer: string, extractedAPR?: number): number {
   }
 
   return DEFAULT_APR_BY_ISSUER.default;
-}
-
-/**
- * Get point value for an issuer with fallback
- */
-export function getPointValueForIssuer(issuer: string): number {
-  if (POINT_VALUE_BY_ISSUER[issuer]) {
-    return POINT_VALUE_BY_ISSUER[issuer];
-  }
-
-  const partialMatch = Object.keys(POINT_VALUE_BY_ISSUER).find((key) =>
-    issuer.toLowerCase().includes(key.toLowerCase()) ||
-    key.toLowerCase().includes(issuer.toLowerCase())
-  );
-
-  if (partialMatch && partialMatch !== 'default') {
-    return POINT_VALUE_BY_ISSUER[partialMatch];
-  }
-
-  return POINT_VALUE_BY_ISSUER.default;
 }

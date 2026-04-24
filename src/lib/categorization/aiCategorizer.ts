@@ -1,4 +1,5 @@
-import { Transaction, Category, CategorizedBy } from "@/types";
+import { Transaction, CategorizedBy } from "@/types";
+import { Category } from "@/models/Category";
 import { getBrowserClient } from "@/lib/llm/index";
 import { LLMProvider } from "@/lib/llm/types";
 import { findMerchantRuleForTransaction } from "@/lib/services/merchantRuleService";

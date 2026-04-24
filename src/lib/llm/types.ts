@@ -6,6 +6,12 @@
 
 export type LLMProvider = 'ollama' | 'lmstudio';
 
+export interface LLMRuntimeConfig {
+  provider: LLMProvider;
+  baseUrl: string;
+  model: string;
+}
+
 export interface LLMClient {
   checkStatus(baseUrl: string): Promise<{ connected: boolean; models: string[]; selectedModel: string | null }>;
   listModels(baseUrl: string): Promise<string[]>;
@@ -49,6 +55,12 @@ export type LLMCallOptions = {
    * Optional abort signal for cancelling in-flight requests.
    */
   signal?: AbortSignal;
+
+  /**
+   * Explicit runtime config. Parser-neutralized flows should pass this
+   * instead of relying on hidden store state.
+   */
+  runtime?: LLMRuntimeConfig;
 };
 
 /**

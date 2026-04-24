@@ -8,7 +8,6 @@ import { ValidationResult } from '../parsers/retryEngine';
 import type { CCSummary, BankSummary } from '../parsers/extractSummary';
 import type { TransactionsOutput } from '../parsers/extractTransactions';
 import { ExtractedTransaction } from '@/types/extractedTransaction';
-import { Transaction } from '@/models/Transaction';
 import { debugLog } from '@/lib/utils/debug';
 
 // Accept multiple date formats:
@@ -141,33 +140,25 @@ export function validateCCSummary(summary: unknown): ValidationResult<CCSummary>
     }
   }
 
-  // Numeric range checks
-  if (s.totalDue !== null && s.totalDue !== undefined && s.totalDue < 0) {
-    errors.push('summary.totalDue must be >= 0');
-  }
+  // Numeric type + range checks
+  const ccNumericFields: [string, unknown][] = [
+    ['totalDue', s.totalDue],
+    ['minimumDue', s.minimumDue],
+    ['creditLimit', s.creditLimit],
+    ['availableCredit', s.availableCredit],
+    ['previousBalance', s.previousBalance],
+    ['paymentsReceived', s.paymentsReceived],
+    ['purchasesAndCharges', s.purchasesAndCharges],
+  ];
 
-  if (s.minimumDue !== null && s.minimumDue !== undefined && s.minimumDue < 0) {
-    errors.push('summary.minimumDue must be >= 0');
-  }
-
-  if (s.creditLimit !== null && s.creditLimit !== undefined && s.creditLimit < 0) {
-    errors.push('summary.creditLimit must be >= 0');
-  }
-
-  if (s.availableCredit !== null && s.availableCredit !== undefined && s.availableCredit < 0) {
-    errors.push('summary.availableCredit must be >= 0');
-  }
-
-  if (s.previousBalance !== null && s.previousBalance !== undefined && s.previousBalance < 0) {
-    errors.push('summary.previousBalance must be >= 0');
-  }
-
-  if (s.paymentsReceived !== null && s.paymentsReceived !== undefined && s.paymentsReceived < 0) {
-    errors.push('summary.paymentsReceived must be >= 0');
-  }
-
-  if (s.purchasesAndCharges !== null && s.purchasesAndCharges !== undefined && s.purchasesAndCharges < 0) {
-    errors.push('summary.purchasesAndCharges must be >= 0');
+  for (const [name, value] of ccNumericFields) {
+    if (value !== null && value !== undefined) {
+      if (typeof value !== 'number' || isNaN(value)) {
+        errors.push(`summary.${name} must be a number, got ${typeof value}: ${JSON.stringify(value)}`);
+      } else if (value < 0) {
+        errors.push(`summary.${name} must be >= 0`);
+      }
+    }
   }
 
   // Cross-field logical checks
@@ -245,7 +236,31 @@ export function validateBankSummary(summary: unknown): ValidationResult<BankSumm
   }
 
   // openingBalance and closingBalance can be negative (overdraft)
-  // No range constraint needed
+  // No range constraint needed, but type must be number
+  const bankNumericFields: [string, unknown][] = [
+    ['openingBalance', s.openingBalance],
+    ['closingBalance', s.closingBalance],
+  ];
+
+  for (const [name, value] of bankNumericFields) {
+    if (value !== null && value !== undefined) {
+      if (typeof value !== 'number' || isNaN(value)) {
+        errors.push(`summary.${name} must be a number, got ${typeof value}: ${JSON.stringify(value)}`);
+      }
+    }
+  }
+
+  // Period ordering check
+  if (
+    typeof s.statementPeriodStart === 'string' &&
+    typeof s.statementPeriodEnd === 'string'
+  ) {
+    const startDate = parseDate(s.statementPeriodStart);
+    const endDate = parseDate(s.statementPeriodEnd);
+    if (startDate && endDate && endDate < startDate) {
+      errors.push('summary.statementPeriodEnd must be >= statementPeriodStart');
+    }
+  }
 
   // Add balance reconciliation warning if transactions have balance data
   // This will be checked in mergeEngine when transactions are available
@@ -278,7 +293,7 @@ export function validateTransactions(data: unknown): ValidationResult<Transactio
 
   const errors: string[] = [];
   const warnings: string[] = [];
-  const validTxns: Transaction[] = [];
+  const validTxns: ExtractedTransaction[] = [];
 
   // Noise row patterns to reject - must match ENTIRE description exactly
   const NOISE_ROW_PATTERNS = [
@@ -292,7 +307,7 @@ export function validateTransactions(data: unknown): ValidationResult<Transactio
   ];
 
   for (let i = 0; i < normalized.transactions.length; i++) {
-    const tx = normalized.transactions[i] as Partial<Transaction>;
+    const tx = normalized.transactions[i] as Partial<ExtractedTransaction>;
 
     // Date format check - LLM returns string
     if (!tx.date) {
@@ -300,7 +315,7 @@ export function validateTransactions(data: unknown): ValidationResult<Transactio
       continue;
     }
 
-    // Validate the string format (no mutation - conversion happens in llmParser)
+    // Validate the string format (no mutation - conversion happens during parser canonicalization)
     // Be lenient - LLM may return various formats
     if (typeof tx.date !== 'string') {
       errors.push(`Transaction[${i}]: date must be a string`);
@@ -330,7 +345,21 @@ export function validateTransactions(data: unknown): ValidationResult<Transactio
       continue;
     }
 
-    validTxns.push(tx as Transaction);
+    // Cross-field consistency: originalCurrency and originalAmount must be both present or both absent
+    const hasCurrency = tx.originalCurrency != null;
+    const hasAmount = tx.originalAmount != null;
+    if (hasCurrency && !hasAmount) {
+      warnings.push(`Transaction[${i}] (${tx.date}, ${tx.description}, ₹${tx.amount}): originalCurrency "${tx.originalCurrency}" set but originalAmount is missing`);
+    } else if (hasAmount && !hasCurrency) {
+      warnings.push(`Transaction[${i}] (${tx.date}, ${tx.description}, ₹${tx.amount}): originalAmount ${tx.originalAmount} set but originalCurrency is missing`);
+    }
+
+    // International transactions should have original currency
+    if (tx.isInternationalTransaction === true && !hasCurrency) {
+      warnings.push(`Transaction[${i}] (${tx.date}, ${tx.description}, ₹${tx.amount}): marked as international but missing originalCurrency`);
+    }
+
+    validTxns.push(tx as ExtractedTransaction);
   }
 
   // DEBUG: Log validation results
@@ -351,6 +380,6 @@ export function validateTransactions(data: unknown): ValidationResult<Transactio
     valid: errors.length === 0,
     errors,
     warnings,
-    data: { transactions: validTxns as unknown as ExtractedTransaction[] }
+    data: { transactions: validTxns }
   };
 }

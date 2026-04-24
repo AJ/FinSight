@@ -169,7 +169,7 @@ export const useSettingsStore = create<SettingsStore>()(
 
       // LLM defaults
       llmProvider: "ollama",
-      llmServerUrl: "http://localhost:11434",
+      llmServerUrl: DEFAULT_URLS.ollama,
       llmModel: null,
 
       setCurrency: (currency) => set({ currency }),

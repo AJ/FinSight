@@ -44,6 +44,7 @@ yarn-error.log*
 screenshots/
 mockups/
 .claude/
+.claude/*
 public/2026*.png
 public/test*
 public/Transaction-Table-with-anomalies-2026-02-26_09-50.png
@@ -63,3 +64,5 @@ docs/COMMIT_MESSAGE_DRAFT.md
 *.bak
 *.bkp
 *.log
+.qwen/
+gha-creds-*.json

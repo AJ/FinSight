@@ -19,6 +19,10 @@ export const TRANSACTION_SUB_TYPES = [
 
 export type TransactionSubType = typeof TRANSACTION_SUB_TYPES[number];
 
+export function formatSubType(subType: string): string {
+  return subType.charAt(0).toUpperCase() + subType.slice(1).replace(/_/g, " ");
+}
+
 /**
  * JSON representation of a Transaction for serialization.
  * Category is stored as ID string; use Transaction.fromJSON() to restore.
@@ -54,6 +58,7 @@ export interface TransactionJSON {
   anomalyDismissed?: boolean;
   llmConfidence?: number;           // LLM's self-reported confidence (0.0-1.0)
   verificationConfidence?: number;  // Our verification confidence (0.0-1.0)
+  sourceFileHash?: string;          // SHA-256 hash of the source file for duplicate detection
 }
 
 /**
@@ -95,6 +100,8 @@ export class Transaction {
     // Confidence scores
     public readonly llmConfidence?: number,           // LLM's self-reported confidence (0.0-1.0)
     public readonly verificationConfidence?: number,  // Our verification confidence (0.0-1.0)
+    // Source file hash for duplicate detection
+    public readonly sourceFileHash?: string,
   ) {}
 
   // Direction getters (from TransactionType)
@@ -153,7 +160,16 @@ export class Transaction {
       anomalyDismissed: this.anomalyDismissed,
       llmConfidence: this.llmConfidence,
       verificationConfidence: this.verificationConfidence,
+      sourceFileHash: this.sourceFileHash,
     };
+  }
+
+  /**
+   * Create a new Transaction with specified field overrides.
+   * Lighter than manual toJSON/fromJSON spread at call sites.
+   */
+  cloneWith(updates: Partial<TransactionJSON>): Transaction {
+    return Transaction.fromJSON({ ...this.toJSON(), ...updates });
   }
 
   static fromJSON(json: TransactionJSON): Transaction {
@@ -191,6 +207,7 @@ export class Transaction {
       json.suggestedCategory,
       json.llmConfidence,
       json.verificationConfidence,
+      json.sourceFileHash,
     );
   }   
   /**

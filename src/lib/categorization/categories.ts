@@ -1,4 +1,5 @@
-import { Category, CategoryType } from "@/models";
+import { Category } from "@/models/Category";
+import { CategoryType } from "@/models/CategoryType";
 
 // Register all categories at module load time
 Category.register(new Category("groceries", "Groceries", CategoryType.Expense,

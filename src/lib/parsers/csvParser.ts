@@ -1,274 +1,140 @@
 import Papa from "papaparse";
-import { Transaction, ParsedStatement, Currency, TransactionType, Category, SourceType } from "@/types";
+import { Transaction, TransactionType, Category, SourceType } from "@/types";
+import type { StatementType } from "@/types/creditCard";
 import { v4 as uuidv4 } from "uuid";
 import { parseDate, detectDateOrder } from "./dateParser";
 import { detectCurrencyFromText } from "./currencyDetector";
-import { debugLog } from '@/lib/utils/debug';
+import type { ExtractionBundle, ParsingError } from "./contracts";
+import { debugLog, debugWarn } from '@/lib/utils/debug';
+import { detectColumns, type ColumnMapping } from "./columnDetection";
 
-/* ============================================================
-   UNIVERSAL CSV PARSER
-   Handles bank statements from any bank in any country.
-   ============================================================ */
+export async function parseCSV(file: File, options?: { statementType?: StatementType }): Promise<ExtractionBundle> {
+  const statementType = options?.statementType ?? null;
+  const sourceType = statementType === 'credit_card' ? SourceType.CreditCard : SourceType.Bank;
+  const rawText = await file.text();
 
-interface ColumnMapping {
-  dateCol: string | null;
-  descriptionCols: string[]; // may combine multiple columns
-  amountCol: string | null; // single amount column (signed)
-  debitCol: string | null; // separate debit column
-  creditCol: string | null; // separate credit column
-  typeCol: string | null; // explicit type column
-  balanceCol: string | null; // running balance (for type inference)
-}
-
-/** Parsed result with detected currency */
-export interface CSVParseResult {
-  statement: ParsedStatement;
-  detectedCurrency: Currency | null;
-}
-
-export async function parseCSV(file: File): Promise<CSVParseResult> {
   return new Promise((resolve, reject) => {
-    Papa.parse(file, {
+    Papa.parse<Record<string, string>>(rawText, {
       header: true,
       skipEmptyLines: true,
       transformHeader: (h: string) => h.trim(),
-      complete: (results) => {
+      complete: (results: Papa.ParseResult<Record<string, string>>) => {
         try {
           const headers = results.meta.fields || [];
-          const rows = results.data as Record<string, string>[];
+          const rows = results.data;
 
           if (rows.length === 0) {
             throw new Error("CSV file is empty or has no data rows.");
           }
 
-          // 1. Auto-detect column mapping
+          const parsingErrors: ParsingError[] = [];
+          
+          if (results.errors.length > 0) {
+            results.errors.forEach((err, i) => {
+              const error: ParsingError = {
+                rowIndex: i,
+                rawRow: { error: err.message },
+                errorMessage: err.message,
+              };
+              parsingErrors.push(error);
+            });
+            debugWarn('csvParser', `Found ${results.errors.length} parsing errors in PapaParse results`);
+          }
+
           const mapping = detectColumns(headers);
           if (!mapping.dateCol) {
             throw new Error(
-              "Could not find a date column. Headers found: " +
-                headers.join(", "),
+              "Could not find a date column. Headers found: " + headers.join(", "),
             );
           }
           if (!mapping.amountCol && !mapping.debitCol && !mapping.creditCol) {
             throw new Error(
-              "Could not find amount/debit/credit columns. Headers found: " +
-                headers.join(", "),
+              "Could not find amount/debit/credit columns. Headers found: " + headers.join(", "),
             );
           }
 
-          debugLog('csvParser', "Column mapping:", mapping);
+          debugLog('csvParser', 'Column mapping:', mapping);
 
-          // 2. Detect date order (DD/MM vs MM/DD)
           const sampleDates = rows
             .slice(0, 30)
             .map((r) => r[mapping.dateCol!])
             .filter(Boolean);
           const dateOrder = detectDateOrder(sampleDates);
-          debugLog('csvParser', "Detected date order:", dateOrder);
+          debugLog('csvParser', 'Detected date order:', dateOrder);
 
-          // 3. Detect currency
           const fullText =
-            headers.join(" ") +
-            " " +
+            headers.join(' ') +
+            ' ' +
             rows
               .slice(0, 20)
-              .map((r) => Object.values(r).join(" "))
-              .join(" ");
+              .map((r) => Object.values(r).join(' '))
+              .join(' ');
           const detectedCurrency = detectCurrencyFromText(fullText);
-          debugLog('csvParser', "Detected currency:", detectedCurrency);
+          debugLog('csvParser', 'Detected currency:', detectedCurrency);
 
-          // 4. Parse each row
           const transactions: Transaction[] = [];
-          for (const row of rows) {
-            const txn = parseRow(row, mapping, dateOrder);
-            if (txn) transactions.push(txn);
+          const rowParsingErrors: ParsingError[] = [];
+          
+          rows.forEach((row, index) => {
+            const result = parseRow(row, mapping, dateOrder, index, sourceType);
+            if (result.transaction) transactions.push(result.transaction);
+            if (result.error) rowParsingErrors.push(result.error);
+          });
+
+          const allParsingErrors = [...parsingErrors, ...rowParsingErrors];
+
+          debugLog('csvParser', `Parsed ${transactions.length} transactions from ${rows.length} rows`);
+
+          const warnings: string[] = [];
+          if (allParsingErrors.length > 0) {
+            warnings.push(`${allParsingErrors.length} row(s) failed to parse. Check debug logs for details.`);
           }
 
-          debugLog(
-            'csvParser',
-            `Parsed ${transactions.length} transactions from ${rows.length} rows`,
-          );
-
           resolve({
-            statement: {
-              transactions,
-              format: "csv",
-              fileName: file.name,
-              parseDate: new Date(),
-            },
-            detectedCurrency,
+            transactions,
+            currency: detectedCurrency,
+            format: 'csv',
+            fileName: file.name,
+            parseDate: new Date(),
+            statementType,
+            statementSummary: null,
+            verificationInputs: undefined,
+            warnings,
+            errors: [],
+            parsingErrors: allParsingErrors,
+            rawText,
           });
         } catch (error) {
           reject(error);
         }
       },
-      error: (error) => {
-        reject(error);
-      },
     });
   });
 }
 
-/* ── Column detection ─────────────────────────────────────── */
-
-const DATE_KEYWORDS = [
-  "date",
-  "txn date",
-  "transaction date",
-  "trans date",
-  "value date",
-  "posting date",
-  "book date",
-  "datum",
-  "fecha",
-  "tarikh",
-  "tanggal",
-];
-const DESC_KEYWORDS = [
-  "description",
-  "narration",
-  "particulars",
-  "details",
-  "memo",
-  "reference",
-  "remark",
-  "transaction details",
-  "merchant",
-  "payee",
-  "beneficiary",
-  "name",
-  "keterangan",
-];
-const AMOUNT_KEYWORDS = ["amount", "transaction amount", "txn amount"];
-const DEBIT_KEYWORDS = [
-  "debit",
-  "withdrawal",
-  "dr",
-  "debit amount",
-  "withdrawal amount",
-  "debit(dr)",
-  "money out",
-  "spent",
-  "expense",
-];
-const CREDIT_KEYWORDS = [
-  "credit",
-  "deposit",
-  "cr",
-  "credit amount",
-  "deposit amount",
-  "credit(cr)",
-  "money in",
-  "received",
-];
-const TYPE_KEYWORDS = [
-  "type",
-  "transaction type",
-  "txn type",
-  "cr/dr",
-  "dr/cr",
-];
-const BALANCE_KEYWORDS = [
-  "balance",
-  "closing balance",
-  "running balance",
-  "available balance",
-];
-
-function normalizeHeader(h: string): string {
-  return h
-    .toLowerCase()
-    .replace(/[^a-z0-9\s/]/g, "")
-    .trim();
-}
-
-function matchesAny(header: string, keywords: string[]): boolean {
-  const norm = normalizeHeader(header);
-  return keywords.some((kw) => norm === kw || norm.includes(kw));
-}
-
-function findColumn(headers: string[], keywords: string[]): string | null {
-  for (const h of headers) {
-    if (matchesAny(h, keywords)) return h;
-  }
-  return null;
-}
-
-function detectColumns(headers: string[]): ColumnMapping {
-  const dateCol = findColumn(headers, DATE_KEYWORDS);
-  const amountCol = findColumn(headers, AMOUNT_KEYWORDS);
-  const debitCol = findColumn(headers, DEBIT_KEYWORDS);
-  const creditCol = findColumn(headers, CREDIT_KEYWORDS);
-  const typeCol = findColumn(headers, TYPE_KEYWORDS);
-  const balanceCol = findColumn(headers, BALANCE_KEYWORDS);
-
-  // Description: may combine multiple cols
-  const descriptionCols: string[] = [];
-  for (const h of headers) {
-    if (matchesAny(h, DESC_KEYWORDS)) {
-      descriptionCols.push(h);
-    }
-  }
-
-  // If no description column found, use a column that isn't already mapped
-  if (descriptionCols.length === 0) {
-    const usedCols = new Set(
-      [dateCol, amountCol, debitCol, creditCol, typeCol, balanceCol].filter(
-        Boolean,
-      ),
-    );
-    for (const h of headers) {
-      if (!usedCols.has(h)) {
-        descriptionCols.push(h);
-        break;
-      }
-    }
-  }
-
-  return {
-    dateCol,
-    descriptionCols,
-    amountCol,
-    debitCol,
-    creditCol,
-    typeCol,
-    balanceCol,
-  };
-}
-
-/* ── Row parsing ──────────────────────────────────────────── */
-
 function cleanAmount(raw: string | undefined | null): number | null {
-  if (
-    !raw ||
-    raw.trim() === "" ||
-    raw.trim() === "-" ||
-    raw.trim() === "--" ||
-    raw.trim().toLowerCase() === "null"
-  )
+  if (!raw || raw.trim() === '' || raw.trim() === '-' || raw.trim() === '--' || raw.trim().toLowerCase() === 'null') {
     return null;
+  }
 
   let s = raw.trim();
-  const isNegative = s.startsWith("(") && s.endsWith(")");
+  const isNegative = s.startsWith('(') && s.endsWith(')');
   if (isNegative) s = s.slice(1, -1);
 
-  // Remove currency symbols and letters, keep digits, dots, commas, minus
-  s = s.replace(/[₹$€£¥₺₽₩₪₦₱₫৳฿A-Za-z\s]/g, "");
+  s = s.replace(/[₹$€£¥₺₽₩₪₦₱₫৳฿A-Za-z\s]/g, '');
 
-  // Detect if comma is decimal separator
-  const lastComma = s.lastIndexOf(",");
-  const lastDot = s.lastIndexOf(".");
+  const lastComma = s.lastIndexOf(',');
+  const lastDot = s.lastIndexOf('.');
 
   if (lastComma > lastDot && lastComma > 0) {
     const afterComma = s.substring(lastComma + 1);
     if (afterComma.length <= 2 && /^\d+$/.test(afterComma)) {
-      // European format: comma is decimal
-      s = s.replace(/\./g, "").replace(",", ".");
+      s = s.replace(/\./g, '').replace(',', '.');
     } else {
-      s = s.replace(/,/g, "");
+      s = s.replace(/,/g, '');
     }
   } else {
-    s = s.replace(/,/g, "");
+    s = s.replace(/,/g, '');
   }
 
   const num = parseFloat(s);
@@ -279,24 +145,23 @@ function cleanAmount(raw: string | undefined | null): number | null {
 function parseRow(
   row: Record<string, string>,
   mapping: ColumnMapping,
-  dateOrder: "DMY" | "MDY",
-): Transaction | null {
+  dateOrder: 'DMY' | 'MDY',
+  rowIndex: number,
+  sourceType: SourceType,
+): { transaction: Transaction | null; error: ParsingError | null } {
   try {
-    // --- Date ---
     const rawDate = row[mapping.dateCol!];
     const date = parseDate(rawDate, dateOrder);
-    if (!date) return null;
+    if (!date) return { transaction: null, error: null }; // Date parse failure is usually just bad data, not an exception
 
-    // --- Description ---
     const descParts: string[] = [];
     for (const col of mapping.descriptionCols) {
       const val = row[col]?.trim();
       if (val && val.length > 0) descParts.push(val);
     }
-    let description = descParts.join(" — ").trim();
-    if (!description) description = "Transaction";
+    let description = descParts.join(' — ').trim();
+    if (!description) description = 'Transaction';
 
-    // --- Amount ---
     let amount: number | null = null;
     let type: TransactionType = TransactionType.Debit;
 
@@ -310,28 +175,18 @@ function parseRow(
         amount = Math.abs(credit);
         type = TransactionType.Credit;
       } else {
-        return null;
+        return { transaction: null, error: null };
       }
     } else if (mapping.amountCol) {
       amount = cleanAmount(row[mapping.amountCol]);
-      if (amount === null || amount === 0) return null;
+      if (amount === null || amount === 0) return { transaction: null, error: null };
 
       if (mapping.typeCol) {
-        const rawType = (row[mapping.typeCol] || "").toLowerCase().trim();
-        if (
-          rawType.includes("debit") ||
-          rawType.includes("dr") ||
-          rawType.includes("withdrawal") ||
-          rawType.includes("expense")
-        ) {
+        const rawType = (row[mapping.typeCol] || '').toLowerCase().trim();
+        if (rawType.includes('debit') || rawType.includes('dr') || rawType.includes('withdrawal') || rawType.includes('expense')) {
           amount = Math.abs(amount);
           type = TransactionType.Debit;
-        } else if (
-          rawType.includes("credit") ||
-          rawType.includes("cr") ||
-          rawType.includes("deposit") ||
-          rawType.includes("income")
-        ) {
+        } else if (rawType.includes('credit') || rawType.includes('cr') || rawType.includes('deposit') || rawType.includes('income')) {
           amount = Math.abs(amount);
           type = TransactionType.Credit;
         } else {
@@ -342,58 +197,66 @@ function parseRow(
       }
     } else if (mapping.debitCol) {
       const debit = cleanAmount(row[mapping.debitCol]);
-      if (debit === null || debit === 0) return null;
+      if (debit === null || debit === 0) return { transaction: null, error: null };
       amount = Math.abs(debit);
       type = TransactionType.Debit;
     } else if (mapping.creditCol) {
       const credit = cleanAmount(row[mapping.creditCol]);
-      if (credit === null || credit === 0) return null;
+      if (credit === null || credit === 0) return { transaction: null, error: null };
       amount = Math.abs(credit);
       type = TransactionType.Credit;
     } else {
-      return null;
+      return { transaction: null, error: null };
     }
 
-    // Capture balance value if available
-    let balance: number | undefined = undefined;
+    let balance: number | undefined;
     if (mapping.balanceCol) {
       const bal = cleanAmount(row[mapping.balanceCol]);
       if (bal !== null) balance = bal;
     }
 
-    return new Transaction(
-      uuidv4(), // id
-      date, // date
-      description, // description
-      amount, // amount
-      type, // type
-      Category.fromId("other")!, // category
-      balance, // balance
-      undefined, // merchant
-      JSON.stringify(row), // originalText
-      undefined, // budgetMonth
-      undefined, // categoryConfidence
-      undefined, // needsReview
-      undefined, // categorizedBy
-      SourceType.Bank, // sourceType
-      undefined, // statementId
-      undefined, // cardIssuer
-      undefined, // cardLastFour
-      undefined, // cardHolder
-      undefined, // localCurrency
-      undefined, // originalCurrency
-      undefined, // originalAmount
-      false, // isInternational
-      undefined, // isAnomaly
-      undefined, // anomalyTypes
-      undefined, // anomalyDetails
-      undefined, // anomalyDismissed
-      undefined, // transactionSubType
-      undefined, // suggestedCategory
-    );
-  } catch {
-    return null;
+    return {
+      transaction: new Transaction(
+        uuidv4(),
+        date,
+        description,
+        amount,
+        type,
+        Category.fromId('other')!,
+        balance,
+        undefined,
+        JSON.stringify(row),
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        sourceType,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        false,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        1.0,
+        undefined,
+      ),
+      error: null,
+    };
+  } catch (e) {
+    const errorMessage = e instanceof Error ? e.message : String(e);
+    debugWarn('csvParser', `Row ${rowIndex} failed to parse: ${errorMessage}`, row);
+    return { 
+      transaction: null, 
+      error: { rowIndex, rawRow: row as unknown as Record<string, unknown>, errorMessage } 
+    };
   }
 }
-
-

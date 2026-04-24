@@ -16,7 +16,7 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { getServerClient } from "@/lib/llm/index";
-import { LLMProvider } from "@/lib/llm/types";
+import { LLMProvider, DEFAULT_URLS } from "@/lib/llm/types";
 import { validateLlmServerUrl } from "@/lib/store/settingsStore";
 import { checkRateLimit, getClientIdentifier, STRICT_RATE_LIMIT } from "@/lib/middleware/rateLimit";
 import { debugLog, debugSensitive, debugError, debugWarn } from "@/lib/utils/debug";
@@ -50,7 +50,7 @@ export async function POST(request: NextRequest) {
 
   try {
     const body = await request.json();
-    
+
     // Validate request body against schema
     const parseResult = CategorizeRequestSchema.safeParse(body);
     if (!parseResult.success) {
@@ -69,7 +69,7 @@ export async function POST(request: NextRequest) {
     });
 
     const llmProvider = (provider as LLMProvider) || "ollama";
-    
+
     // Normalize transactions with validation
     const normalizedTransactions: CategorizationTransactionInput[] = [];
     const rejectedTransactions: Array<{ txn: unknown; reason: string }> = [];
@@ -103,7 +103,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const urlParam = (baseUrl as string) || "http://localhost:11434";
+    const urlParam = (baseUrl as string) || DEFAULT_URLS.ollama;
 
     // Validate URL to prevent SSRF
     const validation = validateLlmServerUrl(urlParam);

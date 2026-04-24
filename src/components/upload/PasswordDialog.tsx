@@ -12,7 +12,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Lock, Eye, EyeOff, AlertCircle, Loader2 } from "lucide-react";
-import { PASSWORD_REASON } from "@/lib/parsers/llmParser";
+import { PASSWORD_REASON } from "@/lib/parsers/documentExtraction";
 
 interface PasswordDialogProps {
   open: boolean;

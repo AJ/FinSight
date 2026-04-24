@@ -1,12 +1,11 @@
-import { parseCSV } from "@/lib/parsers/csvParser";
-import { parseXLS } from "@/lib/parsers/xlsParser";
-import { parseWithLLMExtended } from "@/lib/parsers/llmParser";
+import { extractStatementBundleFromFile } from "@/lib/parsers/extractStatementBundle";
+import { attachVerificationToExtractionBundle } from "@/lib/services/statementVerificationService";
 import { enrichImportedTransactions } from "@/lib/services/transactionEnrichmentService";
 import { reviewSessionRepository } from "@/lib/review/reviewSessionRepository";
 import type { Currency } from "@/types";
 import type { LLMProvider } from "@/lib/llm/types";
 import type { StatementType } from "@/types/creditCard";
-import type { ExtractionBundle, ReviewSessionPayload } from "./types";
+import type { ReviewSessionPayload } from "./types";
 
 export interface RunPreReviewPipelineInput {
   file: File;
@@ -18,97 +17,50 @@ export interface RunPreReviewPipelineInput {
   statementType?: StatementType;
   onProgress?: (status: string) => void;
   signal?: AbortSignal;
-}
-
-async function extractBundle(
-  input: RunPreReviewPipelineInput,
-): Promise<ExtractionBundle> {
-  const ext = input.file.name.toLowerCase();
-
-  if (ext.endsWith(".pdf")) {
-    const result = await parseWithLLMExtended(
-      input.file,
-      input.onProgress,
-      input.password,
-      input.statementType,
-      input.signal,
-    );
-
-    return {
-      transactions: result.statement.transactions,
-      currency: result.currency,
-      format: result.statement.format,
-      fileName: result.statement.fileName,
-      parseDate: result.statement.parseDate,
-      statementType: result.statementType,
-      statementSummary: result.ccStatement ?? null,
-      verificationReport: result.verification,
-      warnings: [],
-      errors: [],
-      rawText: result.rawText,
-      sourceMetadata: {
-        failedChunks: result.statement.failedChunks,
-      },
-    };
-  }
-
-  if (ext.endsWith(".csv")) {
-    input.onProgress?.("Parsing CSV...");
-    const result = await parseCSV(input.file);
-    return {
-      transactions: result.statement.transactions,
-      currency: result.detectedCurrency,
-      format: result.statement.format,
-      fileName: result.statement.fileName,
-      parseDate: result.statement.parseDate,
-      statementType: null,
-      warnings: [],
-      errors: [],
-    };
-  }
-
-  if (ext.endsWith(".xls") || ext.endsWith(".xlsx")) {
-    input.onProgress?.("Parsing Excel file...");
-    const result = await parseXLS(input.file);
-    return {
-      transactions: result.statement.transactions,
-      currency: result.detectedCurrency,
-      format: result.statement.format,
-      fileName: result.statement.fileName,
-      parseDate: result.statement.parseDate,
-      statementType: null,
-      warnings: [],
-      errors: [],
-    };
-  }
-
-  throw new Error("Unsupported file format. Please upload a PDF, CSV, XLS, or XLSX file.");
+  sourceFileHash?: string;
 }
 
 export async function runPreReviewPipeline(
   input: RunPreReviewPipelineInput,
 ): Promise<ReviewSessionPayload> {
-  const bundle = await extractBundle(input);
+  const extractedBundle = await extractStatementBundleFromFile({
+    file: input.file,
+    defaultCurrency: input.defaultCurrency,
+    password: input.password,
+    statementType: input.statementType,
+    onProgress: input.onProgress,
+    signal: input.signal,
+    llmConfig: {
+      provider: input.provider,
+      baseUrl: input.baseUrl,
+      model: input.model ?? "",
+    },
+  });
+
+  const verifiedBundle = attachVerificationToExtractionBundle(extractedBundle);
 
   input.onProgress?.("Categorizing transactions...");
-  const transactions = await enrichImportedTransactions(bundle.transactions, {
+  const transactions = await enrichImportedTransactions(verifiedBundle.transactions, {
     provider: input.provider,
     baseUrl: input.baseUrl,
     model: input.model,
-    statementType: bundle.statementType || undefined,
+    statementType: verifiedBundle.statementType || undefined,
   });
 
   const reviewSessionPayload: ReviewSessionPayload = {
     transactions,
-    currency: bundle.currency ?? input.defaultCurrency,
-    format: bundle.format,
-    statementType: bundle.statementType,
-    fileName: bundle.fileName,
-    parseDate: bundle.parseDate,
-    statementSummary: bundle.statementSummary,
-    verificationReport: bundle.verificationReport,
-    warnings: bundle.warnings,
-    sourceMetadata: bundle.sourceMetadata,
+    currency: verifiedBundle.currency ?? input.defaultCurrency,
+    format: verifiedBundle.format,
+    statementType: verifiedBundle.statementType,
+    fileName: verifiedBundle.fileName,
+    parseDate: verifiedBundle.parseDate,
+    statementSummary: verifiedBundle.statementSummary,
+    verificationReport: verifiedBundle.verificationReport,
+    warnings: verifiedBundle.warnings,
+    sourceMetadata: {
+      ...verifiedBundle.sourceMetadata,
+      sourceFileHash: input.sourceFileHash,
+    },
   };
 
   reviewSessionRepository.save(reviewSessionPayload);
