@@ -1,0 +1,70 @@
+{
+  "transactions": [
+    {
+      "date": "2025-10-05",
+      "description": "AMAZON IN PURCHASE",
+      "amount": 1299.00,
+      "type": "debit",
+      "transactionSubType": "purchase",
+      "localCurrency": "INR",
+      "isInternationalTransaction": false,
+      "confidence": 0.95
+    },
+    {
+      "date": "2025-10-07",
+      "description": "SWIGGY FOOD ORDER",
+      "amount": 450.00,
+      "type": "debit",
+      "transactionSubType": "purchase",
+      "localCurrency": "INR",
+      "isInternationalTransaction": false,
+      "confidence": 0.92
+    },
+    {
+      "date": "2025-10-10",
+      "description": "ELECTRICITY BILL PAYMENT",
+      "amount": 2150.00,
+      "type": "debit",
+      "transactionSubType": "charge",
+      "localCurrency": "INR",
+      "isInternationalTransaction": false,
+      "confidence": 0.98
+    },
+    {
+      "date": "2025-10-13",
+      "description": "GBP TRANSACTION - LONDON",
+      "amount": 25.00,
+      "type": "debit",
+      "transactionSubType": "purchase",
+      "localCurrency": "GBP",
+      "originalCurrency": "GBP",
+      "originalAmount": 25.00,
+      "isInternationalTransaction": true,
+      "confidence": 0.85
+    },
+    {
+      "date": "2025-10-18",
+      "description": "REFUND URBAN COMPANY",
+      "amount": 304.00,
+      "type": "credit",
+      "transactionSubType": "refund",
+      "localCurrency": "INR",
+      "isInternationalTransaction": false,
+      "confidence": 0.90
+    },
+    {
+      "date": "2025-10-22",
+      "description": "UNKNOWN ENTRY",
+      "amount": 500.00,
+      "type": "credit",
+      "transactionSubType": "adjustment",
+      "localCurrency": "INR",
+      "isInternationalTransaction": false,
+      "confidence": 0.45
+    }
+  ],
+  "_debug": {
+    "totalCount": 6,
+    "droppedTransactions": []
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "statementDate": "2025-10-31",
+  "statementPeriodStart": "2025-10-01",
+  "statementPeriodEnd": "2025-10-31",
+  "paymentDueDate": "2025-11-15",
+  "totalDue": 9083.68,
+  "minimumDue": 454.18,
+  "creditLimit": 50000,
+  "availableCredit": 40916.32,
+  "previousBalance": 12500.00,
+  "paymentsReceived": 5000.00,
+  "purchasesAndCharges": 5598.00,
+  "cashbackEarned": 54.32,
+  "interestCharged": 1200.00,
+  "lateFee": 500.00,
+  "otherCharges": 0.00
+}

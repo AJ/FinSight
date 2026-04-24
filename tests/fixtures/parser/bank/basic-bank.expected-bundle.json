@@ -1,0 +1,23 @@
+{
+  "statementType": "bank",
+  "transactionCount": 2,
+  "verificationKind": "bank",
+  "summary": {
+    "openingBalance": 10000,
+    "closingBalance": 10750
+  },
+  "transactions": [
+    {
+      "description": "Salary Credit",
+      "amount": 1000,
+      "type": "credit",
+      "sourceType": "bank"
+    },
+    {
+      "description": "Coffee",
+      "amount": 250,
+      "type": "debit",
+      "sourceType": "bank"
+    }
+  ]
+}

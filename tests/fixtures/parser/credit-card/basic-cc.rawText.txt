@@ -1,0 +1,9 @@
+ACME CREDIT CARD STATEMENT
+Statement Date: 31/10/2025
+Previous Balance: 2000.00
+Payments Received: 500.00
+Purchases and Charges: 1299.00
+Total Due: 2799.00
+
+04/10/2025 HDFC CARD PAYMENT 500.00
+05/10/2025 AMAZON.IN 1299.00

@@ -1,0 +1,74 @@
+{
+  "description": "FinSight Test Fixture Index",
+  "bankStatements": {
+    "bank_clean.csv": {
+      "purpose": "Clean dataset for baseline parsing",
+      "features": ["standard format", "complete fields", "single currency", "no duplicates"],
+      "expectedOutcome": "100% extraction success"
+    },
+    "bank_noisy.csv": {
+      "purpose": "Noisy dataset with real-world edge cases",
+      "features": ["missing fields", "duplicate transactions", "mixed currencies (USD/GBP/INR)", "malformed amounts", "empty descriptions", "negative amounts"],
+      "expectedOutcome": "partial extraction with warnings"
+    },
+    "bank_broken.csv": {
+      "purpose": "Broken CSV with structural issues",
+      "features": ["inconsistent headers (Amt vs Amount)", "truncated lines", "quoted commas", "escaped quotes", "missing commas", "unparseable rows"],
+      "expectedOutcome": "graceful degradation with dropped rows"
+    }
+  },
+  "ccStatements": {
+    "cc_clean.csv": {
+      "purpose": "Clean credit card statement",
+      "features": ["reward points column", "cashback entries", "international transactions", "fees and interest"],
+      "expectedOutcome": "100% extraction with rewards"
+    },
+    "cc_rewards_misclassified.csv": {
+      "purpose": "CC statement with rewards misclassified as transactions",
+      "features": ["zero-amount reward entries", "duplicate reward entries (points vs cashback)", "misformatted entries"],
+      "expectedOutcome": "rewards correctly separated from transactions"
+    }
+  },
+  "llmResponses": {
+    "llm_valid_transactions.json": {
+      "purpose": "Valid LLM transaction extraction",
+      "features": ["correct schema", "mixed types (debit/credit)", "international txn", "low confidence entry"],
+      "usedFor": ["pipeline success test", "canonicalization test"]
+    },
+    "llm_malformed.json": {
+      "purpose": "Malformed JSON response",
+      "features": ["trailing commas", "amount as string instead of number", "incomplete objects"],
+      "usedFor": ["retryEngine test", "validation failure test"]
+    },
+    "llm_partial.json": {
+      "purpose": "Partial/cut-off LLM response",
+      "features": ["incomplete JSON", "mid-stream truncation"],
+      "usedFor": ["timeout handling test", "graceful degradation test"]
+    },
+    "llm_wrong_categorization.json": {
+      "purpose": "Valid JSON but wrong categorization",
+      "features": ["all transactions marked as debit", "refunds marked as purchase", "international marked as domestic"],
+      "usedFor": ["verification engine test", "cross-validation test"]
+    },
+    "llm_valid_cc_summary.json": {
+      "purpose": "Valid CC summary extraction",
+      "features": ["complete CC summary schema", "all required fields"],
+      "usedFor": ["CC pipeline test", "verification input test"]
+    },
+    "llm_valid_bank_summary.json": {
+      "purpose": "Valid bank summary extraction",
+      "features": ["complete bank summary schema", "opening/closing balance", "total credits/debits"],
+      "usedFor": ["bank pipeline test", "verification input test"]
+    },
+    "llm_wrong_summary_schema.json": {
+      "purpose": "Summary with wrong schema (amounts as strings, extra fields)",
+      "features": ["amounts as strings", "unexpected nested objects", "extra fields"],
+      "usedFor": ["validation failure test", "schema mismatch test"]
+    },
+    "llm_valid_rewards.json": {
+      "purpose": "Valid rewards extraction",
+      "features": ["rewards earned/redeemed/expired", "cashback earned/redeemed", "point value estimation"],
+      "usedFor": ["rewards pipeline test", "CC summary test"]
+    }
+  }
+}

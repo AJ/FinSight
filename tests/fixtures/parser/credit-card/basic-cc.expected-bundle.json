@@ -1,0 +1,27 @@
+{
+  "statementType": "credit_card",
+  "transactionCount": 2,
+  "verificationKind": "credit_card",
+  "summary": {
+    "previousBalance": 2000,
+    "paymentsReceived": 500,
+    "purchasesAndCharges": 1299,
+    "totalDue": 2799
+  },
+  "transactions": [
+    {
+      "description": "HDFC CARD PAYMENT",
+      "amount": 500,
+      "type": "credit",
+      "sourceType": "credit_card",
+      "transactionSubType": "bill_payment"
+    },
+    {
+      "description": "AMAZON.IN",
+      "amount": 1299,
+      "type": "debit",
+      "sourceType": "credit_card",
+      "transactionSubType": "purchase"
+    }
+  ]
+}

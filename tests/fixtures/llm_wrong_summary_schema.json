@@ -1,0 +1,16 @@
+{
+  "statementDate": "2025-10-31",
+  "statementPeriodStart": "2025-10-01",
+  "statementPeriodEnd": "2025-10-31",
+  "accountNumber": "XXXX1234",
+  "accountHolderName": "JOHN DOE",
+  "openingBalance": "50000.00",
+  "closingBalance": 97556.00,
+  "totalCredits": "80000.00",
+  "totalDebits": 32444.00,
+  "averageMonthlyBalance": 110000.00,
+  "extraField": "This should not be here",
+  "nestedObject": {
+    "unexpectedKey": "value"
+  }
+}

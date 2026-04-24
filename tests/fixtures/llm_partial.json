@@ -1,0 +1,15 @@
+{
+  "transactions": [
+    {
+      "date": "2025-10-05",
+      "description": "AMAZON IN PURCHASE",
+      "amount": 1299.00,
+      "type": "debit",
+      "transactionSubType": "purchase",
+      "localCurrency": "INR",
+      "isInternationalTransaction": false,
+      "confidence": 0.95
+    },
+    {
+      "date": "2025-10-07",
+      "description": "SWIGGY FOOD

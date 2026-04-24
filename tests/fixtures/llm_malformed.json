@@ -1,0 +1,30 @@
+{
+  "transactions": [
+    {
+      "date": "2025-10-05",
+      "description": "AMAZON IN PURCHASE",
+      "amount": 1299.00,
+      "type": "debit",
+      "transactionSubType": "purchase",
+    },
+    {
+      "date": "2025-10-07",
+      "description": "SWIGGY FOOD ORDER",
+      "amount": "450.00",
+      "type": "debit",
+      "transactionSubType": "purchase"
+    },
+    {
+      "date": "2025-10-18",
+      "description": "REFUND URBAN COMPANY",
+      "amount": 304.00,
+      "type": "credit",
+    }
+  ],
+  "_debug": {
+    "totalCount": 3,
+    "droppedTransactions": [
+      { "reason": "amount unclear" }
+    ]
+  }
+}
