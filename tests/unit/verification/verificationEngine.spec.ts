@@ -1,24 +1,8 @@
 import { describe, it, expect } from 'vitest';
-import { Transaction, SourceType } from '@/models';
 import { verifyStatement, verifyCCStatement, validateCCCrossSection, validateBankCrossSection } from '@/lib/verification/verificationEngine';
 import type { ExtractedTransaction } from '@/types/extractedTransaction';
 import type { CCSummary, BankSummary } from '@/lib/parsers/extractSummary';
-
-function makeRealTransaction(overrides: Partial<ExtractedTransaction> = {}): Transaction {
-  return Transaction.fromExtracted({
-    date: '2024-01-15',
-    description: 'AMAZON INDIA PURCHASE',
-    amount: 1299,
-    type: 'debit',
-    balance: null,
-    localCurrency: 'INR',
-    isInternationalTransaction: false,
-    originalCurrency: undefined,
-    originalAmount: undefined,
-    confidence: 0.9,
-    ...overrides,
-  }, { code: 'INR', symbol: '₹', name: 'Indian Rupee' }, SourceType.Bank);
-}
+import { makeTransaction } from '@tests/unit/factories';
 
 describe('verifyStatement — bank verification', () => {
   const rawText = `
@@ -32,7 +16,7 @@ describe('verifyStatement — bank verification', () => {
     // Use simple raw text without commas to avoid normalization stripping them
     const simpleRawText = `2024-01-15 AMAZON PURCHASE 1299 debit balance 48701`;
     const txns = [
-      makeRealTransaction({ description: 'AMAZON PURCHASE', amount: 1299, type: 'debit', date: '2024-01-15', balance: 48701 }),
+      makeTransaction({ description: 'AMAZON PURCHASE', amount: 1299, type: 'debit', date: '2024-01-15', balance: 48701 }),
     ];
     const result = verifyStatement(simpleRawText, txns, { openingBalance: 50000, closingBalance: 50000 });
     expect(result.verified.length).toBeGreaterThan(0);
@@ -41,7 +25,7 @@ describe('verifyStatement — bank verification', () => {
 
   it('rejects transactions not found in text', () => {
     const txns = [
-      makeRealTransaction({ description: 'TOTALLY FAKE MERCHANT', amount: 999999, type: 'debit' }),
+      makeTransaction({ description: 'TOTALLY FAKE MERCHANT', amount: 999999, type: 'debit' }),
     ];
     const result = verifyStatement(rawText, txns, {});
     expect(result.rejected.length).toBeGreaterThan(0);
@@ -50,8 +34,8 @@ describe('verifyStatement — bank verification', () => {
 
   it('detects duplicate transactions (same signature content)', () => {
     const simpleRawText = `2024-01-15 AMAZON PURCHASE 1299 debit`;
-    const txn1 = makeRealTransaction({ description: 'AMAZON PURCHASE', amount: 1299, type: 'debit', date: '2024-01-15' });
-    const txn2 = makeRealTransaction({ description: 'AMAZON PURCHASE', amount: 1299, type: 'debit', date: '2024-01-15' });
+    const txn1 = makeTransaction({ description: 'AMAZON PURCHASE', amount: 1299, type: 'debit', date: '2024-01-15' });
+    const txn2 = makeTransaction({ description: 'AMAZON PURCHASE', amount: 1299, type: 'debit', date: '2024-01-15' });
     const result = verifyStatement(simpleRawText, [txn1, txn2], {});
     // Both transactions have the same signature → second is duplicate
     expect(result.duplicates.length).toBe(1);
@@ -59,7 +43,7 @@ describe('verifyStatement — bank verification', () => {
 
   it('computes overall confidence', () => {
     const txns = [
-      makeRealTransaction({ description: 'AMAZON INDIA PURCHASE', amount: 1299, type: 'debit', date: '2024-01-01' }),
+      makeTransaction({ description: 'AMAZON INDIA PURCHASE', amount: 1299, type: 'debit', date: '2024-01-01' }),
     ];
     const result = verifyStatement(rawText, txns, { openingBalance: 50000, closingBalance: 98351 });
     expect(result.overallConfidence).toBeGreaterThanOrEqual(0);
@@ -70,8 +54,8 @@ describe('verifyStatement — bank verification', () => {
 describe('verifyStatement — reconciliation', () => {
   it('reconciliation is skipped when no transactions are verified', () => {
     const txns = [
-      makeRealTransaction({ amount: 1000, type: 'credit' }),
-      makeRealTransaction({ amount: 300, type: 'debit' }),
+      makeTransaction({ amount: 1000, type: 'credit' }),
+      makeTransaction({ amount: 300, type: 'debit' }),
     ];
     // With rawText = 'text', transactions won't be found → none verified → reconciliation fails
     const result = verifyStatement('text', txns, { openingBalance: 50000, closingBalance: 50700 });
@@ -81,7 +65,7 @@ describe('verifyStatement — reconciliation', () => {
 
   it('fails when balance equation does not hold', () => {
     const txns = [
-      makeRealTransaction({ amount: 1000, type: 'credit' }),
+      makeTransaction({ amount: 1000, type: 'credit' }),
     ];
     const result = verifyStatement('text', txns, { openingBalance: 50000, closingBalance: 100000 });
     expect(result.reconciliation.passed).toBe(false);
@@ -97,8 +81,8 @@ describe('verifyStatement — reconciliation', () => {
 describe('verifyCCStatement', () => {
   it('passes when statement totals formula holds', () => {
     const txns = [
-      makeRealTransaction({ amount: 10000, type: 'debit' }),
-      makeRealTransaction({ amount: 5000, type: 'credit' }),
+      makeTransaction({ amount: 10000, type: 'debit' }),
+      makeTransaction({ amount: 5000, type: 'credit' }),
     ];
     // PreviousBalance(30000) + Debits(10000) - Credits(5000) = 35000
     const result = verifyCCStatement(txns, {
@@ -114,7 +98,7 @@ describe('verifyCCStatement', () => {
 
   it('fails when statement totals do not match', () => {
     const txns = [
-      makeRealTransaction({ amount: 1000, type: 'debit' }),
+      makeTransaction({ amount: 1000, type: 'debit' }),
     ];
     // Previous(30000) + Debits(1000) - Credits(0) = 31000, but expected 50000
     const result = verifyCCStatement(txns, {
@@ -126,7 +110,7 @@ describe('verifyCCStatement', () => {
 
   it('gives partial credit for small differences', () => {
     const txns = [
-      makeRealTransaction({ amount: 10000, type: 'debit' }),
+      makeTransaction({ amount: 10000, type: 'debit' }),
     ];
     // Computed: 30000 + 10000 = 40000, Expected: 40050 (diff = 50, < 100)
     const result = verifyCCStatement(txns, {
@@ -138,8 +122,8 @@ describe('verifyCCStatement', () => {
 
   it('verifies transaction sums by type', () => {
     const txns = [
-      makeRealTransaction({ amount: 5000, type: 'debit', transactionSubType: 'purchase' }),
-      makeRealTransaction({ amount: 3000, type: 'credit', transactionSubType: 'bill_payment' }),
+      makeTransaction({ amount: 5000, type: 'debit', transactionSubType: 'purchase' }),
+      makeTransaction({ amount: 3000, type: 'credit', transactionSubType: 'bill_payment' }),
     ];
     const result = verifyCCStatement(txns, {
       purchasesAndCharges: 5000,
@@ -150,7 +134,7 @@ describe('verifyCCStatement', () => {
 
   it('passes when statement meta fields are undefined', () => {
     const txns = [
-      makeRealTransaction({ amount: 1000, type: 'debit' }),
+      makeTransaction({ amount: 1000, type: 'debit' }),
     ];
     const result = verifyCCStatement(txns, {});
     // Without statement data to compare against, should pass by default
@@ -159,9 +143,9 @@ describe('verifyCCStatement', () => {
 
   it('calculates correct subtype breakdown', () => {
     const txns = [
-      makeRealTransaction({ amount: 1000, type: 'debit', transactionSubType: 'purchase' }),
-      makeRealTransaction({ amount: 500, type: 'debit', transactionSubType: 'fee' }),
-      makeRealTransaction({ amount: 200, type: 'credit', transactionSubType: 'cashback' }),
+      makeTransaction({ amount: 1000, type: 'debit', transactionSubType: 'purchase' }),
+      makeTransaction({ amount: 500, type: 'debit', transactionSubType: 'fee' }),
+      makeTransaction({ amount: 200, type: 'credit', transactionSubType: 'cashback' }),
     ];
     const result = verifyCCStatement(txns, {});
     expect(result.transactionSums.totalPurchases).toBe(1000);

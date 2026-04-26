@@ -5,11 +5,10 @@ export default defineConfig({
   test: {
     globals: true,
     environment: 'jsdom',
-    include: ['tests/unit/**/*.spec.ts'],
+    include: ['tests/unit/**/*.spec.ts', 'tests/integration/**/*.spec.ts'],
     exclude: [
-      'tests/unit/parserNeutralizationBoundary.spec.ts',
       'tests/unit/parseLLMJsonResponse.spec.ts',
-      'tests/integration/**',
+      'tests/integration/retryEngine.spec.ts',
       'tests/e2e/**',
       'node_modules/**',
     ],

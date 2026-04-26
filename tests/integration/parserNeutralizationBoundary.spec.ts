@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { describe, it, expect } from 'vitest';
 import * as XLSX from 'xlsx';
 import { extractStatementBundleFromFile } from '@/lib/parsers/extractStatementBundle';
 import { parseCSV } from '@/lib/parsers/csvParser';
@@ -18,15 +18,14 @@ function createXlsxFile(rows: Array<Record<string, string | number>>, name = 'st
   });
 }
 
-test.describe('parser neutralization boundary', () => {
-  test('parseCSV returns a neutral extraction bundle', async () => {
-    const file = createCsvFile(
-      [
-        'Date,Description,Debit,Credit,Balance',
-        '2025-10-20,Salary,,5000,10000',
-        '2025-10-21,Coffee,250,,9750',
-      ].join('\n'),
-    );
+describe('parser neutralization boundary', () => {
+  it('parseCSV returns a neutral extraction bundle', async () => {
+    const csvLines = [
+      'Date,Description,Debit,Credit,Balance',
+      '2024-01-20,Salary,,5000,10000',
+      '2024-01-21,Coffee,250,,9750',
+    ];
+    const file = createCsvFile(csvLines.join('\n'));
 
     const bundle = await parseCSV(file);
 
@@ -40,16 +39,16 @@ test.describe('parser neutralization boundary', () => {
     expect(bundle.rawText).toContain('Salary');
   });
 
-  test('parseXLS returns a neutral extraction bundle', async () => {
+  it('parseXLS returns a neutral extraction bundle', async () => {
     const file = createXlsxFile([
       {
-        Date: '2025-10-20',
+        Date: '2024-01-20',
         Description: 'Salary',
         Credit: 5000,
         Balance: 10000,
       },
       {
-        Date: '2025-10-21',
+        Date: '2024-01-21',
         Description: 'Coffee',
         Debit: 250,
         Balance: 9750,
@@ -68,13 +67,12 @@ test.describe('parser neutralization boundary', () => {
     expect(bundle.rawText).toContain('Sheet: Sheet1');
   });
 
-  test('extractStatementBundleFromFile keeps tabular imports on the neutral parser contract', async () => {
-    const file = createCsvFile(
-      [
-        'Date,Description,Debit,Credit',
-        '2025-10-20,Refund,,304',
-      ].join('\n'),
-    );
+  it('extractStatementBundleFromFile keeps tabular imports on the neutral parser contract', async () => {
+    const csvLines = [
+      'Date,Description,Debit,Credit',
+      '2024-01-20,Refund,,304',
+    ];
+    const file = createCsvFile(csvLines.join('\n'));
 
     const bundle = await extractStatementBundleFromFile({
       file,
@@ -87,7 +85,7 @@ test.describe('parser neutralization boundary', () => {
     expect(bundle.errors).toEqual([]);
   });
 
-  test('extractStatementBundleFromFile requires explicit llm config for pdf parsing', async () => {
+  it('extractStatementBundleFromFile requires explicit llm config for pdf parsing', async () => {
     const file = new File(['fake pdf'], 'statement.pdf', { type: 'application/pdf' });
 
     await expect(

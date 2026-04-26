@@ -636,8 +636,8 @@ function matchType(raw: string, tx: Transaction): boolean {
     }
   }
 
-  // If no clear evidence, assume match (don't penalize)
-  return true
+  // If no clear evidence, don't award credit for type match
+  return false
 }
 
 /**
@@ -731,7 +731,7 @@ function computeOverallConfidence(
 
   const reconciliationBonus = reconciliation.passed ? 15 : 0
 
-  return Math.round(avg + reconciliationBonus)
+  return Math.min(100, Math.round(avg + reconciliationBonus))
 }
 
 

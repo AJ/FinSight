@@ -98,7 +98,7 @@ function computeDerived(transactions: ExtractedTransaction[]): StatementExtracti
 function computeConfidence(warnings: string[]): number {
   let score = 1.0;
 
-  const dedupWarnings = warnings.filter(w => w.includes('Deduplication'));
+  const dedupWarnings = warnings.filter(w => w.includes('potential duplicate'));
   score -= dedupWarnings.length * 0.05;
 
   const crossWarnings = warnings.filter(w => w.includes('cross-section'));

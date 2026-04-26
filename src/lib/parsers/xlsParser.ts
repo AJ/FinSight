@@ -191,9 +191,11 @@ function parseRow(
           type = TransactionType.Credit;
         } else {
           type = amount >= 0 ? TransactionType.Credit : TransactionType.Debit;
+          amount = Math.abs(amount);
         }
       } else {
         type = amount >= 0 ? TransactionType.Credit : TransactionType.Debit;
+        amount = Math.abs(amount);
       }
     } else if (mapping.debitCol) {
       const debit = cleanAmount(row[mapping.debitCol]);

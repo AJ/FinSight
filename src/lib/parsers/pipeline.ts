@@ -98,10 +98,10 @@ export async function processStatement(
     }
 
     if (resolvedStatementType === 'credit_card') {
-      return processCreditCard(normalized, bankName || null, options);
+      return await processCreditCard(normalized, bankName || null, options);
     }
 
-    return processBank(normalized, bankName || null, options);
+    return await processBank(normalized, bankName || null, options);
   } catch (e: unknown) {
     errors.push(`Pipeline failed: ${e instanceof Error ? e.message : 'Unknown error'}`);
     return {

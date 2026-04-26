@@ -1,31 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { finalizeReviewImport } from '@/lib/pipelines/postReviewPipeline';
 import { reviewSessionRepository } from '@/lib/review/reviewSessionRepository';
-import { Transaction, TransactionType, Category, CategoryType, SourceType, CategorizedBy } from '@/types';
+import { TransactionType, CategorizedBy } from '@/types';
 import type { Summary } from '@/lib/parsers/extractSummary';
 import '@/lib/categorization/categories';
-
-function makeTransaction(
-  id: string,
-  description: string,
-  amount: number,
-  type: TransactionType = TransactionType.Debit,
-  category: Category = new Category('shopping', 'Shopping', CategoryType.Expense),
-  categorizedBy: CategorizedBy | undefined = CategorizedBy.AI,
-): Transaction {
-  return new Transaction(
-    id, new Date('2025-10-20'), description, amount, type, category,
-    undefined, undefined, undefined, undefined, undefined,
-    undefined, categorizedBy, SourceType.Bank,
-    undefined, undefined, undefined, undefined,
-    undefined, undefined, undefined, undefined, undefined,
-    undefined, undefined, undefined,
-  );
-}
-
-function makeCategory(id: string): Category {
-  return new Category(id, id, CategoryType.Expense);
-}
+import { makeTransaction, makeCategory } from '@tests/unit/factories';
 
 const INR = { code: 'INR', symbol: '₹', name: 'Indian Rupee' };
 
@@ -47,8 +26,7 @@ describe('finalizeReviewImport', () => {
   });
 
   it('adds reviewed transactions to the store', async () => {
-    const original = makeTransaction('txn-1', 'Coffee Shop', 250);
-    const reviewed = makeTransaction('txn-1', 'Coffee Shop', 250);
+    const original = makeTransaction({ id: 'txn-1', description: 'Coffee Shop', amount: 250 });
 
     reviewSessionRepository.save({
       transactions: [original],
@@ -61,6 +39,7 @@ describe('finalizeReviewImport', () => {
       warnings: [],
     });
 
+    const reviewed = makeTransaction({ id: 'txn-1', description: 'Coffee Shop', amount: 250 });
     const result = await finalizeReviewImport([reviewed], defaultDependencies);
 
     expect(defaultDependencies.addTransactions).toHaveBeenCalledWith([reviewed]);
@@ -68,18 +47,14 @@ describe('finalizeReviewImport', () => {
   });
 
   it('learns merchant rules when user manually changes category', async () => {
-    const original = makeTransaction(
-      'txn-1', 'Coffee Shop', 250,
-      TransactionType.Debit,
-      makeCategory('shopping'),
-      CategorizedBy.AI,
-    );
-    const reviewed = makeTransaction(
-      'txn-1', 'Coffee Shop', 250,
-      TransactionType.Debit,
-      makeCategory('dining'),
-      CategorizedBy.Manual,
-    );
+    const original = makeTransaction({
+      id: 'txn-1', description: 'Coffee Shop', amount: 250,
+      category: makeCategory('shopping'), categorizedBy: CategorizedBy.AI,
+    });
+    const reviewed = makeTransaction({
+      id: 'txn-1', description: 'Coffee Shop', amount: 250,
+      category: makeCategory('dining'), categorizedBy: CategorizedBy.Manual,
+    });
 
     reviewSessionRepository.save({
       transactions: [original],
@@ -93,23 +68,18 @@ describe('finalizeReviewImport', () => {
     });
 
     const result = await finalizeReviewImport([reviewed], defaultDependencies);
-    // The merchant rule service should detect the category change
     expect(typeof result.learnedRuleUpdates).toBe('number');
   });
 
   it('does not learn rules when category unchanged', async () => {
-    const original = makeTransaction(
-      'txn-1', 'Coffee Shop', 250,
-      TransactionType.Debit,
-      makeCategory('shopping'),
-      CategorizedBy.AI,
-    );
-    const reviewed = makeTransaction(
-      'txn-1', 'Coffee Shop', 250,
-      TransactionType.Debit,
-      makeCategory('shopping'),
-      CategorizedBy.Manual,
-    );
+    const original = makeTransaction({
+      id: 'txn-1', description: 'Coffee Shop', amount: 250,
+      category: makeCategory('shopping'), categorizedBy: CategorizedBy.AI,
+    });
+    const reviewed = makeTransaction({
+      id: 'txn-1', description: 'Coffee Shop', amount: 250,
+      category: makeCategory('shopping'), categorizedBy: CategorizedBy.Manual,
+    });
 
     reviewSessionRepository.save({
       transactions: [original],
@@ -127,7 +97,7 @@ describe('finalizeReviewImport', () => {
   });
 
   it('creates CC statement for credit card statements', async () => {
-    const reviewed = makeTransaction('txn-1', 'Amazon', 1299);
+    const reviewed = makeTransaction({ id: 'txn-1', description: 'Amazon', amount: 1299 });
 
     reviewSessionRepository.save({
       transactions: [reviewed],
@@ -173,7 +143,7 @@ describe('finalizeReviewImport', () => {
   });
 
   it('does not create CC statement for bank statements', async () => {
-    const reviewed = makeTransaction('txn-1', 'Salary', 50000, TransactionType.Credit);
+    const reviewed = makeTransaction({ id: 'txn-1', description: 'Salary', amount: 50000, type: 'credit' });
 
     reviewSessionRepository.save({
       transactions: [reviewed],
@@ -201,7 +171,7 @@ describe('finalizeReviewImport', () => {
   });
 
   it('clears review session after import', async () => {
-    const reviewed = makeTransaction('txn-1', 'Coffee Shop', 250);
+    const reviewed = makeTransaction({ id: 'txn-1', description: 'Coffee Shop', amount: 250 });
 
     reviewSessionRepository.save({
       transactions: [reviewed],
@@ -219,7 +189,7 @@ describe('finalizeReviewImport', () => {
   });
 
   it('returns result with correct structure', async () => {
-    const reviewed = makeTransaction('txn-1', 'Coffee Shop', 250);
+    const reviewed = makeTransaction({ id: 'txn-1', description: 'Coffee Shop', amount: 250 });
 
     reviewSessionRepository.save({
       transactions: [reviewed],

@@ -1,5 +1,4 @@
 import { test, expect } from '@playwright/test';
-import { mockLLMResponse } from '@tests/mocks/llmMocker';
 import { uploadFile, waitForUploadCompletion, setupTestContext } from '@tests/e2e/helpers/e2eHelpers';
 import { getReviewSessionTransactions, clearAllStorage, validateTransactionShape } from '@tests/utils/storageHelpers';
 import * as path from 'path';
@@ -13,8 +12,7 @@ test.describe('FinSight Upload Pipeline', () => {
     await page.goto('/');
   });
 
-  test('should successfully parse a bank statement with valid LLM response', async ({ page }) => {
-    await mockLLMResponse(page, 'valid_transactions');
+  test('should successfully parse a bank statement CSV', async ({ page }) => {
     await uploadFile(page, path.join(FIXTURES_DIR, 'bank_clean.csv'));
     await waitForUploadCompletion(page);
 
@@ -25,31 +23,30 @@ test.describe('FinSight Upload Pipeline', () => {
     });
   });
 
-  test('should handle malformed LLM JSON gracefully', async ({ page }) => {
-    await mockLLMResponse(page, 'malformed_json');
+  test('should parse a bank statement CSV and validate transaction shapes', async ({ page }) => {
     await uploadFile(page, path.join(FIXTURES_DIR, 'bank_clean.csv'));
-    // Wait for URL to be /review or wait for an error toast/alert
-    await Promise.race([
-      page.waitForURL('**/review', { timeout: 15000 }),
-      page.waitForSelector('[role="status"]:has-text("error"), [role="alert"]:has-text("error")', { timeout: 15000 }),
-    ]);
+    await waitForUploadCompletion(page);
+
+    const txns = await getReviewSessionTransactions(page);
+    expect(txns.length).toBeGreaterThan(0);
+    txns.forEach((txn, i: number) => {
+      expect(validateTransactionShape(txn, i)).toEqual([]);
+    });
   });
 
-  test('should warn on partial chunk success', async ({ page }) => {
-    await mockLLMResponse(page, 'partial_output');
-    await uploadFile(page, path.join(FIXTURES_DIR, 'bank_clean.csv'));
+  test('should handle noisy CSV data', async ({ page }) => {
+    await uploadFile(page, path.join(FIXTURES_DIR, 'bank_noisy.csv'));
     await Promise.race([
       page.waitForURL('**/review', { timeout: 15000 }),
       page.waitForSelector('[role="status"]:has-text("warning"), [role="alert"]:has-text("warning")', { timeout: 15000 }),
     ]);
   });
 
-  test('should handle LLM timeout', async ({ page }) => {
-    await mockLLMResponse(page, 'timeout');
-    await uploadFile(page, path.join(FIXTURES_DIR, 'bank_clean.csv'));
+  test('should handle broken CSV data', async ({ page }) => {
+    await uploadFile(page, path.join(FIXTURES_DIR, 'bank_broken.csv'));
     await Promise.race([
-      page.waitForURL('**/review', { timeout: 20000 }),
-      page.waitForSelector('[role="status"]:has-text("timeout"), [role="alert"]:has-text("timeout")', { timeout: 20000 }),
+      page.waitForURL('**/review', { timeout: 15000 }),
+      page.waitForSelector('[role="status"]:has-text("error"), [role="alert"]:has-text("error")', { timeout: 15000 }),
     ]);
   });
 });

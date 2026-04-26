@@ -1,21 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { mergeOutputs } from '@/lib/verification/mergeEngine';
-import type { ExtractedTransaction } from '@/types/extractedTransaction';
 import type { BankSummary, CCSummary } from '@/lib/parsers/extractSummary';
-
-function makeTxn(overrides: Partial<ExtractedTransaction> = {}): ExtractedTransaction {
-  return {
-    date: '2024-01-15',
-    description: 'Test Transaction',
-    amount: 100,
-    type: 'debit',
-    balance: null,
-    localCurrency: 'INR',
-    isInternationalTransaction: false,
-    confidence: 0.9,
-    ...overrides,
-  };
-}
+import { makeExtractedTransaction as makeTxn } from '@tests/unit/factories';
 
 describe('mergeOutputs — bank statement', () => {
   it('merges valid bank extraction', () => {
@@ -170,6 +156,48 @@ describe('mergeOutputs — deduplication', () => {
     expect(result.meta.warnings.some(w => w.includes('potential duplicate'))).toBe(true);
   });
 
+  it('reports correct count of potential duplicates in warning', () => {
+    const transactions = [
+      makeTxn({ description: 'AMAZON IN', amount: 1299, type: 'debit' }),
+      makeTxn({ description: 'AMAZON IN', amount: 1299, type: 'debit' }),
+      makeTxn({ description: 'AMAZON IN', amount: 1299, type: 'debit' }),
+    ];
+    const result = mergeOutputs('bank', null, { transactions }, null, []);
+    expect(result.transactions).toHaveLength(3);
+    expect(result.meta.warnings.some(w => w.includes('2 potential duplicate'))).toBe(true);
+  });
+
+  it('reduces confidence for each potential duplicate', () => {
+    const noDupResult = mergeOutputs('bank', null, {
+      transactions: [makeTxn({ description: 'AMAZON', amount: 1299 })],
+    }, null, []);
+    const dupResult = mergeOutputs('bank', null, {
+      transactions: [
+        makeTxn({ description: 'AMAZON IN', amount: 1299 }),
+        makeTxn({ description: 'AMAZON IN', amount: 1299 }),
+      ],
+    }, null, []);
+    expect(dupResult.meta.confidence).toBeLessThan(noDupResult.meta.confidence);
+  });
+
+  it('does not flag transactions with different amounts', () => {
+    const transactions = [
+      makeTxn({ description: 'AMAZON', amount: 1299, type: 'debit' }),
+      makeTxn({ description: 'AMAZON', amount: 1300, type: 'debit' }),
+    ];
+    const result = mergeOutputs('bank', null, { transactions }, null, []);
+    expect(result.meta.warnings.some(w => w.includes('potential duplicate'))).toBe(false);
+  });
+
+  it('does not flag transactions with different dates', () => {
+    const transactions = [
+      makeTxn({ description: 'AMAZON', amount: 1299, type: 'debit', date: '2024-01-15' }),
+      makeTxn({ description: 'AMAZON', amount: 1299, type: 'debit', date: '2024-01-16' }),
+    ];
+    const result = mergeOutputs('bank', null, { transactions }, null, []);
+    expect(result.meta.warnings.some(w => w.includes('potential duplicate'))).toBe(false);
+  });
+
   it('preserves genuinely different transactions', () => {
     const transactions = [
       makeTxn({ description: 'AMAZON', amount: 1299, type: 'debit' }),
@@ -277,80 +305,5 @@ describe('mergeOutputs — derived totals computation', () => {
     expect(result.derived.totalDebit).toBe(0);
     expect(result.derived.totalCredit).toBe(0);
     expect(result.derived.transactionCount).toBe(0);
-  });
-});
-
-describe('validateCCCrossSection', () => {
-  it('returns empty warnings when totals match within 15%', async () => {
-    const { validateCCCrossSection } = await import('@/lib/verification/verificationEngine');
-    // Both debits and credits must match
-    const warnings = validateCCCrossSection(
-      { purchasesAndCharges: 10000, paymentsReceived: 5000 } as CCSummary,
-      [
-        { amount: 5000, type: 'debit' } as ExtractedTransaction,
-        { amount: 5000, type: 'debit' } as ExtractedTransaction,
-        { amount: 5000, type: 'credit' } as ExtractedTransaction,
-      ],
-    );
-    expect(warnings).toEqual([]);
-  });
-
-  it('warns when debit total differs by > 15%', async () => {
-    const { validateCCCrossSection } = await import('@/lib/verification/verificationEngine');
-    const warnings = validateCCCrossSection(
-      { purchasesAndCharges: 10000, paymentsReceived: 0 } as CCSummary,
-      [{ amount: 1000, type: 'debit' } as ExtractedTransaction],
-    );
-    expect(warnings.length).toBeGreaterThan(0);
-    expect(warnings[0]).toContain('cross-section');
-  });
-
-  it('warns when credit total differs by > 15%', async () => {
-    const { validateCCCrossSection } = await import('@/lib/verification/verificationEngine');
-    const warnings = validateCCCrossSection(
-      { purchasesAndCharges: 0, paymentsReceived: 10000 } as CCSummary,
-      [{ amount: 1000, type: 'credit' } as ExtractedTransaction],
-    );
-    expect(warnings.length).toBeGreaterThan(0);
-  });
-});
-
-describe('validateBankCrossSection', () => {
-  it('returns empty warnings when balance equation holds', async () => {
-    const { validateBankCrossSection } = await import('@/lib/verification/verificationEngine');
-    const warnings = validateBankCrossSection(
-      { openingBalance: 50000, closingBalance: 50700, statementDate: '2024-01-31', statementPeriodStart: null, statementPeriodEnd: null } as BankSummary,
-      [{ amount: 1000, type: 'credit' } as ExtractedTransaction, { amount: 300, type: 'debit' } as ExtractedTransaction],
-    );
-    expect(warnings).toEqual([]);
-  });
-
-  it('warns when balance equation fails', async () => {
-    const { validateBankCrossSection } = await import('@/lib/verification/verificationEngine');
-    const warnings = validateBankCrossSection(
-      { openingBalance: 50000, closingBalance: 100000, statementDate: '2024-01-31', statementPeriodStart: null, statementPeriodEnd: null } as BankSummary,
-      [{ amount: 1000, type: 'credit' } as ExtractedTransaction],
-    );
-    expect(warnings.length).toBeGreaterThan(0);
-    expect(warnings[0]).toContain('cross-section');
-    expect(warnings[0]).toContain('openingBalance');
-  });
-
-  it('returns empty when summary has null balances', async () => {
-    const { validateBankCrossSection } = await import('@/lib/verification/verificationEngine');
-    const warnings = validateBankCrossSection(
-      { openingBalance: null, closingBalance: null, statementDate: '2024-01-31', statementPeriodStart: null, statementPeriodEnd: null } as BankSummary,
-      [{ amount: 1000, type: 'credit' } as ExtractedTransaction],
-    );
-    expect(warnings).toEqual([]);
-  });
-
-  it('returns empty for empty transactions', async () => {
-    const { validateBankCrossSection } = await import('@/lib/verification/verificationEngine');
-    const warnings = validateBankCrossSection(
-      { openingBalance: 50000, closingBalance: 50000, statementDate: '2024-01-31', statementPeriodStart: null, statementPeriodEnd: null } as BankSummary,
-      [],
-    );
-    expect(warnings).toEqual([]);
   });
 });

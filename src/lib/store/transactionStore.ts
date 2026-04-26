@@ -174,7 +174,7 @@ export const useTransactionStore = create<TransactionStore>()(
             return d >= startDate && d <= endDate;
           });
         }
-        return txns.reduce((sum, txn) => sum + txn.amount, 0);
+        return txns.reduce((sum, txn) => sum + Math.abs(txn.amount), 0);
       },
 
       getTotalExpenses: (startDate, endDate) => {
