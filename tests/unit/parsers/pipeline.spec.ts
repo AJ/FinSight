@@ -260,6 +260,50 @@ describe('processStatement — credit card path', () => {
 
     expect(mockBuildRewardsPrompt).not.toHaveBeenCalled();
   });
+
+  it('reasoning from LLM is ephemeral and not stored on canonical transactions', async () => {
+    const extractedWithReasoning = [
+      makeExtractedTx({
+        description: 'CC PAYMENT VIA NEFT',
+        amount: 5000,
+        type: 'credit',
+        transactionSubType: 'bill_payment',
+        reasoning: 'Description contains PAYMENT and NEFT → credit/bill_payment',
+      }),
+      makeExtractedTx({
+        description: 'AMAZON.IN',
+        amount: 1299,
+        type: 'debit',
+        transactionSubType: 'purchase',
+        reasoning: 'Merchant purchase with no credit indicators → debit/purchase',
+      }),
+    ];
+    const summary = makeCCSummary();
+
+    mockRunWithRetry.mockImplementation((prompt: string) => {
+      if (prompt === 'summary prompt') return mockSuccessfulRetry(summary);
+      if (prompt === 'rewards prompt') return mockSuccessfulRetry({ rewards: [] });
+      return mockSuccessfulRetry({ transactions: extractedWithReasoning });
+    });
+    mockMergeOutputs.mockReturnValue(makeMergedOutput(extractedWithReasoning, summary));
+    mockValidateTransactions.mockImplementation((d: unknown) => ({
+      valid: true,
+      errors: [],
+      warnings: [],
+      data: d,
+    }));
+
+    const result = await processStatement('raw text', {
+      ...defaultOptions,
+      statementType: 'credit_card',
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.data?.transactions).toHaveLength(2);
+    for (const txn of result.data?.transactions ?? []) {
+      expect(txn).not.toHaveProperty('reasoning');
+    }
+  });
 });
 
 describe('processStatement — verification inputs', () => {

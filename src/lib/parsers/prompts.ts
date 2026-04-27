@@ -250,6 +250,7 @@ Return ONLY valid JSON. No explanation. No extra text. No markdown.
       "date": "YYYY-MM-DD",
       "description": "merchant/description",
       "amount": number,
+      "reasoning": "brief explanation of why this is debit or credit, and why this subType was chosen",
       "type": "debit" | "credit",
       "transactionSubType": "purchase" | "bill_payment" | "refund" | "cashback" | "tax" | "interest" | "charge" | "adjustment" | "reversal" | "fee",
       "localCurrency": "statement local currency ISO code such as USD, EUR, SGD, or INR",
@@ -320,7 +321,9 @@ IMPORTANT:
 - Cashback is ALWAYS a credit
 - If amount has "+" prefix or "CR" → type = "credit"
 - If amount has "-" prefix or "DR" → type = "debit"
-- Otherwise use context (merchant = debit, refund keyword = credit)
+- Otherwise use context: merchant name = debit, refund/reversal keyword = credit
+- CC bill payments are ALWAYS credits: "CC PAYMENT", "CREDIT CARD PAYMENT", "CARD PAYMENT", or payment rails (NEFT, UPI, IMPS, ACH, SEPA, WIRE, FPS, GIRO, DIRECT DEBIT, BILL PAY, AUTOPAY) combined with card or bill context
+- A merchant purchase is NOT a bill payment just because the description contains "pay" or "payment" (e.g. "PAYPAL *MERCHANT" is a purchase, not a bill payment)
 - If a row contains BOTH a reward-points delta and a cash amount, the reward-points sign MUST NOT determine transaction type
 - Determine type from the CASH amount column only
 - A negative reward-points change can appear on a refund row and does NOT make the transaction a debit
@@ -406,13 +409,21 @@ RULE 6 - Non-Bank FEEs:
 - "FCY MARKUP FEE" is not a bank fee but a currency conversion charge and MUST be classifed as "charge" subtype, not "fee". It is NOT an international transaction — it is a fee charged in the statement's local currency, so set isInternationalTransaction = false. Same for: forex charges, dynamic currency conversion (DCC) charges, international transaction fees, foreign transaction fees.
 - "payment": Credit card bill payment; Look for but not exclusive to: PAYMENT, PAID, PAYZAPP, UPI, NEFT, IMPS).
 
-RULE 7 — DATE FORMAT
+RULE 7 — REASONING (REQUIRED)
+- Every transaction MUST include a "reasoning" field explaining your type and subType classification.
+- For debit: explain what about the row indicates a charge (prefix, column position, context).
+- For credit: explain what indicates money credited to the card (CR marker, payment keyword, refund context).
+- For subType: explain the keyword or context that led to your choice.
+- Example: "Amount has no prefix and description is a merchant → debit/purchase"
+- Example: "Description contains PAYMENT and amount reduces card balance → credit/bill_payment"
+
+RULE 8 — DATE FORMAT
 - Convert all dates to YYYY-MM-DD
 - "15 Jan 2024" → "2024-01-15"
 - "15/01/24" → "2024-01-15"
 - CRITICAL: Do NOT include time, pipe characters, or other separators (e.g., output MUST BE "2025-10-04", AND MUST NOT be "2025-10-04|00:00")
 
-RULE 8 — INTERNATIONAL TRANSACTIONS
+RULE 9 — INTERNATIONAL TRANSACTIONS
 - If TWO amounts shown (e.g., "GBP 38.60 = SGD 65.12"):
   - amount: 65.12 (the statement-local amount)
   - originalAmount: 38.60 (the foreign amount)
@@ -439,7 +450,7 @@ IMPORTANT:
 - Reward points are not part of either amount
 
 
-RULE 9 — WHAT IS A TRANSACTION
+RULE 10 — WHAT IS A TRANSACTION
 A transaction MUST have ALL THREE:
 1. A specific DATE (not a date range, not a due date)
 2. A MERCHANT NAME or specific payee

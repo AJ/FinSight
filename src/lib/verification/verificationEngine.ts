@@ -1,6 +1,6 @@
 import { parse, isValid, format } from "date-fns"
 import { Transaction } from '@/models/Transaction';
-import { debugLog } from '@/lib/utils/debug';
+import { debugLog, debugError } from '@/lib/utils/debug';
 import type { CCSummary, BankSummary } from '@/lib/parsers/extractSummary';
 import type { ExtractedTransaction } from '@/types/extractedTransaction';
 
@@ -242,7 +242,21 @@ export function verifyCCStatement(
   // Overall confidence
   const passed = statementTotals.passed && transactionSums.passed
   const overallConfidence = calculateCCConfidence(statementTotals, transactionSums)
-  
+
+  if (passed) {
+    debugLog('[CC Verification] Final verdict:', {
+      passed,
+      overallConfidence,
+    })
+  } else {
+    debugError('[CC Verification] Final verdict:', {
+      passed,
+      overallConfidence,
+      statementTotalsPassed: statementTotals.passed,
+      transactionSumsPassed: transactionSums.passed,
+    })
+  }
+
   return {
     statementTotals,
     transactionSums,

@@ -216,7 +216,7 @@ export default function ReviewPage() {
       {/* Verification Summary - Bottom of page */}
       {verificationReport && (
         <div className="w-[80vw] mx-auto pb-8">
-          <VerificationSummary report={verificationReport} />
+          <VerificationSummary report={verificationReport} currency={currency} />
         </div>
       )}
 

@@ -639,6 +639,19 @@ function buildExtractionBundle(input: {
 
   const sourceType =
     input.statementType === 'credit_card' ? SourceType.CreditCard : SourceType.Bank;
+
+  const validatedTransactions = validationResult.data.transactions;
+  const withReasoning = validatedTransactions.filter((t) => t.reasoning);
+  if (withReasoning.length > 0) {
+    debugLog('[extraction] Transaction reasoning:', withReasoning.map((t) => ({
+      description: t.description.substring(0, 50),
+      type: t.type,
+      subType: t.transactionSubType,
+      amount: t.amount,
+      reasoning: t.reasoning,
+    })));
+  }
+
   const transactions = toCanonicalTransactions(
     validationResult.data.transactions,
     input.defaultCurrency,

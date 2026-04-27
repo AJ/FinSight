@@ -36,4 +36,9 @@ describe('prompt templates', () => {
   it('CC transaction prompt contains subtype guidance', () => {
     expect(CC_TRANSACTIONS_PROMPT).toContain('transactionSubType');
   });
+
+  it('CC transaction prompt requires reasoning for classification transparency', () => {
+    expect(CC_TRANSACTIONS_PROMPT).toContain('reasoning');
+    expect(CC_TRANSACTIONS_PROMPT).toContain('RULE 7 — REASONING');
+  });
 });

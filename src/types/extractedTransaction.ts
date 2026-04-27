@@ -8,6 +8,7 @@ export interface ExtractedTransaction {
   date: string;
   description: string;
   amount: number;
+  reasoning?: string;
   type: 'debit' | 'credit';
   transactionSubType?: string;
   balance?: number | null;
