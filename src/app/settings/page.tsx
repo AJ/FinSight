@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { useTransactionStore } from '@/lib/store/transactionStore';
 import { useSettingsStore, validateLlmServerUrl, isRemoteUrlConfirmed, confirmRemoteUrl } from '@/lib/store/settingsStore';
 import { useChatStore } from '@/lib/store/chatStore';
+import { usePersistHydrated } from '@/lib/store/usePersistHydrated';
 import { checkLLMConnection } from '@/lib/store/llmConnectionStore';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -45,6 +46,9 @@ import {
 } from 'lucide-react';
 
 export default function SettingsPage() {
+  const isTransactionStoreHydrated = usePersistHydrated(useTransactionStore);
+  const isSettingsStoreHydrated = usePersistHydrated(useSettingsStore);
+
   const transactions = useTransactionStore((state) => state.transactions);
   const clearAllTransactions = useTransactionStore((state) => state.clearAll);
   const clearChat = useChatStore((state) => state.clearAll);
@@ -77,12 +81,6 @@ export default function SettingsPage() {
   const [pendingUrl, setPendingUrl] = useState<string | null>(null);
   const [showRemoteWarning, setShowRemoteWarning] = useState(false);
   const [dontShowAgain, setDontShowAgain] = useState(false);
-
-  // Test connection on mount with saved URL
-  useEffect(() => {
-    testConnection(llmServerUrl, true);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
 
   const testConnection = useCallback(
     async (url: string, silent = false) => {
@@ -137,6 +135,12 @@ export default function SettingsPage() {
     [llmModel, setLLMServerUrl, setLLMModel]
   );
 
+  // Test connection on mount with saved URL
+  useEffect(() => {
+    if (!isSettingsStoreHydrated) return;
+    testConnection(llmServerUrl, true);
+  }, [isSettingsStoreHydrated, llmServerUrl, testConnection]);
+
   // Handle remote URL warning confirmation
   const handleRemoteUrlConfirm = useCallback(() => {
     if (dontShowAgain && pendingUrl) {
@@ -167,6 +171,10 @@ export default function SettingsPage() {
       alert('All data cleared successfully!');
     }
   };
+
+  if (!isTransactionStoreHydrated || !isSettingsStoreHydrated) {
+    return <div className="flex-1 bg-background" aria-hidden="true" />;
+  }
 
   return (
     <div className="flex-1 overflow-y-auto">

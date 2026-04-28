@@ -4,6 +4,7 @@ import { useEffect, useState, useRef } from 'react';
 import { useTransactionStore } from '@/lib/store/transactionStore';
 import { useRecurringStore } from '@/lib/store/recurringStore';
 import { useSettingsStore } from '@/lib/store/settingsStore';
+import { usePersistHydrated } from '@/lib/store/usePersistHydrated';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { RecurringPaymentCard } from '@/components/recurring/RecurringPaymentCard';
@@ -21,6 +22,10 @@ import {
 type FilterOption = 'all' | 'active' | 'inactive';
 
 export default function SubscriptionsPage() {
+  const isTransactionStoreHydrated = usePersistHydrated(useTransactionStore);
+  const isRecurringStoreHydrated = usePersistHydrated(useRecurringStore);
+  const isSettingsStoreHydrated = usePersistHydrated(useSettingsStore);
+
   const { openUpload } = useUpload();
   const currency = useSettingsStore((state) => state.currency);
   const transactions = useTransactionStore((state) => state.transactions);
@@ -50,6 +55,10 @@ export default function SubscriptionsPage() {
     filteredPayments = activePayments;
   } else if (filter === 'inactive') {
     filteredPayments = inactivePayments;
+  }
+
+  if (!isTransactionStoreHydrated || !isRecurringStoreHydrated || !isSettingsStoreHydrated) {
+    return <div className="flex-1 bg-background" aria-hidden="true" />;
   }
 
   if (transactions.length === 0) {

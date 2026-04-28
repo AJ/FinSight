@@ -276,11 +276,12 @@ export const useTransactionStore = create<TransactionStore>()(
     }),
     {
       name: 'transaction-storage',
-      // Rehydrate transactions from JSON to Transaction class instances
-      onRehydrateStorage: () => (state) => {
-        if (state) {
-          state.transactions = rehydrateTransactions(state.transactions);
+      merge: (persistedState, currentState) => {
+        const merged = { ...currentState, ...(persistedState as Partial<typeof currentState>) };
+        if (merged.transactions) {
+          merged.transactions = rehydrateTransactions(merged.transactions);
         }
+        return merged;
       },
     }
   )

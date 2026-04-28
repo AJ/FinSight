@@ -541,10 +541,12 @@ export const useCreditCardStore = create<CreditCardStore>()(
     }),
     {
       name: 'credit-card-storage',
-      onRehydrateStorage: () => (state) => {
-        if (state) {
-          state.statements = state.statements.map(rehydrateStatement);
+      merge: (persistedState, currentState) => {
+        const merged = { ...currentState, ...(persistedState as Partial<typeof currentState>) };
+        if (merged.statements) {
+          merged.statements = merged.statements.map(rehydrateStatement);
         }
+        return merged;
       },
     }
   )

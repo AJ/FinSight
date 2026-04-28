@@ -2,6 +2,7 @@
 
 import { useMemo, useEffect, useState } from 'react';
 import { useTransactionStore } from '@/lib/store/transactionStore';
+import { useBudgetStore } from '@/lib/store/budgetStore';
 import { useCategoryStore } from '@/lib/store/categoryStore';
 import { useSettingsStore } from '@/lib/store/settingsStore';
 import { useCreditCardStore } from '@/lib/store/creditCardStore';
@@ -29,6 +30,8 @@ import { useUpload } from '@/components/layout/UploadContext';
 import { toast } from 'sonner';
 import { checkLLMConnection } from '@/lib/store/llmConnectionStore';
 import { useOnboardingStore } from '@/lib/store/onboardingStore';
+import { BudgetNotificationBanner } from '@/components/budget/BudgetNotificationBanner';
+import { usePersistHydrated } from '@/lib/store/usePersistHydrated';
 
 // Currency symbol icon component
 function CurrencySymbol({ symbol }: { symbol: string }) {
@@ -40,6 +43,13 @@ function CurrencySymbol({ symbol }: { symbol: string }) {
 }
 
 export default function DashboardPage() {
+  const isTransactionStoreHydrated = usePersistHydrated(useTransactionStore);
+  const isBudgetStoreHydrated = usePersistHydrated(useBudgetStore);
+  const isCategoryStoreHydrated = usePersistHydrated(useCategoryStore);
+  const isSettingsStoreHydrated = usePersistHydrated(useSettingsStore);
+  const isCreditCardStoreHydrated = usePersistHydrated(useCreditCardStore);
+  const isOnboardingStoreHydrated = usePersistHydrated(useOnboardingStore);
+
   const transactions = useTransactionStore((state) => state.transactions);
   const categories = useCategoryStore((state) => state.categories);
   const currency = useSettingsStore((state) => state.currency);
@@ -53,8 +63,9 @@ export default function DashboardPage() {
   const { openUpload } = useUpload();
 
   useEffect(() => {
+    if (!isCategoryStoreHydrated) return;
     initializeDefaultCategories();
-  }, [initializeDefaultCategories]);
+  }, [initializeDefaultCategories, isCategoryStoreHydrated]);
 
   // Check LLM connection and show toast if offline (only once)
   const [hasCheckedLLM, setHasCheckedLLM] = useState(false);
@@ -121,6 +132,18 @@ export default function DashboardPage() {
 
     return { income, expenses, balance, savingsRate, period };
   }, [transactions]);
+
+  const isReady =
+    isTransactionStoreHydrated &&
+    isBudgetStoreHydrated &&
+    isCategoryStoreHydrated &&
+    isSettingsStoreHydrated &&
+    isCreditCardStoreHydrated &&
+    isOnboardingStoreHydrated;
+
+  if (!isReady) {
+    return <div className="flex-1 bg-background" aria-hidden="true" />;
+  }
 
   // Empty state
   if (transactions.length === 0) {
@@ -191,6 +214,9 @@ export default function DashboardPage() {
 
       {/* Main Content */}
       <div className="p-6 space-y-6">
+        {/* Budget Notification Banner */}
+        <BudgetNotificationBanner />
+
         {/* Financial Health Card */}
         <FinancialHealthCard />
 

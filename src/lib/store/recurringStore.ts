@@ -25,6 +25,15 @@ interface ExcludedMerchant {
   excludedAt: Date;
 }
 
+function rehydrateExcludedMerchants(
+  merchants: ExcludedMerchant[]
+): ExcludedMerchant[] {
+  return merchants.map((merchant) => ({
+    ...merchant,
+    excludedAt: toDate(merchant.excludedAt),
+  }));
+}
+
 interface RecurringStore {
   recurringPayments: RecurringPayment[];
   excludedMerchants: ExcludedMerchant[];
@@ -136,17 +145,20 @@ export const useRecurringStore = create<RecurringStore>()(
     }),
     {
       name: 'recurring-storage',
-      onRehydrateStorage: () => (state) => {
-        if (state) {
-          state.recurringPayments = rehydrateDates(state.recurringPayments);
-          state.excludedMerchants = state.excludedMerchants.map(e => ({
-            ...e,
-            excludedAt: toDate(e.excludedAt),
-          }));
-          if (state.lastScanned) {
-            state.lastScanned = toDate(state.lastScanned);
-          }
+      merge: (persistedState, currentState) => {
+        const merged = { ...currentState, ...(persistedState as Partial<typeof currentState>) };
+
+        if (merged.recurringPayments) {
+          merged.recurringPayments = rehydrateDates(merged.recurringPayments);
         }
+        if (merged.excludedMerchants) {
+          merged.excludedMerchants = rehydrateExcludedMerchants(merged.excludedMerchants);
+        }
+        if (merged.lastScanned) {
+          merged.lastScanned = toDate(merged.lastScanned);
+        }
+
+        return merged;
       },
     }
   )

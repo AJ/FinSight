@@ -17,6 +17,7 @@ import { TypingIndicator } from '@/components/chat/TypingIndicator';
 import { useChatStore } from '@/lib/store/chatStore';
 import { useSettingsStore } from '@/lib/store/settingsStore';
 import { useTransactionStore } from '@/lib/store/transactionStore';
+import { usePersistHydrated } from '@/lib/store/usePersistHydrated';
 import { buildChatContextForQuestion } from '@/lib/chat/contextBuilder';
 import { buildChatOptimizationPlan } from '@/lib/llm/chatOptimization';
 import { ChatMessage } from '@/types';
@@ -65,6 +66,10 @@ const SUGGESTIONS = [
 ];
 
 export function ChatPanel() {
+  const isChatStoreHydrated = usePersistHydrated(useChatStore);
+  const isSettingsStoreHydrated = usePersistHydrated(useSettingsStore);
+  const isTransactionStoreHydrated = usePersistHydrated(useTransactionStore);
+
   const {
     messages,
     selectedModel: chatModel,
@@ -356,10 +361,18 @@ Guidelines:
   }, []);
 
   const hasContext = transactions.length > 0;
+  const isReady =
+    isChatStoreHydrated &&
+    isSettingsStoreHydrated &&
+    isTransactionStoreHydrated;
 
   /* ------------------------------------------------------------------ */
   /*  Render                                                            */
   /* ------------------------------------------------------------------ */
+
+  if (!isReady) {
+    return <div className="h-full bg-background" aria-hidden="true" />;
+  }
 
   return (
     <div className="flex flex-col h-full">
