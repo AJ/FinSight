@@ -66,3 +66,5 @@ docs/COMMIT_MESSAGE_DRAFT.md
 *.log
 .qwen/
 gha-creds-*.json
+playwright-report/
+test-results/
