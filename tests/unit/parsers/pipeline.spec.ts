@@ -11,32 +11,34 @@ const mockCreateChunkPlan = vi.fn();
 const mockGetDroppedCount = vi.fn(() => 0);
 const mockMergeChunkTransactions = vi.fn();
 
+type MockFn = (...args: unknown[]) => unknown;
+
 vi.mock('@/lib/parsers/normalization', () => ({
-  normalizeStatementText: (...args: unknown[]) => mockNormalize(...args),
+  normalizeStatementText: (...args: unknown[]) => (mockNormalize as MockFn)(...args),
 }));
 
 vi.mock('@/lib/parsers/typeDetection', () => ({
-  detectStatementType: (...args: unknown[]) => mockDetectType(...args),
+  detectStatementType: (...args: unknown[]) => (mockDetectType as MockFn)(...args),
 }));
 
 vi.mock('@/lib/parsers/extractSummary', () => ({
-  buildSummaryPrompt: (...args: unknown[]) => mockBuildSummaryPrompt(...args),
+  buildSummaryPrompt: (...args: unknown[]) => (mockBuildSummaryPrompt as MockFn)(...args),
 }));
 
 vi.mock('@/lib/parsers/extractTransactions', () => ({
-  buildTransactionsPrompt: (...args: unknown[]) => mockBuildTransactionsPrompt(...args),
+  buildTransactionsPrompt: (...args: unknown[]) => (mockBuildTransactionsPrompt as MockFn)(...args),
 }));
 
 vi.mock('@/lib/parsers/extractRewards', () => ({
-  buildRewardsPrompt: (...args: unknown[]) => mockBuildRewardsPrompt(...args),
+  buildRewardsPrompt: (...args: unknown[]) => (mockBuildRewardsPrompt as MockFn)(...args),
 }));
 
 vi.mock('@/lib/parsers/retryEngine', () => ({
-  runWithRetry: (...args: unknown[]) => mockRunWithRetry(...args),
+  runWithRetry: (...args: unknown[]) => (mockRunWithRetry as MockFn)(...args),
 }));
 
 vi.mock('@/lib/verification/mergeEngine', () => ({
-  mergeOutputs: (...args: unknown[]) => mockMergeOutputs(...args),
+  mergeOutputs: (...args: unknown[]) => (mockMergeOutputs as MockFn)(...args),
 }));
 
 const mockValidateTransactions = vi.fn();
@@ -44,13 +46,13 @@ const mockValidateTransactions = vi.fn();
 vi.mock('@/lib/verification/validationEngine', () => ({
   validateCCSummary: vi.fn((d: unknown) => ({ valid: true, errors: [], warnings: [], data: d })),
   validateBankSummary: vi.fn((d: unknown) => ({ valid: true, errors: [], warnings: [], data: d })),
-  validateTransactions: (...args: unknown[]) => mockValidateTransactions(...args),
+  validateTransactions: (...args: unknown[]) => (mockValidateTransactions as MockFn)(...args),
 }));
 
 vi.mock('@/lib/parsers/transactionChunking', () => ({
-  createTransactionChunkPlan: (...args: unknown[]) => mockCreateChunkPlan(...args),
-  getDroppedTransactionCount: (...args: unknown[]) => mockGetDroppedCount(...args),
-  mergeChunkTransactions: (...args: unknown[]) => mockMergeChunkTransactions(...args),
+  createTransactionChunkPlan: (...args: unknown[]) => (mockCreateChunkPlan as MockFn)(...args),
+  getDroppedTransactionCount: (...args: unknown[]) => (mockGetDroppedCount as MockFn)(...args),
+  mergeChunkTransactions: (...args: unknown[]) => (mockMergeChunkTransactions as MockFn)(...args),
 }));
 
 vi.mock('@/lib/utils/debug', () => ({
@@ -151,7 +153,7 @@ function makeSingleChunkPlan() {
   };
 }
 
-function setupBankPipeline(transactions: unknown[], summary = makeBankSummary()) {
+function setupBankPipeline(transactions: unknown[], summary: ReturnType<typeof makeBankSummary> | null = makeBankSummary()) {
   mockRunWithRetry.mockImplementation((prompt: string) => {
     if (prompt === 'summary prompt') return mockSuccessfulRetry(summary);
     return mockSuccessfulRetry({ transactions });

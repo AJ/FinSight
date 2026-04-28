@@ -1,5 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import type { Transaction } from '@/types';
+import { type Transaction, CategorizedBy } from '@/types';
+import { makeCategory, type makeTransaction } from '@tests/unit/factories';
+import { CategoryType } from '@/models';
 
 const mockGetRule = vi.fn();
 const mockUpsertRule = vi.fn();
@@ -34,11 +36,11 @@ function makeTx(overrides: Partial<Transaction> = {}): Transaction {
     description: 'Amazon Purchase',
     amount: 99.99,
     type: 'debit' as const,
-    category: { id: 'shopping', name: 'Shopping', icon: 'cart', keywords: [] },
+    category: makeCategory('shopping'),
     balance: 1000,
     isDebit: true,
     isCredit: false,
-    categorizedBy: 'manual',
+    categorizedBy: CategorizedBy.Manual,
     sourceType: 'bank',
     ...overrides,
   } as Transaction;
@@ -91,13 +93,13 @@ describe('teachMerchantRulesFromConfirmedTransactions', () => {
   it('learns from category changes with manual categorization', () => {
     const original = makeTx({
       id: 'tx-1',
-      category: { id: 'other', name: 'Other', icon: 'tag', keywords: [] },
+      category: makeCategory('other'),
     });
 
     const reviewed = makeTx({
       id: 'tx-1',
-      category: { id: 'shopping', name: 'Shopping', icon: 'cart', keywords: [] },
-      categorizedBy: 'manual',
+      category: makeCategory('shopping'),
+      categorizedBy: CategorizedBy.Manual,
     });
 
     mockGetMerchantRuleDecision.mockReturnValue({ merchant: 'amazon', categoryId: 'shopping' });
@@ -109,7 +111,7 @@ describe('teachMerchantRulesFromConfirmedTransactions', () => {
   });
 
   it('skips transactions with matching IDs but no category change', () => {
-    const tx = makeTx({ id: 'tx-1', categorizedBy: 'manual' });
+    const tx = makeTx({ id: 'tx-1', categorizedBy: CategorizedBy.Manual });
 
     const count = teachMerchantRulesFromConfirmedTransactions([tx], [tx]);
 
@@ -120,8 +122,8 @@ describe('teachMerchantRulesFromConfirmedTransactions', () => {
   it('skips transactions not in original list', () => {
     const reviewed = makeTx({
       id: 'tx-unknown',
-      category: { id: 'shopping', name: 'Shopping', icon: 'cart', keywords: [] },
-      categorizedBy: 'manual',
+      category: makeCategory('shopping'),
+      categorizedBy: CategorizedBy.Manual,
     });
 
     const count = teachMerchantRulesFromConfirmedTransactions([], [reviewed]);
@@ -132,13 +134,13 @@ describe('teachMerchantRulesFromConfirmedTransactions', () => {
   it('skips category changes from non-manual categorization', () => {
     const original = makeTx({
       id: 'tx-1',
-      category: { id: 'other', name: 'Other', icon: 'tag', keywords: [] },
+      category: makeCategory('other'),
     });
 
     const reviewed = makeTx({
       id: 'tx-1',
-      category: { id: 'shopping', name: 'Shopping', icon: 'cart', keywords: [] },
-      categorizedBy: 'ai',
+      category: makeCategory('shopping'),
+      categorizedBy: CategorizedBy.AI,
     });
 
     const count = teachMerchantRulesFromConfirmedTransactions([original], [reviewed]);
@@ -150,13 +152,13 @@ describe('teachMerchantRulesFromConfirmedTransactions', () => {
   it('skips when decision returns null', () => {
     const original = makeTx({
       id: 'tx-1',
-      category: { id: 'other', name: 'Other', icon: 'tag', keywords: [] },
+      category: makeCategory('other'),
     });
 
     const reviewed = makeTx({
       id: 'tx-1',
-      category: { id: 'shopping', name: 'Shopping', icon: 'cart', keywords: [] },
-      categorizedBy: 'manual',
+      category: makeCategory('shopping'),
+      categorizedBy: CategorizedBy.Manual,
     });
 
     mockGetMerchantRuleDecision.mockReturnValue(null);
@@ -168,13 +170,13 @@ describe('teachMerchantRulesFromConfirmedTransactions', () => {
 
   it('learns from multiple changed transactions', () => {
     const originals = [
-      makeTx({ id: 'tx-1', category: { id: 'other', name: 'Other', icon: 'tag', keywords: [] } }),
-      makeTx({ id: 'tx-2', category: { id: 'other', name: 'Other', icon: 'tag', keywords: [] } }),
+      makeTx({ id: 'tx-1', category: makeCategory('other') }),
+      makeTx({ id: 'tx-2', category: makeCategory('other') }),
     ];
 
     const reviewed = [
-      makeTx({ id: 'tx-1', category: { id: 'food', name: 'Food', icon: 'utensils', keywords: [] }, categorizedBy: 'manual' }),
-      makeTx({ id: 'tx-2', category: { id: 'transport', name: 'Transport', icon: 'car', keywords: [] }, categorizedBy: 'manual' }),
+      makeTx({ id: 'tx-1', category: makeCategory('food'), categorizedBy: CategorizedBy.Manual }),
+      makeTx({ id: 'tx-2', category: makeCategory('transport'), categorizedBy: CategorizedBy.Manual }),
     ];
 
     mockGetMerchantRuleDecision.mockReturnValue({ merchant: 'test', categoryId: 'test' });

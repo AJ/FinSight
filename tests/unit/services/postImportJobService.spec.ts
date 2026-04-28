@@ -41,7 +41,7 @@ const {
 vi.mock('@/lib/store/transactionStore', () => ({
   useTransactionStore: {
     getState: () => mockGetState(),
-    setState: (...args: unknown[]) => mockSetState(...args),
+    setState: (...args: unknown[]) => (mockSetState as (...a: unknown[]) => unknown)(...args),
   },
 }));
 
