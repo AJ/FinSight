@@ -12,20 +12,18 @@ export {
 export type { TransactionJSON, AnomalyDetails } from '@/models';
 
 // Budget types
-export interface Budget {
-  id: string;
-  month: string; // 'YYYY-MM' format
-  totalIncome: number;
+export interface BudgetPeriod {
+  month: string;              // "YYYY-MM"
+  income: number | null;      // manually set, carried forward, or null
   allocations: BudgetAllocation[];
-  createdAt: Date;
+  hiddenCategories: string[]; // category IDs hidden for this month
+  createdAt: string;          // ISO timestamp
+  updatedAt: string;          // ISO timestamp
 }
 
 export interface BudgetAllocation {
   categoryId: string;
-  categoryName: string;
-  projectedAmount: number;
-  budgetedAmount: number;
-  actualAmount?: number;
+  amount: number;             // the budgeted amount
 }
 
 // Settings types
@@ -55,11 +53,12 @@ export interface ChartData {
 
 // Budget progress types
 export interface BudgetProgress {
+  categoryId: string;
   budgeted: number;
   spent: number;
   remaining: number;
   percentUsed: number;
-  status: "on-track" | "warning" | "over-budget";
+  status: 'on-track' | 'warning' | 'over-budget' | 'not-set';
 }
 
 // File upload types

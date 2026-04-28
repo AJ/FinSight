@@ -86,7 +86,7 @@ export function normalizeHeader(h: string): string {
 
 export function matchesAny(header: string, keywords: string[]): boolean {
   const norm = normalizeHeader(header);
-  return keywords.some((kw) => norm === kw || norm.includes(kw));
+  return keywords.some((kw) => norm === kw || new RegExp('\\b' + kw.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b').test(norm));
 }
 
 export function findColumn(headers: string[], keywords: string[]): string | null {

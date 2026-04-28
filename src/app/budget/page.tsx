@@ -1,258 +1,327 @@
 'use client';
 
-import { useState, useMemo } from 'react';
+import { Suspense, useState, useMemo, useCallback, useEffect } from 'react';
+import { useSearchParams, useRouter } from 'next/navigation';
 import { useTransactionStore } from '@/lib/store/transactionStore';
-import { useCategoryStore } from '@/lib/store/categoryStore';
 import { useBudgetStore } from '@/lib/store/budgetStore';
 import { useSettingsStore } from '@/lib/store/settingsStore';
+import { BudgetMonthPicker } from '@/components/budget/BudgetMonthPicker';
+import { BudgetSummaryCards } from '@/components/budget/BudgetSummaryCards';
+import { BudgetTable } from '@/components/budget/BudgetTable';
+import { BudgetPlanView } from '@/components/budget/BudgetPlanView';
+import { BudgetEmptyState } from '@/components/budget/BudgetEmptyState';
+import { BudgetInfoBanner } from '@/components/budget/BudgetInfoBanner';
+import { BudgetHighlights } from '@/components/budget/BudgetHighlights';
+import { getBudgetableCategoryIds } from '@/lib/budget/categoryEligibility';
+import { computeAutoFill } from '@/lib/budget/autoFill';
+import { computeTemplateAllocation, NEEDS, WANTS, SAVES } from '@/lib/budget/templateApply';
+import { findCarryForwardState } from '@/lib/budget/carryForward';
+import { calculateMedianMonthlyIncome } from '@/lib/forecaster';
+import { format, startOfMonth, subMonths } from 'date-fns';
+import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
-import { Slider } from '@/components/ui/slider';
-import { DollarSign, TrendingUp } from 'lucide-react';
-import { forecastAllCategories, calculateAverageMonthlyIncome } from '@/lib/forecaster';
-import { formatCurrency } from '@/lib/currencyFormatter';
-import { format, addMonths, startOfMonth } from 'date-fns';
-import { v4 as uuidv4 } from 'uuid';
-import { Budget } from '@/types';
-import { getCategoryDisplay, iconMap } from '@/components/transactions/CategoryBadge';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog';
 
-export default function BudgetPage() {
-  const transactions = useTransactionStore((state) => state.transactions);
-  const categories = useCategoryStore((state) => state.categories);
-  const currency = useSettingsStore((state) => state.currency);
-  const createBudget = useBudgetStore((state) => state.createBudget);
+type TemplateId = '50/30/20' | '60/20/20' | '70/20/10';
 
-  const [budgetMonth] = useState(() => {
-    const nextMonth = addMonths(startOfMonth(new Date()), 1);
-    return format(nextMonth, 'yyyy-MM');
-  });
+function BudgetPageContent() {
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const transactions = useTransactionStore((s) => s.transactions);
+  const currency = useSettingsStore((s) => s.currency);
+  const budgetStore = useBudgetStore();
 
-  // Calculate forecasts
-  const forecasts = useMemo(() => {
-    const expenseCategories = categories.filter((c) => c.isExpense);
-    const categoryIds = expenseCategories.map((c) => c.id);
-    return forecastAllCategories(transactions, categoryIds);
-  }, [transactions, categories]);
+  const initialTab = searchParams.get('tab') === 'plan' ? 'plan' : 'track';
+  const initialMonth = searchParams.get('month') || format(startOfMonth(new Date()), 'yyyy-MM');
+  const [tab, setTab] = useState(initialTab);
+  const [selectedMonth, setSelectedMonth] = useState(initialMonth);
 
-  // Derived default values (computed from transactions)
-  const defaultTotalIncome = useMemo(
-    () => Math.round(calculateAverageMonthlyIncome(transactions)),
+  const period = budgetStore.getPeriod(selectedMonth);
+  const medianIncome = useMemo(
+    () => Math.round(calculateMedianMonthlyIncome(transactions)),
     [transactions]
   );
 
-  const defaultAllocations = useMemo(() => {
-    const initial: Record<string, number> = {};
-    Object.keys(forecasts).forEach((categoryId) => {
-      initial[categoryId] = Math.round(forecasts[categoryId]);
-    });
-    return initial;
-  }, [forecasts]);
+  const monthTransactions = useMemo(
+    () => transactions.filter(t => format(t.date, 'yyyy-MM') === selectedMonth),
+    [transactions, selectedMonth]
+  );
 
-  // User-editable state, initialized from derived defaults
-  const [totalIncome, setTotalIncome] = useState(() => defaultTotalIncome);
-  const [budgetAllocations, setBudgetAllocations] = useState<Record<string, number>>(() => ({ ...defaultAllocations }));
+  const progress = useMemo(
+    () => budgetStore.computeProgress(selectedMonth, monthTransactions),
+    [budgetStore, selectedMonth, monthTransactions]
+  );
 
-  const totalAllocated = Object.values(budgetAllocations).reduce((sum, val) => sum + val, 0);
-  const remaining = totalIncome - totalAllocated;
+  const summaryData = useMemo(() => {
+    const budgeted = progress.reduce((s, p) => s + p.budgeted, 0);
+    const spent = progress.reduce((s, p) => s + p.spent, 0);
+    const remaining = progress.reduce((s, p) => s + p.remaining, 0);
+    return { budgeted, spent, remaining, income: period?.income ?? null };
+  }, [progress, period]);
 
-  const handleAllocationChange = (categoryId: string, value: number) => {
-    setBudgetAllocations((prev) => ({
-      ...prev,
-      [categoryId]: value,
-    }));
-  };
+  const hasBudget = !!period;
+  const hasAnyData = hasBudget || monthTransactions.length > 0;
 
-  const handleAutoDistribute = () => {
-    const totalProjected = Object.values(forecasts).reduce((sum, val) => sum + val, 0);
+  // Plan tab: local dirty state
+  const [localIncome, setLocalIncome] = useState<number>(period?.income ?? 0);
+  const [localAllocations, setLocalAllocations] = useState<Record<string, number>>(
+    () => Object.fromEntries((period?.allocations ?? []).map(a => [a.categoryId, a.amount]))
+  );
+  const [localHidden, setLocalHidden] = useState<string[]>(period?.hiddenCategories ?? []);
 
-    if (totalProjected === 0) {
-      alert('No spending data available to auto-distribute. Please manually set your budget.');
+  const loadMonthState = useCallback((month: string) => {
+    const allPeriods = useBudgetStore.getState().periods;
+    const result = findCarryForwardState({ month, periods: allPeriods });
+    setLocalIncome(result.income);
+    setLocalAllocations(result.allocations);
+    setLocalHidden(result.hidden);
+  }, []);
+
+  useEffect(() => {
+    loadMonthState(selectedMonth);
+  }, [selectedMonth, loadMonthState]);
+
+  // Dirty tracking
+  const isDirty = useMemo(() => {
+    const savedAllocMap = Object.fromEntries((period?.allocations ?? []).map(a => [a.categoryId, a.amount]));
+    return localIncome !== (period?.income ?? 0)
+      || JSON.stringify(localAllocations) !== JSON.stringify(savedAllocMap)
+      || JSON.stringify(localHidden) !== JSON.stringify(period?.hiddenCategories ?? []);
+  }, [localIncome, localAllocations, localHidden, period]);
+
+  const totalAllocated = Object.values(localAllocations).reduce((s, v) => s + v, 0);
+  const isOverAllocated = totalAllocated > localIncome;
+
+  // Unsaved changes dialog
+  const [showDiscardDialog, setShowDiscardDialog] = useState(false);
+  const [pendingMonth, setPendingMonth] = useState<string | null>(null);
+
+  const handleMonthChange = useCallback((month: string) => {
+    if (isDirty && tab === 'plan') {
+      setPendingMonth(month);
+      setShowDiscardDialog(true);
       return;
     }
+    setSelectedMonth(month);
+    router.push(`/budget?tab=${tab}&month=${month}`, { scroll: false });
+  }, [tab, router, isDirty]);
 
-    // Distribute proportionally
-    const newAllocations: Record<string, number> = {};
-    Object.entries(forecasts).forEach(([categoryId, projected]) => {
-      const proportion = projected / totalProjected;
-      newAllocations[categoryId] = Math.round(totalIncome * proportion);
+  const confirmDiscard = () => {
+    setShowDiscardDialog(false);
+    if (pendingMonth) {
+      setSelectedMonth(pendingMonth);
+      router.push(`/budget?tab=${tab}&month=${pendingMonth}`, { scroll: false });
+      setPendingMonth(null);
+    }
+  };
+
+  const handleTabChange = useCallback((value: string) => {
+    setTab(value);
+    router.push(`/budget?tab=${value}&month=${selectedMonth}`, { scroll: false });
+  }, [selectedMonth, router]);
+
+  const handleEditBudget = useCallback(() => {
+    setTab('plan');
+    router.push(`/budget?tab=plan&month=${selectedMonth}`, { scroll: false });
+  }, [selectedMonth, router]);
+
+  const handleSave = useCallback(() => {
+    const store = useBudgetStore.getState();
+    store.setIncome(selectedMonth, localIncome);
+
+    // Get current state to diff allocations
+    const currentPeriod = store.getPeriod(selectedMonth);
+    const currentAllocIds = new Set((currentPeriod?.allocations ?? []).map(a => a.categoryId));
+
+    for (const [catId, amount] of Object.entries(localAllocations)) {
+      store.setAllocation(selectedMonth, catId, amount);
+    }
+
+    // Remove allocations that are no longer present
+    for (const catId of currentAllocIds) {
+      if (!(catId in localAllocations)) {
+        store.removeAllocation(selectedMonth, catId);
+      }
+    }
+
+    // Handle hidden categories
+    const currentHidden = currentPeriod?.hiddenCategories ?? [];
+    for (const catId of localHidden) {
+      if (!currentHidden.includes(catId)) store.hideCategory(selectedMonth, catId);
+    }
+    for (const catId of currentHidden) {
+      if (!localHidden.includes(catId)) store.addCategory(selectedMonth, catId);
+    }
+
+    store.savePeriod(selectedMonth);
+  }, [selectedMonth, localIncome, localAllocations, localHidden]);
+
+  const handleReset = useCallback(() => {
+    loadMonthState(selectedMonth);
+  }, [selectedMonth, loadMonthState]);
+
+  const handleAutoFill = useCallback(() => {
+    const result = computeAutoFill({ localIncome, medianIncome, transactions });
+    if (!result) return;
+    setLocalIncome(result.income);
+    setLocalAllocations(result.allocations);
+    setLocalHidden(result.hidden);
+  }, [transactions, localIncome, medianIncome]);
+
+  const handleApplyTemplate = useCallback((template: TemplateId) => {
+    const result = computeTemplateAllocation({ template, localIncome, medianIncome, transactions });
+    if (!result) return;
+    setLocalIncome(result.income);
+    setLocalAllocations(result.allocations);
+    setLocalHidden(result.hidden);
+  }, [localIncome, medianIncome, transactions]);
+
+  const handleAllocationChange = useCallback((categoryId: string, amount: number) => {
+    setLocalAllocations(prev => ({ ...prev, [categoryId]: amount }));
+  }, []);
+
+  const handleRemoveCategory = useCallback((categoryId: string) => {
+    setLocalAllocations(prev => {
+      const next = { ...prev };
+      delete next[categoryId];
+      return next;
     });
+    setLocalHidden(prev => prev.includes(categoryId) ? prev : [...prev, categoryId]);
+  }, []);
 
-    setBudgetAllocations(newAllocations);
-  };
+  const handleAddCategory = useCallback((categoryId: string) => {
+    setLocalHidden(prev => prev.filter(id => id !== categoryId));
+    if (!(categoryId in localAllocations)) {
+      setLocalAllocations(prev => ({ ...prev, [categoryId]: 0 }));
+    }
+  }, [localAllocations]);
 
-  const handleResetToDefaults = () => {
-    setTotalIncome(defaultTotalIncome);
-    setBudgetAllocations({ ...defaultAllocations });
-  };
-
-  const handleSaveBudget = () => {
-    const budget: Budget = {
-      id: uuidv4(),
-      month: budgetMonth,
-      totalIncome,
-      allocations: Object.entries(budgetAllocations).map(([categoryId, budgetedAmount]) => {
-        const category = categories.find((c) => c.id === categoryId);
-        return {
-          categoryId,
-          categoryName: category?.name || categoryId,
-          projectedAmount: forecasts[categoryId] || 0,
-          budgetedAmount,
-        };
-      }),
-      createdAt: new Date(),
-    };
-
-    createBudget(budget);
-    alert('Budget saved successfully!');
-  };
-
-  const expenseCategories = categories.filter((c) => c.isExpense);
+  // Derived: visible and hidden category lists
+  const allCategoryIds = getBudgetableCategoryIds();
+  const visibleCategoryIds = allCategoryIds.filter(id => !localHidden.includes(id) && id in localAllocations);
+  const hiddenCategoryIds = allCategoryIds.filter(id => localHidden.includes(id) || !(id in localAllocations));
 
   return (
     <div className="flex-1 overflow-y-auto">
-      {/* Page Header */}
-      <div className="border-b border-border bg-card">
+      {/* Header */}
+      <div className="border-b bg-card">
         <div className="px-6 py-4 flex items-center justify-between">
           <div>
-            <h1 className="text-xl font-bold text-foreground">Budget Planner</h1>
-            <p className="text-sm text-muted-foreground">
-              Plan your budget for {format(new Date(budgetMonth), 'MMMM yyyy')}
-            </p>
+            <h1 className="text-xl font-bold">Budget</h1>
+            <p className="text-sm text-muted-foreground">Plan and track your monthly spending.</p>
           </div>
-
-          <div className="flex gap-2">
-            <Button variant="outline" onClick={handleResetToDefaults}>
-              Reset
-            </Button>
-            <Button variant="outline" onClick={handleAutoDistribute}>
-              Auto-Distribute
-            </Button>
-            <Button onClick={handleSaveBudget}>Save Budget</Button>
-          </div>
+          <BudgetMonthPicker selectedMonth={selectedMonth} onMonthChange={handleMonthChange} />
         </div>
       </div>
 
-      <div className="p-6">
-        {/* Overview Cards */}
-        <div className="grid md:grid-cols-3 gap-6 mb-8">
-          <Card>
-            <CardContent className="p-6">
-              <div className="flex items-center gap-4">
-                <div className="p-3 bg-success/10 rounded-lg">
-                  <DollarSign className="w-6 h-6 text-success" />
-                </div>
-                <div>
-                  <p className="text-sm text-muted-foreground">Expected Income</p>
-                  <p className="text-2xl font-bold">{formatCurrency(totalIncome, currency, false)}</p>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardContent className="p-6">
-              <div className="flex items-center gap-4">
-                <div className="p-3 bg-primary/10 rounded-lg">
-                  <TrendingUp className="w-6 h-6 text-primary" />
-                </div>
-                <div>
-                  <p className="text-sm text-muted-foreground">Total Allocated</p>
-                  <p className="text-2xl font-bold">{formatCurrency(totalAllocated, currency, false)}</p>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardContent className="p-6">
-              <div className="flex items-center gap-4">
-                <div className={`p-3 rounded-lg ${remaining >= 0 ? 'bg-success/10' : 'bg-destructive/10'}`}>
-                  <DollarSign className={`w-6 h-6 ${remaining >= 0 ? 'text-success' : 'text-destructive'}`} />
-                </div>
-                <div>
-                  <p className="text-sm text-muted-foreground">Remaining</p>
-                  <p className={`text-2xl font-bold ${remaining >= 0 ? 'text-success' : 'text-destructive'}`}>
-                    {formatCurrency(remaining, currency, false)}
-                  </p>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
+      {/* Content */}
+      <div className="p-6 space-y-4">
+        {/* Tabs */}
+        <div className="inline-flex gap-2 bg-card border border-border rounded-lg p-1">
+          <button
+            className={cn(
+              'px-4 py-1.5 text-sm font-medium rounded-md transition-colors',
+              tab === 'track'
+                ? 'bg-background text-foreground'
+                : 'text-muted-foreground hover:text-foreground/80'
+            )}
+            onClick={() => handleTabChange('track')}
+          >
+            Track
+          </button>
+          <button
+            className={cn(
+              'px-4 py-1.5 text-sm font-medium rounded-md transition-colors',
+              tab === 'plan'
+                ? 'bg-background text-foreground'
+                : 'text-muted-foreground hover:text-foreground/80'
+            )}
+            onClick={() => handleTabChange('plan')}
+          >
+            Plan
+          </button>
         </div>
+        {tab === 'track' && !hasAnyData ? (
+          <BudgetEmptyState
+            selectedMonth={selectedMonth}
+            hasTransactions={monthTransactions.length > 0}
+            onSetupBudget={handleEditBudget}
+          />
+        ) : tab === 'track' ? (
+          <>
+            <BudgetSummaryCards
+              income={summaryData.income}
+              budgeted={summaryData.budgeted}
+              spent={summaryData.spent}
+              remaining={summaryData.remaining}
+              currency={currency}
+              hasBudget={hasBudget}
+            />
 
-        {/* Income Input */}
-        <Card className="mb-8">
-          <CardHeader>
-            <CardTitle>Expected Income</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="flex gap-4 items-end">
-              <div className="flex-1">
-                <Label htmlFor="income">Monthly Income</Label>
-                <Input
-                  id="income"
-                  type="number"
-                  value={totalIncome}
-                  onChange={(e) => setTotalIncome(Number(e.target.value))}
-                  className="mt-2"
-                />
-              </div>
-            </div>
-          </CardContent>
-        </Card>
+            {!hasBudget && monthTransactions.length > 0 && (
+              <BudgetInfoBanner onSetBudget={handleEditBudget} />
+            )}
 
-        {/* Category Budgets */}
-        <Card>
-          <CardHeader>
-            <CardTitle>Category Budgets</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="space-y-6">
-              {expenseCategories.map((category) => {
-                const projected = Math.round(forecasts[category.id] || 0);
-                const budgeted = budgetAllocations[category.id] || 0;
-                const maxBudget = totalIncome;
-                const IconComponent = iconMap[category.icon || ""] || getCategoryDisplay(category.id).icon;
+            {hasBudget && (
+              <BudgetHighlights progress={progress} currency={currency} />
+            )}
 
-                return (
-                  <div key={category.id} className="space-y-3">
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2">
-                        <IconComponent className="w-5 h-5" style={{ color: category.color }} />
-                        <div>
-                          <p className="font-medium">{category.name}</p>
-                          <p className="text-xs text-muted-foreground">
-                            Projected: {formatCurrency(projected, currency, false)}
-                          </p>
-                        </div>
-                      </div>
-                      <Input
-                        type="number"
-                        value={budgeted}
-                        onChange={(e) =>
-                          handleAllocationChange(category.id, Number(e.target.value))
-                        }
-                        className="w-32"
-                      />
-                    </div>
-                    <Slider
-                      value={[budgeted]}
-                      onValueChange={(values) =>
-                        handleAllocationChange(category.id, values[0])
-                      }
-                      max={maxBudget}
-                      step={10}
-                      className="w-full"
-                    />
-                  </div>
-                );
-              })}
-            </div>
-          </CardContent>
-        </Card>
+            <BudgetTable
+              progress={progress}
+              currency={currency}
+              transactions={transactions}
+              selectedMonth={selectedMonth}
+              hasBudget={hasBudget}
+              onEditBudget={handleEditBudget}
+            />
+          </>
+        ) : (
+          <BudgetPlanView
+            month={selectedMonth}
+            income={localIncome}
+            allocations={localAllocations}
+            visibleCategoryIds={visibleCategoryIds}
+            hiddenCategoryIds={hiddenCategoryIds}
+            currency={currency}
+            transactions={transactions}
+            isDirty={isDirty}
+            isOverAllocated={isOverAllocated}
+            medianIncome={medianIncome}
+            onIncomeChange={setLocalIncome}
+            onAllocationChange={handleAllocationChange}
+            onRemoveCategory={handleRemoveCategory}
+            onAddCategory={handleAddCategory}
+            onAutoFill={handleAutoFill}
+            onApplyTemplate={handleApplyTemplate}
+            onReset={handleReset}
+            onSave={handleSave}
+          />
+        )}
       </div>
+
+      {/* Unsaved changes dialog */}
+      <Dialog open={showDiscardDialog} onOpenChange={setShowDiscardDialog}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Unsaved changes</DialogTitle>
+            <DialogDescription>
+              You have unsaved changes. Discard them and switch months?
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowDiscardDialog(false)}>Cancel</Button>
+            <Button variant="destructive" onClick={confirmDiscard}>Discard</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
+  );
+}
+
+export default function BudgetPage() {
+  return (
+    <Suspense>
+      <BudgetPageContent />
+    </Suspense>
   );
 }

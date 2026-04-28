@@ -1,143 +1,225 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import { Budget, BudgetProgress } from '@/types';
+import { BudgetPeriod, BudgetAllocation, BudgetProgress } from '@/types';
+import { getApplicableNotification } from '@/lib/budget/notificationLogic';
+import { format } from 'date-fns';
 
 interface BudgetStore {
-  budgets: Budget[];
-  currentBudget: Budget | null;
-  createBudget: (budget: Budget) => void;
-  updateBudgetAllocation: (categoryId: string, amount: number) => void;
-  setCurrentBudget: (budgetId: string) => void;
-  getCurrentBudget: () => Budget | null;
-  getBudgetProgress: (categoryId: string, actualSpent: number) => BudgetProgress;
-  autoDistributeBudget: (totalIncome: number, projectedSpending: Record<string, number>) => void;
+  periods: Record<string, BudgetPeriod>;
+  notifications: {
+    dismissedNoBudget: string | null;
+    dismissedEOM: string | null;
+  };
+
+  getPeriod: (month: string) => BudgetPeriod | null;
+  setIncome: (month: string, amount: number) => void;
+  setAllocation: (month: string, categoryId: string, amount: number) => void;
+  removeAllocation: (month: string, categoryId: string) => void;
+  addCategory: (month: string, categoryId: string) => void;
+  hideCategory: (month: string, categoryId: string) => void;
+  savePeriod: (month: string) => void;
+  deletePeriod: (month: string) => void;
+  carryForward: (fromMonth: string, toMonth: string) => void;
+  autoDistribute: (month: string, projectedSpending: Record<string, number>) => void;
+  dismissNotification: (type: 'noBudget' | 'eom', month: string) => void;
+  getNotification: () => { type: 'noBudget' | 'eom'; month: string } | null;
+  computeProgress: (month: string, transactions: any[]) => BudgetProgress[];
+}
+
+let workingState: Record<string, Partial<BudgetPeriod>> = {};
+
+function getOrCreateWorking(month: string, periods: Record<string, BudgetPeriod>): Partial<BudgetPeriod> & { month: string } {
+  const existing = periods[month];
+  const working = workingState[month];
+  return {
+    month,
+    income: working?.income ?? existing?.income ?? null,
+    allocations: working?.allocations ?? existing?.allocations ?? [],
+    hiddenCategories: working?.hiddenCategories ?? existing?.hiddenCategories ?? [],
+    createdAt: existing?.createdAt ?? new Date().toISOString(),
+    updatedAt: existing?.updatedAt ?? new Date().toISOString(),
+  };
 }
 
 export const useBudgetStore = create<BudgetStore>()(
   persist(
     (set, get) => ({
-      budgets: [],
-      currentBudget: null,
-
-      createBudget: (budget) =>
-        set((state) => ({
-          budgets: [...state.budgets, budget],
-          currentBudget: budget,
-        })),
-
-      updateBudgetAllocation: (categoryId, amount) =>
-        set((state) => {
-          if (!state.currentBudget) return state;
-
-          const updatedAllocations = state.currentBudget.allocations.map((allocation) =>
-            allocation.categoryId === categoryId
-              ? { ...allocation, budgetedAmount: amount }
-              : allocation
-          );
-
-          const updatedBudget = {
-            ...state.currentBudget,
-            allocations: updatedAllocations,
-          };
-
-          return {
-            currentBudget: updatedBudget,
-            budgets: state.budgets.map((b) =>
-              b.id === updatedBudget.id ? updatedBudget : b
-            ),
-          };
-        }),
-
-      setCurrentBudget: (budgetId) =>
-        set((state) => ({
-          currentBudget: state.budgets.find((b) => b.id === budgetId) || null,
-        })),
-
-      getCurrentBudget: () => get().currentBudget,
-
-      getBudgetProgress: (categoryId, actualSpent) => {
-        const { currentBudget } = get();
-        if (!currentBudget) {
-          return {
-            budgeted: 0,
-            spent: actualSpent,
-            remaining: 0,
-            percentUsed: 0,
-            status: 'on-track',
-          };
-        }
-
-        const allocation = currentBudget.allocations.find(
-          (a) => a.categoryId === categoryId
-        );
-
-        if (!allocation) {
-          return {
-            budgeted: 0,
-            spent: actualSpent,
-            remaining: 0,
-            percentUsed: 0,
-            status: 'on-track',
-          };
-        }
-
-        const budgeted = allocation.budgetedAmount;
-        const remaining = budgeted - actualSpent;
-        const percentUsed = budgeted > 0 ? (actualSpent / budgeted) * 100 : 0;
-
-        let status: 'on-track' | 'warning' | 'over-budget';
-        if (percentUsed <= 75) {
-          status = 'on-track';
-        } else if (percentUsed <= 100) {
-          status = 'warning';
-        } else {
-          status = 'over-budget';
-        }
-
-        return {
-          budgeted,
-          spent: actualSpent,
-          remaining,
-          percentUsed,
-          status,
-        };
+      periods: {},
+      notifications: {
+        dismissedNoBudget: null,
+        dismissedEOM: null,
       },
 
-      autoDistributeBudget: (totalIncome, projectedSpending) =>
+      getPeriod: (month) => get().periods[month] ?? null,
+
+      setIncome: (month, amount) => {
+        const working = getOrCreateWorking(month, get().periods);
+        working.income = amount;
+        workingState[month] = working;
+      },
+
+      setAllocation: (month, categoryId, amount) => {
+        const working = getOrCreateWorking(month, get().periods);
+        const allocations = [...(working.allocations ?? [])];
+        const idx = allocations.findIndex(a => a.categoryId === categoryId);
+        if (idx >= 0) {
+          allocations[idx] = { categoryId, amount };
+        } else {
+          allocations.push({ categoryId, amount });
+        }
+        working.allocations = allocations;
+        workingState[month] = working;
+      },
+
+      removeAllocation: (month, categoryId) => {
+        const working = getOrCreateWorking(month, get().periods);
+        working.allocations = (working.allocations ?? []).filter(a => a.categoryId !== categoryId);
+        workingState[month] = working;
+      },
+
+      savePeriod: (month) => {
+        const working = getOrCreateWorking(month, get().periods);
+        const period: BudgetPeriod = {
+          month,
+          income: working.income ?? null,
+          allocations: working.allocations ?? [],
+          hiddenCategories: working.hiddenCategories ?? [],
+          createdAt: working.createdAt ?? new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        };
+        set((state) => ({
+          periods: { ...state.periods, [month]: period },
+        }));
+        delete workingState[month];
+      },
+
+      deletePeriod: (month) => {
         set((state) => {
-          if (!state.currentBudget) return state;
+          const periods = { ...state.periods };
+          delete periods[month];
+          return { periods };
+        });
+        delete workingState[month];
+      },
 
-          const totalProjected = Object.values(projectedSpending).reduce(
-            (sum, val) => sum + val,
-            0
-          );
+      addCategory: (month, categoryId) => {
+        const working = getOrCreateWorking(month, get().periods);
+        working.hiddenCategories = (working.hiddenCategories ?? []).filter(id => id !== categoryId);
+        workingState[month] = working;
+      },
 
-          const updatedAllocations = state.currentBudget.allocations.map(
-            (allocation) => {
-              const projected = projectedSpending[allocation.categoryId] || 0;
-              const proportion = totalProjected > 0 ? projected / totalProjected : 0;
-              const budgetedAmount = Math.round(totalIncome * proportion);
+      hideCategory: (month, categoryId) => {
+        const working = getOrCreateWorking(month, get().periods);
+        const hidden = working.hiddenCategories ?? [];
+        if (!hidden.includes(categoryId)) {
+          working.hiddenCategories = [...hidden, categoryId];
+        }
+        workingState[month] = working;
+      },
 
-              return {
-                ...allocation,
-                budgetedAmount,
-              };
-            }
-          );
+      carryForward: (fromMonth, toMonth) => {
+        const source = get().periods[fromMonth];
+        if (!source) return;
 
-          const updatedBudget = {
-            ...state.currentBudget,
-            totalIncome,
-            allocations: updatedAllocations,
-          };
+        const target: BudgetPeriod = {
+          month: toMonth,
+          income: source.income,
+          allocations: source.allocations.map(a => ({ ...a })),
+          hiddenCategories: [...source.hiddenCategories],
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        };
 
-          return {
-            currentBudget: updatedBudget,
-            budgets: state.budgets.map((b) =>
-              b.id === updatedBudget.id ? updatedBudget : b
-            ),
-          };
-        }),
+        set((state) => ({
+          periods: { ...state.periods, [toMonth]: target },
+        }));
+        delete workingState[toMonth];
+      },
+
+      autoDistribute: (month, projectedSpending) => {
+        const working = getOrCreateWorking(month, get().periods);
+        const income = working.income ?? 0;
+        const totalProjected = Object.values(projectedSpending).reduce((s, v) => s + v, 0);
+
+        if (totalProjected === 0 || income === 0) return;
+
+        const allocations: BudgetAllocation[] = Object.entries(projectedSpending).map(
+          ([categoryId, projected]) => ({
+            categoryId,
+            amount: Math.round(income * (projected / totalProjected)),
+          })
+        );
+
+        working.allocations = allocations;
+        workingState[month] = working;
+      },
+
+      dismissNotification: (type, month) => {
+        set((state) => ({
+          notifications: {
+            ...state.notifications,
+            ...(type === 'noBudget'
+              ? { dismissedNoBudget: month }
+              : { dismissedEOM: month }),
+          },
+        }));
+      },
+
+      getNotification: () => {
+        const { periods, notifications } = get();
+        const today = new Date();
+        const currentMonth = format(today, 'yyyy-MM');
+        const nextMonth = format(new Date(today.getFullYear(), today.getMonth() + 1, 1), 'yyyy-MM');
+
+        return getApplicableNotification({
+          today,
+          currentMonth,
+          nextMonth,
+          hasCurrentMonthBudget: currentMonth in periods,
+          hasNextMonthBudget: nextMonth in periods,
+          dismissedNoBudget: notifications.dismissedNoBudget,
+          dismissedEOM: notifications.dismissedEOM,
+        });
+      },
+
+      computeProgress: (month, transactions) => {
+        const period = get().periods[month];
+        const allocatedIds = new Set((period?.allocations ?? []).map(a => a.categoryId));
+
+        const spending: Record<string, number> = {};
+        for (const t of transactions) {
+          if (!t.isExpense) continue;
+          const txnMonth = format(t.date, 'yyyy-MM');
+          if (txnMonth !== month) continue;
+          spending[t.category.id] = (spending[t.category.id] || 0) + Math.abs(t.amount);
+        }
+
+        const allCategoryIds = new Set([...allocatedIds, ...Object.keys(spending)]);
+        const progress: BudgetProgress[] = [];
+
+        for (const categoryId of allCategoryIds) {
+          const alloc = period?.allocations?.find(a => a.categoryId === categoryId);
+          const budgeted = alloc?.amount ?? 0;
+          const spent = spending[categoryId] ?? 0;
+          const remaining = budgeted - spent;
+          const percentUsed = budgeted > 0 ? Math.round((spent / budgeted) * 100) : 0;
+
+          let status: BudgetProgress['status'];
+          if (budgeted === 0 && spent > 0) {
+            status = 'not-set';
+          } else if (percentUsed >= 100) {
+            status = 'over-budget';
+          } else if (percentUsed >= 80) {
+            status = 'warning';
+          } else {
+            status = 'on-track';
+          }
+
+          progress.push({ categoryId, budgeted, spent, remaining, percentUsed, status });
+        }
+
+        return progress;
+      },
     }),
     {
       name: 'budget-storage',

@@ -205,4 +205,197 @@ describe('useBudgetStore (redesigned)', () => {
       expect(diningAlloc!.amount).toBe(10000);
     });
   });
+
+  describe('additional coverage', () => {
+    it('autoDistribute with zero income does nothing', () => {
+      const store = useBudgetStore.getState();
+      store.setIncome('2026-04', 0);
+      store.setAllocation('2026-04', 'groceries', 5000);
+      store.savePeriod('2026-04');
+
+      store.autoDistribute('2026-04', { groceries: 10000, dining: 5000 });
+      store.savePeriod('2026-04');
+
+      const period = useBudgetStore.getState().getPeriod('2026-04')!;
+      // Original allocation unchanged — autoDistribute returned early
+      expect(period.allocations).toHaveLength(1);
+      expect(period.allocations[0].categoryId).toBe('groceries');
+      expect(period.allocations[0].amount).toBe(5000);
+    });
+
+    it('autoDistribute with zero total projected does nothing', () => {
+      const store = useBudgetStore.getState();
+      store.setIncome('2026-04', 50000);
+      store.setAllocation('2026-04', 'groceries', 5000);
+      store.savePeriod('2026-04');
+
+      store.autoDistribute('2026-04', {});
+      store.savePeriod('2026-04');
+
+      const period = useBudgetStore.getState().getPeriod('2026-04')!;
+      expect(period.allocations).toHaveLength(1);
+      expect(period.allocations[0].amount).toBe(5000);
+    });
+
+    it('autoDistribute rounds allocations to integers', () => {
+      const store = useBudgetStore.getState();
+      store.setIncome('2026-04', 10000);
+      store.savePeriod('2026-04');
+
+      store.autoDistribute('2026-04', { groceries: 3333, dining: 6667 });
+      store.savePeriod('2026-04');
+
+      const period = useBudgetStore.getState().getPeriod('2026-04')!;
+      const groceriesAlloc = period.allocations.find(a => a.categoryId === 'groceries')!;
+      const diningAlloc = period.allocations.find(a => a.categoryId === 'dining')!;
+
+      // groceries: 10000 * (3333/10000) = 3333
+      // dining: 10000 * (6667/10000) = 6667
+      expect(groceriesAlloc.amount).toBe(Math.round(10000 * (3333 / 10000)));
+      expect(diningAlloc.amount).toBe(Math.round(10000 * (6667 / 10000)));
+      expect(Number.isInteger(groceriesAlloc.amount)).toBe(true);
+      expect(Number.isInteger(diningAlloc.amount)).toBe(true);
+    });
+
+    it('computeProgress with mixed budgeted and unbudgeted', () => {
+      const store = useBudgetStore.getState();
+      store.setAllocation('2026-04', 'groceries', 10000);
+      store.savePeriod('2026-04');
+
+      const txns = [
+        { category: { id: 'groceries' }, amount: 5000, isExpense: true, date: new Date('2026-04-10') },
+        { category: { id: 'dining' }, amount: 3000, isExpense: true, date: new Date('2026-04-10') },
+      ] as any[];
+
+      const progress = store.computeProgress('2026-04', txns);
+      const groceries = progress.find(p => p.categoryId === 'groceries')!;
+      const dining = progress.find(p => p.categoryId === 'dining')!;
+
+      expect(groceries.status).toBe('on-track');
+      expect(dining.status).toBe('not-set');
+    });
+
+    it('computeProgress with zero budget and zero spending returns empty array', () => {
+      const store = useBudgetStore.getState();
+      store.savePeriod('2026-04');
+
+      const progress = store.computeProgress('2026-04', []);
+      expect(progress).toEqual([]);
+    });
+
+    it('computeProgress only counts expense transactions', () => {
+      const store = useBudgetStore.getState();
+      store.setAllocation('2026-04', 'groceries', 10000);
+      store.savePeriod('2026-04');
+
+      const txns = [
+        { category: { id: 'groceries' }, amount: 4000, isExpense: false, date: new Date('2026-04-10') },
+        { category: { id: 'groceries' }, amount: 3000, isExpense: true, date: new Date('2026-04-10') },
+      ] as any[];
+
+      const progress = store.computeProgress('2026-04', txns);
+      const groceries = progress.find(p => p.categoryId === 'groceries')!;
+
+      expect(groceries.spent).toBe(3000);
+    });
+
+    it('computeProgress only counts transactions for the target month', () => {
+      const store = useBudgetStore.getState();
+      store.setAllocation('2026-04', 'groceries', 10000);
+      store.savePeriod('2026-04');
+
+      const txns = [
+        { category: { id: 'groceries' }, amount: 5000, isExpense: true, date: new Date('2026-03-15') },
+        { category: { id: 'groceries' }, amount: 2000, isExpense: true, date: new Date('2026-04-10') },
+      ] as any[];
+
+      const progress = store.computeProgress('2026-04', txns);
+      const groceries = progress.find(p => p.categoryId === 'groceries')!;
+
+      expect(groceries.spent).toBe(2000);
+    });
+
+    it('setIncome creates working state without persisting', () => {
+      const store = useBudgetStore.getState();
+      store.setIncome('2026-06', 50000);
+
+      // Not saved yet — getPeriod reads from periods, not working state
+      expect(useBudgetStore.getState().getPeriod('2026-06')).toBeNull();
+    });
+
+    it('removeAllocation on non-existent allocation is a no-op', () => {
+      expect(() => {
+        useBudgetStore.getState().removeAllocation('2026-07', 'nonexistent');
+      }).not.toThrow();
+    });
+
+    it('carryForward with non-existent source month', () => {
+      const store = useBudgetStore.getState();
+      store.carryForward('2026-01', '2026-02');
+
+      expect(useBudgetStore.getState().getPeriod('2026-02')).toBeNull();
+    });
+
+    it('deletePeriod clears working state', () => {
+      const store = useBudgetStore.getState();
+      store.setIncome('2026-04', 50000);
+      store.setAllocation('2026-04', 'groceries', 10000);
+      store.savePeriod('2026-04');
+
+      store.deletePeriod('2026-04');
+
+      expect(useBudgetStore.getState().getPeriod('2026-04')).toBeNull();
+    });
+
+    it('addCategory removes from hidden without duplicating', () => {
+      const store = useBudgetStore.getState();
+      store.savePeriod('2026-04');
+      store.hideCategory('2026-04', 'travel');
+      store.hideCategory('2026-04', 'dining');
+      store.savePeriod('2026-04');
+
+      let period = useBudgetStore.getState().getPeriod('2026-04')!;
+      expect(period.hiddenCategories).toEqual(expect.arrayContaining(['travel', 'dining']));
+
+      store.addCategory('2026-04', 'travel');
+      store.savePeriod('2026-04');
+
+      period = useBudgetStore.getState().getPeriod('2026-04')!;
+      expect(period.hiddenCategories).not.toContain('travel');
+      expect(period.hiddenCategories).toContain('dining');
+      expect(period.hiddenCategories).toHaveLength(1);
+    });
+
+    it('hideCategory does not duplicate', () => {
+      const store = useBudgetStore.getState();
+      store.savePeriod('2026-04');
+      store.hideCategory('2026-04', 'travel');
+      store.savePeriod('2026-04');
+
+      let period = useBudgetStore.getState().getPeriod('2026-04')!;
+      expect(period.hiddenCategories).toHaveLength(1);
+
+      store.hideCategory('2026-04', 'travel');
+      store.savePeriod('2026-04');
+
+      period = useBudgetStore.getState().getPeriod('2026-04')!;
+      expect(period.hiddenCategories).toHaveLength(1);
+      expect(period.hiddenCategories).toContain('travel');
+    });
+
+    it('getNotification returns null when budget exists for current month', () => {
+      const store = useBudgetStore.getState();
+      const currentMonth = new Date().toISOString().slice(0, 7); // YYYY-MM
+      store.setIncome(currentMonth, 50000);
+      store.savePeriod(currentMonth);
+
+      const notification = useBudgetStore.getState().getNotification();
+      // With a budget for the current month, noBudget should not fire.
+      // eom notification could still fire if day >= 28 and no next-month budget,
+      // so check that it's not a noBudget for the current month.
+      if (notification) {
+        expect(notification).not.toEqual({ type: 'noBudget', month: currentMonth });
+      }
+    });
+  });
 });

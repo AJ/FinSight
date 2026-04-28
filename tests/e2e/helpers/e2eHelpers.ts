@@ -31,6 +31,47 @@ export async function setupTestContext(context: BrowserContext): Promise<void> {
 }
 
 /**
+ * Freeze the browser clock for deterministic date-sensitive UI tests.
+ * Call this before page.goto().
+ */
+export async function freezeBrowserDate(
+  context: BrowserContext,
+  isoDate: string
+): Promise<void> {
+  await context.addInitScript((fixedIso) => {
+    const fixedTime = new Date(fixedIso).getTime();
+    const RealDate = Date;
+
+    class MockDate extends RealDate {
+      constructor(...args: unknown[]) {
+        if (args.length === 0) {
+          super(fixedTime);
+          return;
+        }
+        super(...(args as ConstructorParameters<typeof Date>));
+      }
+
+      static now() {
+        return fixedTime;
+      }
+
+      static parse(dateString: string) {
+        return RealDate.parse(dateString);
+      }
+
+      static UTC(...args: Parameters<DateConstructor['UTC']>) {
+        return RealDate.UTC(...args);
+      }
+    }
+
+    Object.setPrototypeOf(MockDate, RealDate);
+    MockDate.prototype = RealDate.prototype;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (window as any).Date = MockDate;
+  }, isoDate);
+}
+
+/**
  * Closes any open dialogs/modals (Settings, Onboarding, etc.)
  */
 export async function closeAllDialogs(page: Page): Promise<void> {
@@ -48,17 +89,43 @@ export async function waitForUploadCompletion(page: Page, timeout = 15000): Prom
 }
 
 /**
- * Mocks the server-side categorization API to prevent Ollama connection errors.
+ * Mocks the browser-direct LM Studio LLM calls so categorization
+ * completes without a running LLM. Intercepts the OpenAI-compatible
+ * endpoints that the browser client uses.
  */
 export async function mockCategorizationAPI(context: BrowserContext): Promise<void> {
-  await context.route('**/api/categorize', async (route) => {
+  // Mock the models/status check (GET /v1/models)
+  await context.route('**/v1/models', async (route) => {
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
-      body: JSON.stringify({ 
-        success: true, 
-        message: 'Categorization completed', 
-        stats: { total: 10, categorized: 10 } 
+      body: JSON.stringify({ data: [{ id: 'test-model' }] }),
+    });
+  });
+
+  // Mock the generate endpoint (POST /v1/chat/completions)
+  // Returns an empty categorization array — the categorizer falls back
+  // to keyword matching for all transactions.
+  await context.route('**/v1/chat/completions', async (route) => {
+    const request = route.request();
+    const body = request.postDataJSON();
+
+    if (body?.stream) {
+      // Streaming chat request — return a minimal SSE response
+      await route.fulfill({
+        status: 200,
+        contentType: 'text/event-stream',
+        body: 'data: {"choices":[{"delta":{"content":"[]"}}]}\n\ndata: [DONE]\n\n',
+      });
+      return;
+    }
+
+    // Non-streaming generate (categorization) — return empty array
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        choices: [{ message: { content: '[]' } }],
       }),
     });
   });

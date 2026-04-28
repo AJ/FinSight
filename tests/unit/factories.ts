@@ -299,3 +299,32 @@ export function makeAnomalyDetail(type: string, txnId: string, overrides?: Recor
     ...overrides,
   };
 }
+
+// ─── Budget Factories ──────────────────────────────────────────────────────
+
+export function makeBudgetPeriod(overrides?: Partial<import('@/types').BudgetPeriod>): import('@/types').BudgetPeriod {
+  return {
+    month: '2026-04',
+    income: 50000,
+    allocations: [
+      { categoryId: 'groceries', amount: 10000 },
+      { categoryId: 'dining', amount: 5000 },
+    ],
+    hiddenCategories: [],
+    createdAt: new Date('2026-04-01').toISOString(),
+    updatedAt: new Date('2026-04-01').toISOString(),
+    ...overrides,
+  };
+}
+
+export function makeBudgetProgress(overrides?: Partial<import('@/types').BudgetProgress>): import('@/types').BudgetProgress {
+  return {
+    categoryId: 'groceries',
+    budgeted: 10000,
+    spent: 5000,
+    remaining: 5000,
+    percentUsed: 50,
+    status: 'on-track',
+    ...overrides,
+  };
+}
