@@ -349,8 +349,12 @@ export function FileProcessor({ onSuccess, onProcessingChange }: FileProcessorPr
           setPasswordAttempts(0);
           setPasswordError(null);
         } else {
-          // Non-password errors should still be shown
-          throw err;
+          const errorMessage = err instanceof Error ? err.message : "Failed to process file";
+          setError(errorMessage);
+          setIsProcessing(false);
+          setProgress(null);
+          setPendingTypeFile(null);
+          setPendingTypePassword(undefined);
         }
       }
     }

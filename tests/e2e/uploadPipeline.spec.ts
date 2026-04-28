@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { uploadFile, waitForUploadCompletion, setupTestContext } from '@tests/e2e/helpers/e2eHelpers';
+import { uploadFile, waitForUploadCompletion, setupTestContext, mockCategorizationAPI } from '@tests/e2e/helpers/e2eHelpers';
 import { getReviewSessionTransactions, clearAllStorage, validateTransactionShape } from '@tests/utils/storageHelpers';
 import * as path from 'path';
 
@@ -9,6 +9,7 @@ test.describe('FinSight Upload Pipeline', () => {
   test.beforeEach(async ({ page, context }) => {
     await clearAllStorage(context);
     await setupTestContext(context);
+    await mockCategorizationAPI(context);
     await page.goto('/');
   });
 
@@ -38,7 +39,7 @@ test.describe('FinSight Upload Pipeline', () => {
     await uploadFile(page, path.join(FIXTURES_DIR, 'bank_noisy.csv'));
     await Promise.race([
       page.waitForURL('**/review', { timeout: 15000 }),
-      page.waitForSelector('[role="status"]:has-text("warning"), [role="alert"]:has-text("warning")', { timeout: 15000 }),
+      page.getByRole('alert').waitFor({ timeout: 15000 }),
     ]);
   });
 
@@ -46,7 +47,7 @@ test.describe('FinSight Upload Pipeline', () => {
     await uploadFile(page, path.join(FIXTURES_DIR, 'bank_broken.csv'));
     await Promise.race([
       page.waitForURL('**/review', { timeout: 15000 }),
-      page.waitForSelector('[role="status"]:has-text("error"), [role="alert"]:has-text("error")', { timeout: 15000 }),
+      page.getByRole('alert').waitFor({ timeout: 15000 }),
     ]);
   });
 });

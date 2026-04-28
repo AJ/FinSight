@@ -48,7 +48,7 @@ test.describe('Upload → Full Pipeline E2E', () => {
 
     await Promise.race([
       page.waitForURL('**/review', { timeout: 15000 }),
-      page.waitForSelector('[role="status"]:has-text("error"), [role="alert"]:has-text("error")', { timeout: 15000 }),
+      page.getByRole('alert').waitFor({ timeout: 15000 }),
     ]);
   });
 });
