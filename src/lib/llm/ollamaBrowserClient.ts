@@ -6,6 +6,7 @@
  * the server. This client makes requests directly from the browser,
  * where "localhost" correctly refers to the user's machine.
  */
+import { ModelInfo } from './types';
 import { debugWarn } from '@/lib/utils/debug';
 
 const GENERATE_TIMEOUT_MS = 3 * 60 * 1000;
@@ -43,9 +44,54 @@ function createAbortSignal(
 
 /* ── Connection check ────────────────────────────────────── */
 
+function parseNumCtx(parameters: string | undefined): number | undefined {
+  if (!parameters) return undefined;
+  const match = parameters.match(/num_ctx\s+(\d+)/);
+  return match ? Number.parseInt(match[1], 10) : undefined;
+}
+
+function parseArchContextLength(modelInfo: Record<string, unknown> | undefined): number | undefined {
+  if (!modelInfo) return undefined;
+  for (const [key, value] of Object.entries(modelInfo)) {
+    if (key.endsWith('.context_length') && typeof value === 'number') return value;
+  }
+  return undefined;
+}
+
+async function fetchModelContextLength(baseUrl: string, modelName: string): Promise<number | undefined> {
+  try {
+    const res = await fetch(`${baseUrl}/api/show`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: modelName }),
+      signal: AbortSignal.timeout(5000),
+    });
+    if (!res.ok) return undefined;
+    const data = await res.json();
+    return parseNumCtx(data.parameters) ?? parseArchContextLength(data.model_info);
+  } catch {
+    return undefined;
+  }
+}
+
+async function enrichModelsWithContext(baseUrl: string, names: string[]): Promise<ModelInfo[]> {
+  const batch = names.slice(0, 5);
+  const results: ModelInfo[] = await Promise.all(
+    batch.map(async (name) => {
+      const contextLength = await fetchModelContextLength(baseUrl, name);
+      return { id: name, contextLength };
+    }),
+  );
+  // Add remaining models without context length (skip /api/show to avoid latency)
+  for (const name of names.slice(5)) {
+    results.push({ id: name });
+  }
+  return results;
+}
+
 export async function checkOllamaStatus(
   baseUrl: string,
-): Promise<{ connected: boolean; models: string[]; selectedModel: string | null }> {
+): Promise<{ connected: boolean; models: ModelInfo[]; selectedModel: string | null }> {
   try {
     const res = await fetch(baseUrl, {
       signal: AbortSignal.timeout(3000),
@@ -57,14 +103,14 @@ export async function checkOllamaStatus(
     return {
       connected: true,
       models,
-      selectedModel: models[0] || null,
+      selectedModel: models[0]?.id ?? null,
     };
   } catch {
     return { connected: false, models: [], selectedModel: null };
   }
 }
 
-export async function listModels(baseUrl: string): Promise<string[]> {
+export async function listModels(baseUrl: string): Promise<ModelInfo[]> {
   try {
     const res = await fetch(`${baseUrl}/api/tags`, {
       signal: AbortSignal.timeout(5000),
@@ -72,7 +118,8 @@ export async function listModels(baseUrl: string): Promise<string[]> {
     });
     if (!res.ok) return [];
     const data = await res.json();
-    return (data.models || []).map((m: { name: string }) => m.name);
+    const names: string[] = (data.models || []).map((m: { name: string }) => m.name);
+    return enrichModelsWithContext(baseUrl, names);
   } catch (error) {
     debugWarn('OllamaBrowser', 'listModels failed:', error);
     return [];

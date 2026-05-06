@@ -79,11 +79,11 @@ export async function POST(request: NextRequest) {
       
       // Filter out coding/specialized models, prefer general-purpose
       const suitableModels = models.filter(m => {
-        const name = m.toLowerCase();
+        const name = m.id.toLowerCase();
         return !name.includes('code') && !name.includes('coder');
       });
-      
-      selectedModel = suitableModels[0] || models[0];
+
+      selectedModel = suitableModels[0]?.id || models[0]?.id;
       
       if (selectedModel) {
         debugWarn(

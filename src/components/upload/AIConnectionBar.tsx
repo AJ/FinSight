@@ -46,9 +46,11 @@ export function AIConnectionBar({ onStatusChange, disabled = false }: AIConnecti
   const setLLMProvider = useSettingsStore((s) => s.setLLMProvider);
   const setLLMServerUrl = useSettingsStore((s) => s.setLLMServerUrl);
   const setLLMModel = useSettingsStore((s) => s.setLLMModel);
+  const setModelContextLength = useSettingsStore((s) => s.setModelContextLength);
 
   const [urlInput, setUrlInput] = useState(llmServerUrl);
   const [models, setModels] = useState<string[]>([]);
+  const [modelInfos, setModelInfos] = useState<import('@/lib/llm/types').ModelInfo[]>([]);
   const [isConnecting, setIsConnecting] = useState(false);
   const [status, setStatus] = useState<'idle' | 'connected' | 'failed'>('idle');
   const [expanded, setExpanded] = useState(false);
@@ -87,13 +89,19 @@ export function AIConnectionBar({ onStatusChange, disabled = false }: AIConnecti
         const res = await checkLLMConnection(true);  // Force fresh check
         if (res.connected) {
           setStatus('connected');
-          setModels(res.models);
+          const modelIds = res.models.map(m => m.id);
+          setModels(modelIds);
+          setModelInfos(res.models);
           setLLMServerUrl(url);
 
-          if (res.models.length > 0 && (!llmModel || !res.models.includes(llmModel))) {
-            setLLMModel(res.models[0]);
+          if (modelIds.length > 0 && (!llmModel || !modelIds.includes(llmModel))) {
+            setLLMModel(modelIds[0]);
+            const selected = res.models.find(m => m.id === modelIds[0]);
+            if (selected?.contextLength) {
+              setModelContextLength(selected.contextLength);
+            }
           }
-          onStatusChange?.(true, llmModel || res.models[0] || null);
+          onStatusChange?.(true, llmModel || modelIds[0] || null);
         } else {
           setStatus('failed');
           setModels([]);
@@ -149,6 +157,8 @@ export function AIConnectionBar({ onStatusChange, disabled = false }: AIConnecti
             value={llmModel || ''}
             onValueChange={(v) => {
               setLLMModel(v);
+              const match = modelInfos.find(m => m.id === v);
+              setModelContextLength(match?.contextLength ?? null);
               onStatusChange?.(true, v);
             }}
             disabled={disabled}
@@ -268,6 +278,8 @@ export function AIConnectionBar({ onStatusChange, disabled = false }: AIConnecti
             value={llmModel || ''}
             onValueChange={(v) => {
               setLLMModel(v);
+              const match = modelInfos.find(m => m.id === v);
+              setModelContextLength(match?.contextLength ?? null);
               onStatusChange?.(true, v);
             }}
           >

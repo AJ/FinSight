@@ -8,14 +8,14 @@ import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { Loader2, CheckCircle2, XCircle, Plug, Cpu } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { LLMProvider, DEFAULT_URLS } from '@/lib/llm/types';
+import { LLMProvider, DEFAULT_URLS, ModelInfo } from '@/lib/llm/types';
 import { useSettingsStore } from '@/lib/store/settingsStore';
 import { checkLLMConnection } from '@/lib/store/llmConnectionStore';
 
 type ConnectionStatus = 'disconnected' | 'connecting' | 'connected' | 'failed';
 
 interface OnboardingStep1Props {
-  onComplete: (provider: LLMProvider, serverUrl: string, models: string[]) => void;
+  onComplete: (provider: LLMProvider, serverUrl: string, models: string[], modelInfos: ModelInfo[]) => void;
   initialProvider: LLMProvider | null;
   initialUrl: string;
   initialConnectionStatus: ConnectionStatus;
@@ -41,6 +41,7 @@ export function OnboardingStep1({
   const [serverUrl, setServerUrl] = useState(initialUrl);
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>(initialConnectionStatus);
   const [models, setModels] = useState<string[]>(initialModels);
+  const [modelInfos, setModelInfos] = useState<ModelInfo[]>([]);
   const [error, setError] = useState<string | null>(initialError);
 
   const setLLMProvider = useSettingsStore((state) => state.setLLMProvider);
@@ -61,10 +62,17 @@ export function OnboardingStep1({
 
       if (status.connected) {
         setConnectionStatus('connected');
-        setModels(status.models);
-        onModelsChange(status.models);
+        const modelIds = status.models.map(m => m.id);
+        setModels(modelIds);
+        setModelInfos(status.models);
+        onModelsChange(modelIds);
         onErrorChange(null);
         setError(null); // Clear local error on success
+
+        // Store context length of first model if available
+        if (status.models[0]?.contextLength) {
+          useSettingsStore.getState().setModelContextLength(status.models[0].contextLength);
+        }
       } else {
         setConnectionStatus('failed');
         const providerName = selectedProvider === 'ollama' ? 'Ollama' : 'LM Studio';
@@ -103,7 +111,7 @@ export function OnboardingStep1({
 
   const handleContinue = useCallback(() => {
     if (connectionStatus === 'connected' && selectedProvider) {
-      onComplete(selectedProvider, serverUrl, models);
+      onComplete(selectedProvider, serverUrl, models, modelInfos);
     }
   }, [connectionStatus, models, onComplete, selectedProvider, serverUrl]);
 

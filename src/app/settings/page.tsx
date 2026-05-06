@@ -68,10 +68,12 @@ export default function SettingsPage() {
   const setLLMProvider = useSettingsStore((state) => state.setLLMProvider);
   const setLLMServerUrl = useSettingsStore((state) => state.setLLMServerUrl);
   const setLLMModel = useSettingsStore((state) => state.setLLMModel);
+  const setModelContextLength = useSettingsStore((state) => state.setModelContextLength);
 
   // Local state for the URL input (so we can edit before saving)
   const [urlInput, setUrlInput] = useState(llmServerUrl);
   const [models, setModels] = useState<string[]>([]);
+  const [modelInfos, setModelInfos] = useState<import('@/lib/llm/types').ModelInfo[]>([]);
   const [isConnecting, setIsConnecting] = useState(false);
   const [connectionStatus, setConnectionStatus] = useState<
     'idle' | 'connected' | 'failed'
@@ -111,15 +113,22 @@ export default function SettingsPage() {
 
         if (status.connected) {
           setConnectionStatus('connected');
-          setModels(status.models);
+          const modelIds = status.models.map(m => m.id);
+          setModels(modelIds);
+          setModelInfos(status.models);
           setLLMServerUrl(url);  // Save the tested URL
 
           // If the currently saved model isn't in the new list, auto-select first
           if (
-            status.models.length > 0 &&
-            (!llmModel || !status.models.includes(llmModel))
+            modelIds.length > 0 &&
+            (!llmModel || !modelIds.includes(llmModel))
           ) {
-            setLLMModel(status.models[0]);
+            setLLMModel(modelIds[0]);
+            // Store context length if available
+            const selected = status.models.find(m => m.id === modelIds[0]);
+            if (selected?.contextLength) {
+              setModelContextLength(selected.contextLength);
+            }
           }
         } else {
           setConnectionStatus('failed');
@@ -293,7 +302,11 @@ export default function SettingsPage() {
               {models.length > 0 ? (
                 <Select
                   value={llmModel || ''}
-                  onValueChange={(v) => setLLMModel(v)}
+                  onValueChange={(v) => {
+                    setLLMModel(v);
+                    const match = modelInfos.find(m => m.id === v);
+                    setModelContextLength(match?.contextLength ?? null);
+                  }}
                 >
                   <SelectTrigger id="model-select">
                     <SelectValue placeholder="Choose a model…" />

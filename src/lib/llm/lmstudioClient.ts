@@ -4,7 +4,7 @@
  */
 
 import { SYSTEM_PROMPT } from './prompts';
-import { LLMCallOptions, DEFAULT_URLS } from './types';
+import { LLMCallOptions, DEFAULT_URLS, ModelInfo } from './types';
 import { debugLog, debugWarn } from '@/lib/utils/debug';
 
 const DEFAULT_URL = DEFAULT_URLS.lmstudio;
@@ -40,7 +40,7 @@ export async function checkLMStudioRunning(
 
 export async function listModels(
   baseUrl: string = DEFAULT_URL,
-): Promise<string[]> {
+): Promise<ModelInfo[]> {
   try {
     const res = await fetch(`${baseUrl}/v1/models`, {
       signal: AbortSignal.timeout(5000),
@@ -48,8 +48,10 @@ export async function listModels(
     });
     if (!res.ok) return [];
     const data = await res.json();
-    // OpenAI format: { data: [{ id: "model-name" }] }
-    return (data.data || []).map((m: { id: string }) => m.id);
+    return (data.data || []).map((m: { id: string; loaded_instances?: { config?: { context_length?: number } }[] }) => ({
+      id: m.id,
+      contextLength: m.loaded_instances?.[0]?.config?.context_length,
+    }));
   } catch (error) {
     debugWarn('LMStudioServer', 'listModels failed:', error);
     return [];

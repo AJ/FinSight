@@ -121,7 +121,7 @@ export async function POST(request: NextRequest) {
     let selectedModel = model as string | undefined;
     if (!selectedModel) {
       const models = await client.listModels(llmUrl);
-      selectedModel = models[0];
+      selectedModel = models[0]?.id;
       debugLog(`[Categorize] Auto-selected model: ${selectedModel}`);
     }
     if (!selectedModel) {

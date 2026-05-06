@@ -72,12 +72,8 @@ export async function callLLM(
       }
 
       const isRetryable =
-        (e instanceof Error && e.name === 'AbortError') ||
-        (e instanceof Error && (
-          e.message.includes('timed out') ||
-          e.message.includes('network') ||
-          e.message.includes('server error')
-        ));
+        (e instanceof Error && 'retryable' in e && (e as any).retryable === true) ||
+        (e instanceof Error && e.name === 'AbortError');
 
       if (!isRetryable) {
         throw e;

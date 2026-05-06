@@ -3,13 +3,11 @@ import { LLMProvider } from './types';
 
 export interface ChatOptimizationPlan {
   historyWindow: number;
-  contextTopK: number;
   contextMaxChars: number;
   requestOptions: Record<string, unknown>;
 }
 
-function estimateTokens(text: string): number {
-  // Fast heuristic: ~4 chars/token for English-centric prompts.
+export function estimateTokens(text: string): number {
   return Math.ceil(text.length / 4);
 }
 
@@ -19,72 +17,32 @@ function estimateHistoryTokens(messages: ChatMessage[], historyWindow: number): 
     .reduce((sum, msg) => sum + estimateTokens(msg.content), 0);
 }
 
-function isBroadQuery(query: string): boolean {
-  return /\b(summary|summarize|overview|overall|all spending|spending pattern|monthly trend)\b/i.test(query);
-}
-
-function isFollowUpQuery(query: string): boolean {
-  return /\b(this|that|those|it|them|same|above|previous|earlier)\b/i.test(query);
-}
-
-function chooseHistoryWindow(query: string): number {
-  if (isFollowUpQuery(query)) return 8;
-  if (isBroadQuery(query)) return 5;
-  return 6;
-}
-
-function chooseContextTopK(query: string): number {
-  if (isBroadQuery(query)) return 0; // summary-only route for broad queries
-  if (/\b(merchant|payee|transaction|amount|refund|charge)\b/i.test(query)) return 12;
-  return 8;
-}
-
-function chooseContextMaxChars(query: string): number {
-  if (isBroadQuery(query)) return 2600;
-  return 3400;
-}
-
-function buildOllamaOptions(estimatedInputTokens: number): Record<string, unknown> {
-  // Keep ctx tight for latency while allowing moderate follow-up history.
-  const numCtx = Math.max(4096, Math.min(8192, estimatedInputTokens * 2 + 1200));
-  return {
-    num_ctx: numCtx,
-    num_predict: 700,
-    temperature: 0.05,
-    top_p: 0.9,
-    keep_alive: '15m',
-  };
-}
-
-function buildLMStudioOptions(estimatedInputTokens: number): Record<string, unknown> {
-  const maxTokens = estimatedInputTokens > 2500 ? 500 : 700;
-  return {
-    max_tokens: maxTokens,
-    temperature: 0.05,
-    top_p: 0.9,
-  };
-}
+const RESPONSE_RESERVE = 800;
+const SYSTEM_PROMPT_RESERVE = 300;
+const HISTORY_WINDOW = 6;
 
 export function buildChatOptimizationPlan(
   provider: LLMProvider,
   question: string,
-  messages: ChatMessage[]
+  messages: ChatMessage[],
+  options?: { modelContextLength?: number }
 ): ChatOptimizationPlan {
-  const historyWindow = chooseHistoryWindow(question);
-  const contextTopK = chooseContextTopK(question);
-  const contextMaxChars = chooseContextMaxChars(question);
+  const contextLength = options?.modelContextLength ?? 4096;
 
-  const estimatedInputTokens =
-    estimateTokens(question) + estimateHistoryTokens(messages, historyWindow) + estimateTokens('context');
+  const questionTokens = estimateTokens(question);
+  const historyTokens = estimateHistoryTokens(messages, HISTORY_WINDOW);
+  const overhead = questionTokens + historyTokens + SYSTEM_PROMPT_RESERVE + RESPONSE_RESERVE;
 
-  const requestOptions =
+  const contextTokens = Math.max(0, contextLength - overhead);
+  const contextMaxChars = contextTokens * 4;
+
+  const requestOptions: Record<string, unknown> =
     provider === 'ollama'
-      ? buildOllamaOptions(estimatedInputTokens)
-      : buildLMStudioOptions(estimatedInputTokens);
+      ? { num_ctx: contextLength, num_predict: RESPONSE_RESERVE, temperature: 0.05, top_p: 0.9, keep_alive: '15m' }
+      : { max_tokens: RESPONSE_RESERVE, temperature: 0.05, top_p: 0.9 };
 
   return {
-    historyWindow,
-    contextTopK,
+    historyWindow: HISTORY_WINDOW,
     contextMaxChars,
     requestOptions,
   };

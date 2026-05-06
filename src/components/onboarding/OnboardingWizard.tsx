@@ -13,7 +13,7 @@ import { OnboardingStep2 } from './OnboardingStep2';
 import { OnboardingStep3 } from './OnboardingStep3';
 import { useOnboardingStore } from '@/lib/store/onboardingStore';
 import { useSettingsStore } from '@/lib/store/settingsStore';
-import { LLMProvider } from '@/lib/llm/types';
+import { LLMProvider, ModelInfo } from '@/lib/llm/types';
 import { Currency } from '@/types';
 import { cn } from '@/lib/utils';
 
@@ -26,6 +26,7 @@ interface OnboardingState {
   currency: Currency | null;
   connectionStatus: ConnectionStatus;
   models: string[];
+  modelInfos: ModelInfo[];
   error: string | null;
 }
 
@@ -60,27 +61,29 @@ export function OnboardingWizard({ open, onOpenChange }: OnboardingWizardProps) 
     currency: null,
     connectionStatus: 'disconnected',
     models: [],
+    modelInfos: [],
     error: null,
   });
 
-  const handleStep1Complete = useCallback((provider: LLMProvider, serverUrl: string, models: string[]) => {
+  const handleStep1Complete = useCallback((provider: LLMProvider, serverUrl: string, models: string[], modelInfos: ModelInfo[]) => {
     setState((prev) => ({
       ...prev,
       provider,
       serverUrl,
       models,
+      modelInfos,
       connectionStatus: 'connected',
     }));
     setCurrentStep(2);
   }, [setCurrentStep]);
 
   const handleStep2Complete = useCallback((model: string) => {
-    setState((prev) => ({
-      ...prev,
-      model,
-    }));
+    setState((prev) => ({ ...prev, model }));
+    // Look up context length for the selected model
+    const match = state.modelInfos.find(m => m.id === model);
+    useSettingsStore.getState().setModelContextLength(match?.contextLength ?? null);
     setCurrentStep(3);
-  }, [setCurrentStep]);
+  }, [setCurrentStep, state.modelInfos]);
 
   const handleStep3Complete = useCallback((currency: Currency) => {
     const settings = useSettingsStore.getState();

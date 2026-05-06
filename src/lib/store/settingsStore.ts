@@ -150,6 +150,7 @@ interface SettingsStore extends Settings {
   llmProvider: LLMProvider;
   llmServerUrl: string; // Active LLM server URL (auto-switches on provider change)
   llmModel: string | null;
+  llmModelContextLength: number | null;
 
   setCurrency: (currency: Currency) => void;
   setDateFormat: (format: string) => void;
@@ -158,6 +159,7 @@ interface SettingsStore extends Settings {
   setLLMProvider: (provider: LLMProvider) => void;
   setLLMServerUrl: (url: string) => void;
   setLLMModel: (model: string | null) => void;
+  setModelContextLength: (length: number | null) => void;
 }
 
 export const useSettingsStore = create<SettingsStore>()(
@@ -171,6 +173,7 @@ export const useSettingsStore = create<SettingsStore>()(
       llmProvider: "ollama",
       llmServerUrl: DEFAULT_URLS.ollama,
       llmModel: null,
+      llmModelContextLength: null,
 
       setCurrency: (currency) => set({ currency }),
       setDateFormat: (format) => set({ dateFormat: format }),
@@ -180,6 +183,7 @@ export const useSettingsStore = create<SettingsStore>()(
         llmProvider: provider,
         llmServerUrl: DEFAULT_URLS[provider], // Auto-switch URL to provider default
         llmModel: null, // Clear model selection when switching providers
+        llmModelContextLength: null,
       }),
       setLLMServerUrl: (url) => {
         const result = validateLlmServerUrl(url);
@@ -191,18 +195,23 @@ export const useSettingsStore = create<SettingsStore>()(
         }
       },
       setLLMModel: (model) => set({ llmModel: model }),
+      setModelContextLength: (length) => set({ llmModelContextLength: length }),
     }),
     {
       name: "settings-storage",
       migrate: (persisted) => {
-        // Migration from v0 (no llmProvider) to v1 (with llmProvider)
         const state = persisted as Record<string, unknown>;
+        // v0 → v1: added llmProvider
         if (!state.llmProvider) {
           state.llmProvider = "ollama";
         }
+        // v1 → v2: added llmModelContextLength
+        if (state.llmModelContextLength === undefined) {
+          state.llmModelContextLength = null;
+        }
         return state as unknown as SettingsStore;
       },
-      version: 1,
+      version: 2,
     },
   ),
 );

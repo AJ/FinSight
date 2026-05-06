@@ -12,9 +12,14 @@ export interface LLMRuntimeConfig {
   model: string;
 }
 
+export interface ModelInfo {
+  id: string;
+  contextLength?: number;
+}
+
 export interface LLMClient {
-  checkStatus(baseUrl: string): Promise<{ connected: boolean; models: string[]; selectedModel: string | null }>;
-  listModels(baseUrl: string): Promise<string[]>;
+  checkStatus(baseUrl: string): Promise<{ connected: boolean; models: ModelInfo[]; selectedModel: string | null }>;
+  listModels(baseUrl: string): Promise<ModelInfo[]>;
   generate(baseUrl: string, model: string, prompt: string, options?: Record<string, unknown>): Promise<string>;
   chatStream(baseUrl: string, model: string, messages: { role: string; content: string }[], options?: Record<string, unknown>): Promise<ReadableStream<Uint8Array>>;
 }
@@ -62,27 +67,3 @@ export type LLMCallOptions = {
    */
   runtime?: LLMRuntimeConfig;
 };
-
-/**
- * LLM Error with retry classification.
- * Use this to distinguish transient failures (retry) from permanent failures (don't retry).
- */
-export class OllamaError extends Error {
-  constructor(
-    message: string,
-    public retryable: boolean
-  ) {
-    super(message);
-    this.name = 'OllamaError';
-  }
-}
-
-export class LMStudioError extends Error {
-  constructor(
-    message: string,
-    public retryable: boolean
-  ) {
-    super(message);
-    this.name = 'LMStudioError';
-  }
-}

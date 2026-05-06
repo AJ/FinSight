@@ -7,6 +7,7 @@
  * the server. This client makes requests directly from the browser,
  * where "localhost" correctly refers to the user's machine.
  */
+import { ModelInfo } from './types';
 import { debugWarn } from '@/lib/utils/debug';
 
 const GENERATE_TIMEOUT_MS = 3 * 60 * 1000;
@@ -14,7 +15,7 @@ const CHAT_CONNECT_TIMEOUT_MS = 30 * 1000;
 
 /* ── Error handling helpers ───────────────────────────────── */
 
-interface LMStudioError {
+interface LMStudioErrorResponse {
   error?: {
     message?: string;
     type?: string;
@@ -27,7 +28,7 @@ interface LMStudioError {
 function parseLMStudioError(responseText: string, context: string): string {
   // Try to parse as JSON
   try {
-    const parsed: LMStudioError = JSON.parse(responseText);
+    const parsed: LMStudioErrorResponse = JSON.parse(responseText);
 
     // Handle structured error
     if (parsed.error) {
@@ -100,7 +101,7 @@ function createAbortSignal(
 
 export async function checkLMStudioStatus(
   baseUrl: string,
-): Promise<{ connected: boolean; models: string[]; selectedModel: string | null }> {
+): Promise<{ connected: boolean; models: ModelInfo[]; selectedModel: string | null }> {
   try {
     const res = await fetch(`${baseUrl}/v1/models`, {
       signal: AbortSignal.timeout(5000),
@@ -112,18 +113,21 @@ export async function checkLMStudioStatus(
     }
 
     const data = await res.json();
-    const models = (data.data || []).map((m: { id: string }) => m.id);
+    const models: ModelInfo[] = (data.data || []).map((m: { id: string; loaded_instances?: { config?: { context_length?: number } }[] }) => ({
+      id: m.id,
+      contextLength: m.loaded_instances?.[0]?.config?.context_length,
+    }));
     return {
       connected: true,
       models,
-      selectedModel: models[0] || null,
+      selectedModel: models[0]?.id ?? null,
     };
   } catch {
     return { connected: false, models: [], selectedModel: null };
   }
 }
 
-export async function listModels(baseUrl: string): Promise<string[]> {
+export async function listModels(baseUrl: string): Promise<ModelInfo[]> {
   try {
     const res = await fetch(`${baseUrl}/v1/models`, {
       signal: AbortSignal.timeout(5000),
@@ -131,8 +135,10 @@ export async function listModels(baseUrl: string): Promise<string[]> {
     });
     if (!res.ok) return [];
     const data = await res.json();
-    // OpenAI format: { data: [{ id: "model-name" }] }
-    return (data.data || []).map((m: { id: string }) => m.id);
+    return (data.data || []).map((m: { id: string; loaded_instances?: { config?: { context_length?: number } }[] }) => ({
+      id: m.id,
+      contextLength: m.loaded_instances?.[0]?.config?.context_length,
+    }));
   } catch (error) {
     debugWarn('LMStudioBrowser', 'listModels failed:', error);
     return [];

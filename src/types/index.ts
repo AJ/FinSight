@@ -75,7 +75,7 @@ export interface ChatMessage {
 // LLM types
 export interface LLMStatus {
   connected: boolean;
-  models: string[];
+  models: import('@/lib/llm/types').ModelInfo[];
   selectedModel: string | null;
 }
 

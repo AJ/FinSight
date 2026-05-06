@@ -1,8 +1,7 @@
 import { format } from 'date-fns';
 import { Currency, Transaction } from '@/types';
 
-const DEFAULT_TOP_K = 10;
-const DEFAULT_MAX_CONTEXT_CHARS = 3500;
+const DEFAULT_MAX_CONTEXT_CHARS = 6000;
 const DESCRIPTION_PREVIEW_LEN = 56;
 const COMMON_STOP_WORDS = new Set([
   'a', 'an', 'and', 'are', 'at', 'by', 'for', 'from', 'how', 'i', 'in', 'is',
@@ -17,7 +16,6 @@ type ScoredTransaction = {
 };
 
 export interface ChatContextOptions {
-  topK?: number;
   maxChars?: number;
 }
 
@@ -99,8 +97,8 @@ function scoreTransactions(transactions: Transaction[], question: string): Score
   });
 }
 
-function getRelevantTransactions(transactions: Transaction[], question: string, topK: number): Transaction[] {
-  if (transactions.length === 0 || topK <= 0) return [];
+function getRelevantTransactions(transactions: Transaction[], question: string): Transaction[] {
+  if (transactions.length === 0) return [];
 
   const scored = scoreTransactions(transactions, question);
   const hasQuerySignal = scored.some((item) => item.score > 0);
@@ -111,7 +109,7 @@ function getRelevantTransactions(transactions: Transaction[], question: string, 
     return Math.abs(b.txn.amount) - Math.abs(a.txn.amount);
   });
 
-  return sorted.slice(0, topK).map((item) => item.txn);
+  return sorted.map((item) => item.txn);
 }
 
 function buildSummary(transactions: Transaction[], currency: Currency): string {
@@ -187,11 +185,10 @@ export function buildChatContextForQuestion(
     return 'No transactions loaded.';
   }
 
-  const topK = options?.topK ?? DEFAULT_TOP_K;
   const maxChars = options?.maxChars ?? DEFAULT_MAX_CONTEXT_CHARS;
 
   const summary = buildSummary(transactions, currency);
-  const relevant = getRelevantTransactions(transactions, question, topK);
+  const relevant = getRelevantTransactions(transactions, question);
   const relevantLines = relevant.map((txn, index) => {
     const signedAmount = txn.isCredit ? Math.abs(txn.amount) : -Math.abs(txn.amount);
     const description = txn.description.length > DESCRIPTION_PREVIEW_LEN

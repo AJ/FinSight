@@ -89,6 +89,15 @@ export const useLLMConnectionStore = create<LLMConnectionState>((set, get) => ({
           inFlightPromise: null,
           error: status.connected ? null : 'LLM server not reachable',
         });
+
+        // Refresh context length for the selected model
+        if (status.connected && model) {
+          const match = status.models.find(m => m.id === model);
+          if (match?.contextLength !== undefined) {
+            useSettingsStore.getState().setModelContextLength(match.contextLength);
+          }
+        }
+
         return status;
       })
       .catch((error) => {
