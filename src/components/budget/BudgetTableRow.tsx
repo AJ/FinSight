@@ -1,6 +1,6 @@
 'use client';
 
-import { memo, useMemo } from 'react';
+import { createElement, memo, useMemo } from 'react';
 import { startOfMonth } from 'date-fns';
 import { BudgetProgress, Currency, Transaction } from '@/types';
 import { formatCurrency } from '@/lib/currencyFormatter';
@@ -31,7 +31,6 @@ export const BudgetTableRow = memo(function BudgetTableRow({
 }: BudgetTableRowProps) {
   const { categoryId, budgeted, spent, remaining, percentUsed, status } = progress;
   const display = getCategoryDisplay(categoryId);
-  const IconComponent = getCategoryIcon(categoryId);
   const sparkline = useMemo(
     () => computeSparklineData(transactions, categoryId, 5, startOfMonth(new Date(selectedMonth + '-01'))),
     [transactions, categoryId, selectedMonth]
@@ -59,7 +58,7 @@ export const BudgetTableRow = memo(function BudgetTableRow({
           )}
           style={!isNotSet ? { background: `${display.color}15`, color: display.color } : {}}
         >
-          <IconComponent className="h-4 w-4" />
+          {createElement(getCategoryIcon(categoryId), { className: 'h-4 w-4' })}
         </div>
         <span className="font-medium text-sm">{display.name}</span>
       </div>

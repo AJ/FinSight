@@ -6,6 +6,10 @@ import { generate as generateLMStudio } from './lmstudioClient';
 
 export type { LLMCallOptions };
 
+function hasRetryable(e: Error): e is Error & { retryable: boolean } {
+  return 'retryable' in e;
+}
+
 /**
  * Call LLM with retry logic for transient network failures.
  *
@@ -72,7 +76,7 @@ export async function callLLM(
       }
 
       const isRetryable =
-        (e instanceof Error && 'retryable' in e && (e as any).retryable === true) ||
+        (e instanceof Error && hasRetryable(e) && e.retryable === true) ||
         (e instanceof Error && e.name === 'AbortError');
 
       if (!isRetryable) {

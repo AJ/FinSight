@@ -358,7 +358,7 @@ export function FileProcessor({ onSuccess, onProcessingChange }: FileProcessorPr
         }
       }
     }
-  }, [pendingTypeFile, statementType, pendingTypePassword, processFileWithStatementType]);
+  }, [pendingTypeFile, statementType, pendingTypePassword, pendingHash, processFileWithStatementType]);
   // ========== FIX (2026-03-16) END ==========
   // Old code (sync, no error handling):
   /*

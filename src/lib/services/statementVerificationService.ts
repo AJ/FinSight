@@ -44,7 +44,7 @@ function buildVerificationWarning(
   }
 
   const ccReport = report as CCVerificationReport;
-  if (!ccReport.passed) {
+  if (!ccReport.statementTotals.passed || !ccReport.transactionSums.passed) {
     return [
       "Credit card statement verification failed: totals or transaction sums do not fully reconcile. Review carefully before import.",
     ];

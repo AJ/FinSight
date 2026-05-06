@@ -1,7 +1,7 @@
 'use client';
 
+import { createElement } from 'react';
 import { getCategoryDisplay, getCategoryIcon } from '@/components/transactions/CategoryBadge';
-import { formatCurrency } from '@/lib/currencyFormatter';
 import { Currency } from '@/types';
 import { X } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -45,7 +45,6 @@ export function BudgetPlanCategoryRow({
   onHoverChange,
 }: BudgetPlanCategoryRowProps) {
   const display = getCategoryDisplay(categoryId);
-  const IconComponent = getCategoryIcon(categoryId);
   const group = getCategoryGroup(categoryId);
 
   return (
@@ -63,7 +62,7 @@ export function BudgetPlanCategoryRow({
           className="w-7 h-7 rounded-lg flex items-center justify-center shrink-0"
           style={{ background: `${display.color}12`, color: display.color }}
         >
-          <IconComponent className="h-4 w-4" />
+          {createElement(getCategoryIcon(categoryId), { className: 'h-4 w-4' })}
         </div>
         <span className="font-medium text-sm whitespace-nowrap">{display.name}</span>
         {group && (

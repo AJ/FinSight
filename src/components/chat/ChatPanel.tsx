@@ -353,7 +353,8 @@ Guidelines:
       llmProvider,
       addMessage,
       updateMessage,
-    ]
+      llmModelContextLength,
+    ] as const
   );
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {

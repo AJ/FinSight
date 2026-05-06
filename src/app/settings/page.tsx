@@ -141,7 +141,7 @@ export default function SettingsPage() {
         setIsConnecting(false);
       }
     },
-    [llmModel, setLLMServerUrl, setLLMModel]
+    [llmModel, setLLMServerUrl, setLLMModel, setModelContextLength]
   );
 
   // Test connection on mount with saved URL

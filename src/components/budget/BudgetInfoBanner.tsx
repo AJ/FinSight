@@ -1,7 +1,7 @@
 'use client';
 
 import { Button } from '@/components/ui/button';
-import { AlertTriangle, Pencil, X } from 'lucide-react';
+import { AlertTriangle, Pencil } from 'lucide-react';
 
 interface BudgetInfoBannerProps {
   onSetBudget: () => void;

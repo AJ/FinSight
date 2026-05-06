@@ -115,7 +115,7 @@ export function AIConnectionBar({ onStatusChange, disabled = false }: AIConnecti
         setIsConnecting(false);
       }
     },
-    [llmModel, setLLMServerUrl, setLLMModel, onStatusChange]
+    [llmModel, setLLMServerUrl, setLLMModel, setModelContextLength, onStatusChange]
   );
 
   // Handle remote URL warning confirmation

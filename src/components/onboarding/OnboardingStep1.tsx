@@ -113,7 +113,7 @@ export function OnboardingStep1({
     if (connectionStatus === 'connected' && selectedProvider) {
       onComplete(selectedProvider, serverUrl, models, modelInfos);
     }
-  }, [connectionStatus, models, onComplete, selectedProvider, serverUrl]);
+  }, [connectionStatus, models, modelInfos, onComplete, selectedProvider, serverUrl]);
 
   const canContinue = connectionStatus === 'connected' && selectedProvider !== null;
 

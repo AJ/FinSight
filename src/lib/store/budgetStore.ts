@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import { BudgetPeriod, BudgetAllocation, BudgetProgress } from '@/types';
+import { BudgetPeriod, BudgetAllocation, BudgetProgress, Transaction } from '@/types';
 import { getApplicableNotification } from '@/lib/budget/notificationLogic';
 import { format } from 'date-fns';
 
@@ -23,10 +23,10 @@ interface BudgetStore {
   autoDistribute: (month: string, projectedSpending: Record<string, number>) => void;
   dismissNotification: (type: 'noBudget' | 'eom', month: string) => void;
   getNotification: () => { type: 'noBudget' | 'eom'; month: string } | null;
-  computeProgress: (month: string, transactions: any[]) => BudgetProgress[];
+  computeProgress: (month: string, transactions: Transaction[]) => BudgetProgress[];
 }
 
-let workingState: Record<string, Partial<BudgetPeriod>> = {};
+const workingState: Record<string, Partial<BudgetPeriod>> = {};
 
 function getOrCreateWorking(month: string, periods: Record<string, BudgetPeriod>): Partial<BudgetPeriod> & { month: string } {
   const existing = periods[month];

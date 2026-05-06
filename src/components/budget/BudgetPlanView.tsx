@@ -36,7 +36,6 @@ interface BudgetPlanViewProps {
 }
 
 export function BudgetPlanView({
-  month,
   income,
   allocations,
   visibleCategoryIds,
