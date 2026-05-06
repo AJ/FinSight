@@ -24,33 +24,34 @@ beforeEach(() => {
     llmProvider: 'lmstudio',
     llmServerUrl: 'http://localhost:1234',
     llmModel: 'test-model',
-  } as ReturnType<typeof useSettingsStore.getState>);
+    setModelContextLength: vi.fn(),
+  } as unknown as ReturnType<typeof useSettingsStore.getState>);
 });
 
 describe('useLLMConnectionStore', () => {
   it('checks connection and caches status', async () => {
-    mockCheckLLMStatus.mockResolvedValue({ connected: true, models: ['test-model'], selectedModel: null });
+    mockCheckLLMStatus.mockResolvedValue({ connected: true, models: [{ id: 'test-model', contextLength: 4096 }], selectedModel: null });
     const status = await useLLMConnectionStore.getState().checkConnection();
     expect(status.connected).toBe(true);
     expect(getLLMConnectionStatus()).not.toBeNull();
   });
 
   it('returns cached status within TTL', async () => {
-    mockCheckLLMStatus.mockResolvedValue({ connected: true, models: ['test-model'], selectedModel: null });
+    mockCheckLLMStatus.mockResolvedValue({ connected: true, models: [{ id: 'test-model', contextLength: 4096 }], selectedModel: null });
     await useLLMConnectionStore.getState().checkConnection();
     await useLLMConnectionStore.getState().checkConnection();
     expect(mockCheckLLMStatus).toHaveBeenCalledTimes(1);
   });
 
   it('invalidates cache on force', async () => {
-    mockCheckLLMStatus.mockResolvedValue({ connected: true, models: ['test-model'], selectedModel: null });
+    mockCheckLLMStatus.mockResolvedValue({ connected: true, models: [{ id: 'test-model', contextLength: 4096 }], selectedModel: null });
     await useLLMConnectionStore.getState().checkConnection();
     await useLLMConnectionStore.getState().checkConnection(true);
     expect(mockCheckLLMStatus).toHaveBeenCalledTimes(2);
   });
 
   it('deduplicates concurrent requests', async () => {
-    mockCheckLLMStatus.mockResolvedValue({ connected: true, models: ['test-model'], selectedModel: null });
+    mockCheckLLMStatus.mockResolvedValue({ connected: true, models: [{ id: 'test-model', contextLength: 4096 }], selectedModel: null });
     const [s1, s2] = await Promise.all([
       useLLMConnectionStore.getState().checkConnection(),
       useLLMConnectionStore.getState().checkConnection(),
@@ -73,7 +74,7 @@ describe('useLLMConnectionStore', () => {
 
 describe('checkLLMConnection convenience function', () => {
   it('delegates to store', async () => {
-    mockCheckLLMStatus.mockResolvedValue({ connected: true, models: ['test-model'], selectedModel: null });
+    mockCheckLLMStatus.mockResolvedValue({ connected: true, models: [{ id: 'test-model', contextLength: 4096 }], selectedModel: null });
     const status = await checkLLMConnection();
     expect(status.connected).toBe(true);
   });

@@ -23,7 +23,7 @@ const baseRuntime: LLMRuntimeConfig = {
 };
 
 beforeEach(() => {
-  vi.clearAllMocks();
+  vi.resetAllMocks();
 });
 
 describe('callLLM', () => {
@@ -70,8 +70,9 @@ describe('callLLM', () => {
   });
 
   it('retries on transient network error', async () => {
+    const retryableError = Object.assign(new Error('connection timed out'), { retryable: true });
     mockOllama
-      .mockRejectedValueOnce(new Error('connection timed out'))
+      .mockRejectedValueOnce(retryableError)
       .mockResolvedValueOnce('retry success');
 
     const result = await callLLM('prompt', { runtime: baseRuntime });
@@ -81,7 +82,8 @@ describe('callLLM', () => {
   });
 
   it('does not retry on non-retryable error', async () => {
-    mockOllama.mockRejectedValueOnce(new Error('model not found'));
+    const nonRetryableError = Object.assign(new Error('model not found'), { retryable: false });
+    mockOllama.mockRejectedValueOnce(nonRetryableError);
 
     await expect(callLLM('prompt', { runtime: baseRuntime })).rejects.toThrow('model not found');
     expect(mockOllama).toHaveBeenCalledTimes(1);
@@ -110,9 +112,10 @@ describe('callLLM', () => {
     expect(mockOllama).toHaveBeenCalledTimes(1);
   });
 
-  it('retries on "server error" message', async () => {
+  it('retries on retryable OllamaError', async () => {
+    const serverError = Object.assign(new Error('Ollama server error: internal'), { retryable: true });
     mockOllama
-      .mockRejectedValueOnce(new Error('server error'))
+      .mockRejectedValueOnce(serverError)
       .mockResolvedValueOnce('recovered');
 
     const result = await callLLM('prompt', { runtime: baseRuntime });
@@ -121,9 +124,10 @@ describe('callLLM', () => {
     expect(mockOllama).toHaveBeenCalledTimes(2);
   });
 
-  it('retries on "network" message', async () => {
+  it('retries on retryable network error', async () => {
+    const networkError = Object.assign(new Error('Ollama network error: ECONNREFUSED'), { retryable: true });
     mockOllama
-      .mockRejectedValueOnce(new Error('network failure'))
+      .mockRejectedValueOnce(networkError)
       .mockResolvedValueOnce('recovered');
 
     const result = await callLLM('prompt', { runtime: baseRuntime });

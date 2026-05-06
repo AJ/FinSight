@@ -1,8 +1,16 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { forecastCategorySpending, calculateMedianMonthlyIncome, calculateAverageMonthlyIncome } from '@/lib/forecaster';
 import { makeTransaction } from '@tests/unit/factories';
 import { Category } from '@/models';
 import '@/lib/categorization/categories';
+
+// Pin "now" to 2026-05-05 so lookback window tests are deterministic
+beforeEach(() => {
+  vi.useFakeTimers({ now: new Date('2026-05-05T12:00:00') });
+});
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 describe('forecastCategorySpending (median)', () => {
   it('returns 0 for no transactions', () => {
@@ -40,26 +48,26 @@ describe('forecastCategorySpending (median)', () => {
     const groceries = Category.fromId('groceries')!;
     const dining = Category.fromId('dining')!;
     const txns = [
-      makeTransaction({ description: 'grocery', amount: 300, date: '2026-01-15', category: groceries }),
-      makeTransaction({ description: 'dinner', amount: 500, date: '2026-01-15', category: dining }),
+      makeTransaction({ description: 'grocery', amount: 300, date: '2026-03-15', category: groceries }),
+      makeTransaction({ description: 'dinner', amount: 500, date: '2026-03-15', category: dining }),
     ];
 
     const result = forecastCategorySpending(txns, 'groceries', 3);
-    // Only groceries: Jan=300. One month of data. Median of [300] = 300
+    // Only groceries: Mar=300. One month of data. Median of [300] = 300
     expect(result).toBe(300);
   });
 
   it('aggregates multiple transactions in the same month', () => {
     const groceries = Category.fromId('groceries')!;
     const txns = [
-      makeTransaction({ description: 'a', amount: 100, date: '2026-01-05', category: groceries }),
-      makeTransaction({ description: 'b', amount: 200, date: '2026-01-20', category: groceries }),
-      makeTransaction({ description: 'c', amount: 600, date: '2026-02-10', category: groceries }),
-      makeTransaction({ description: 'd', amount: 400, date: '2026-03-05', category: groceries }),
+      makeTransaction({ description: 'a', amount: 100, date: '2026-03-05', category: groceries }),
+      makeTransaction({ description: 'b', amount: 200, date: '2026-03-20', category: groceries }),
+      makeTransaction({ description: 'c', amount: 600, date: '2026-04-10', category: groceries }),
+      makeTransaction({ description: 'd', amount: 400, date: '2026-05-05', category: groceries }),
     ];
 
     const result = forecastCategorySpending(txns, 'groceries', 3);
-    // Monthly sums: Jan=300, Feb=600, Mar=400. Sorted: [300, 400, 600]. Median: 400
+    // Monthly sums: Mar=300, Apr=600, May=400. Sorted: [300, 400, 600]. Median: 400
     expect(result).toBe(400);
   });
 

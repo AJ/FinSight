@@ -43,4 +43,14 @@ describe('buildChatContextForQuestion', () => {
     const context = buildChatContextForQuestion(txns, { code: 'INR', symbol: '₹', name: 'Indian Rupee' }, 'And what about Amazon?');
     expect(context).toContain('Ledger');
   });
+
+  it('uses all transactions and truncates by maxChars', () => {
+    const txns = Array.from({ length: 100 }, (_, i) =>
+      makeTransaction({ id: `t${i}`, description: `Transaction ${i}`, amount: 100 + i })
+    );
+    const context = buildChatContextForQuestion(txns, { code: 'INR', symbol: '₹', name: 'Indian Rupee' }, 'Show all transactions', { maxChars: 50000 });
+    // With 50K char budget, all 100 should fit
+    const lines = context.split('\n').filter((l) => /^\d+\./.test(l.trim()));
+    expect(lines.length).toBe(100);
+  });
 });
