@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { persist, createJSONStorage } from 'zustand/middleware';
+import { persist } from 'zustand/middleware';
 import { Insight } from '@/lib/insights/types';
 
 interface InsightsStore {
@@ -48,7 +48,6 @@ export const useInsightsStore = create<InsightsStore>()(
     }),
     {
       name: 'insights-storage',
-      storage: createJSONStorage(() => sessionStorage),
     }
   )
 );

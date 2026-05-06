@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { persist, createJSONStorage } from 'zustand/middleware';
+import { persist } from 'zustand/middleware';
 import { ChatMessage } from '@/types';
 
 interface ChatStore {
@@ -37,7 +37,6 @@ export const useChatStore = create<ChatStore>()(
     }),
     {
       name: 'chat-storage',
-      storage: createJSONStorage(() => sessionStorage),
     }
   )
 );
