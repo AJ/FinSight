@@ -94,6 +94,9 @@ test.describe('Budget Lifecycle', () => {
     await page.getByText('50/30/20').click();
     await page.getByRole('button', { name: /save/i }).click();
 
+    // Save switches to Track tab — switch back to Plan for the reset test
+    await page.getByRole('button', { name: 'Plan' }).click();
+
     // Change budget to 70000.
     await budgetInput.fill('70000');
     await expect(budgetInput).toHaveValue('70000');

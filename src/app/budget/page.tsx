@@ -19,6 +19,7 @@ import { findCarryForwardState } from '@/lib/budget/carryForward';
 import { calculateMedianMonthlyIncome } from '@/lib/forecaster';
 import { format, startOfMonth, subMonths } from 'date-fns';
 import { cn } from '@/lib/utils';
+import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog';
 
@@ -154,7 +155,9 @@ function BudgetPageContent() {
     }
 
     store.savePeriod(selectedMonth);
-  }, [selectedMonth, localIncome, localAllocations, localHidden]);
+    toast.success(`Budget for ${selectedMonth} saved`);
+    handleTabChange('track');
+  }, [selectedMonth, localIncome, localAllocations, localHidden, handleTabChange]);
 
   const handleReset = useCallback(() => {
     loadMonthState(selectedMonth);
