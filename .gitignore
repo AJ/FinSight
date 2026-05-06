@@ -68,3 +68,6 @@ docs/COMMIT_MESSAGE_DRAFT.md
 gha-creds-*.json
 playwright-report/
 test-results/
+next-env.d.ts
+.github/
+.playwright-mcp/

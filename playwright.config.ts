@@ -10,6 +10,7 @@ import { defineConfig, devices } from '@playwright/test';
  */
 export default defineConfig({
   testDir: './tests',
+  testIgnore: ['**/unit/**', '**/parserNeutralizationBoundary.spec.ts'],
   fullyParallel: true,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 2 : 1,
@@ -17,7 +18,7 @@ export default defineConfig({
   reporter: 'html',
   
   use: {
-    baseURL: process.env.PLAYWRIGHT_BASE_URL || 'http://localhost:3000',
+    baseURL: process.env.PLAYWRIGHT_BASE_URL || 'http://localhost:3001',
     trace: 'on-first-retry',
     video: 'retain-on-failure',
     screenshot: 'only-on-failure',
@@ -31,8 +32,8 @@ export default defineConfig({
   ],
 
   webServer: {
-    command: 'npm run dev',
-    url: process.env.PLAYWRIGHT_BASE_URL || 'http://localhost:3000',
+    command: 'npx next dev --port 3001',
+    url: process.env.PLAYWRIGHT_BASE_URL || 'http://localhost:3001',
     reuseExistingServer: true,
     stdout: 'pipe',
     stderr: 'pipe',

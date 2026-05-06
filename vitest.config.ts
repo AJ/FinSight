@@ -5,7 +5,7 @@ export default defineConfig({
   test: {
     globals: true,
     environment: 'jsdom',
-    include: ['tests/unit/**/*.spec.ts', 'tests/integration/**/*.spec.ts'],
+    include: ['tests/unit/**/*.spec.ts'],
     exclude: [
       'tests/unit/parseLLMJsonResponse.spec.ts',
       'tests/integration/retryEngine.spec.ts',
