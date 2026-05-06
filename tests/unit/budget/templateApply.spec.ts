@@ -2,7 +2,6 @@ import { describe, it, expect } from 'vitest';
 import {
   computeTemplateAllocation,
   NEEDS,
-  WANTS,
   SAVES,
 } from '@/lib/budget/templateApply';
 import { makeTransaction, makeCategory } from '@tests/unit/factories';

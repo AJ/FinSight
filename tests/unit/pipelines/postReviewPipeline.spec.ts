@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { finalizeReviewImport } from '@/lib/pipelines/postReviewPipeline';
 import { reviewSessionRepository } from '@/lib/review/reviewSessionRepository';
-import { TransactionType, CategorizedBy } from '@/types';
+import { CategorizedBy } from '@/types';
 import type { Summary } from '@/lib/parsers/extractSummary';
 import '@/lib/categorization/categories';
 import { makeTransaction, makeCategory } from '@tests/unit/factories';

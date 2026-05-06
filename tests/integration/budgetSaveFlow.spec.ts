@@ -1,9 +1,9 @@
 import { test, expect } from '@playwright/test';
-import { clearAllStorage, setLocalStorage, getLocalStorage } from '@tests/utils/storageHelpers';
+import { clearAllStorage, getLocalStorage } from '@tests/utils/storageHelpers';
 import { setupTestContext } from '@tests/e2e/helpers/e2eHelpers';
 
 test.describe('Budget Save/Edit Flow', () => {
-  test.beforeEach(async ({ page, context }) => {
+  test.beforeEach(async ({ context }) => {
     await clearAllStorage(context);
     await setupTestContext(context);
   });

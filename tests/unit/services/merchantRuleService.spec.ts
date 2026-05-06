@@ -1,7 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { type Transaction, CategorizedBy } from '@/types';
-import { makeCategory, type makeTransaction } from '@tests/unit/factories';
-import { CategoryType } from '@/models';
+import { makeCategory } from '@tests/unit/factories';
 
 const mockGetRule = vi.fn();
 const mockUpsertRule = vi.fn();

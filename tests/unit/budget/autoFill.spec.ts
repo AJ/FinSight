@@ -4,12 +4,6 @@ import { makeTransaction, makeCategory } from '@tests/unit/factories';
 import { Category } from '@/models';
 import '@/lib/categorization/categories';
 
-const groceries = Category.fromId('groceries')!;
-const dining = Category.fromId('dining')!;
-const transportation = Category.fromId('transportation')!;
-const entertainment = Category.fromId('entertainment')!;
-const housing = Category.fromId('housing')!;
-
 /**
  * Helper: create expense transactions spread across months so the
  * median-monthly-forecast produces a predictable value.

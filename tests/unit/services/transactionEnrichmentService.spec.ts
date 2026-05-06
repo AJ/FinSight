@@ -11,8 +11,8 @@ vi.mock('@/lib/categorizer', () => ({
 }));
 
 vi.mock('@/lib/categorization/aiCategorizer', () => ({
-  categorizeTransactions: vi.fn(async (txns) => []),
-  applyCategorizationResults: vi.fn((txns, _results) => txns),
+  categorizeTransactions: vi.fn(async () => []),
+  applyCategorizationResults: vi.fn((txns) => txns),
 }));
 
 import {
@@ -28,14 +28,14 @@ beforeEach(() => {
 
 describe('enrichImportedTransactions', () => {
   it('returns empty array for empty input', async () => {
-    const result = await enrichImportedTransactions([], { llmProvider: 'ollama', baseUrl: 'http://localhost', model: 'llama3' });
+    const result = await enrichImportedTransactions([], { provider: 'ollama', baseUrl: 'http://localhost', model: 'llama3' });
     expect(result).toEqual([]);
     expect(normalizeMerchantName).not.toHaveBeenCalled();
   });
 
   it('normalizes merchant names before categorization', async () => {
     const txns = [makeTransaction({ description: 'AMAZON' })];
-    await enrichImportedTransactions(txns, { llmProvider: 'ollama', baseUrl: 'http://localhost', model: 'llama3' });
+    await enrichImportedTransactions(txns, { provider: 'ollama', baseUrl: 'http://localhost', model: 'llama3' });
 
     expect(normalizeMerchantName).toHaveBeenCalledWith('AMAZON');
     expect(categorizeTransactions).toHaveBeenCalled();
@@ -43,7 +43,7 @@ describe('enrichImportedTransactions', () => {
 
   it('applies categorization results', async () => {
     const txns = [makeTransaction({ description: 'NETFLIX' })];
-    await enrichImportedTransactions(txns, { llmProvider: 'ollama', baseUrl: 'http://localhost', model: 'llama3' });
+    await enrichImportedTransactions(txns, { provider: 'ollama', baseUrl: 'http://localhost', model: 'llama3' });
 
     expect(applyCategorizationResults).toHaveBeenCalled();
   });
@@ -51,13 +51,13 @@ describe('enrichImportedTransactions', () => {
 
 describe('recategorizeStoredTransactions', () => {
   it('returns empty array for empty input', async () => {
-    const result = await recategorizeStoredTransactions([], { llmProvider: 'ollama', baseUrl: 'http://localhost', model: 'llama3' });
+    const result = await recategorizeStoredTransactions([], { provider: 'ollama', baseUrl: 'http://localhost', model: 'llama3' });
     expect(result).toEqual([]);
   });
 
   it('normalizes and recategorizes', async () => {
     const txns = [makeTransaction({ description: 'SWIGGY' })];
-    await recategorizeStoredTransactions(txns, { llmProvider: 'ollama', baseUrl: 'http://localhost', model: 'llama3' });
+    await recategorizeStoredTransactions(txns, { provider: 'ollama', baseUrl: 'http://localhost', model: 'llama3' });
 
     expect(normalizeMerchantName).toHaveBeenCalled();
     expect(categorizeTransactions).toHaveBeenCalled();

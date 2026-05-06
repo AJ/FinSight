@@ -1,5 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { useBudgetStore } from '@/lib/store/budgetStore';
+import { makeTransaction, makeCategory } from '@tests/unit/factories';
+import { CategoryType } from '@/types';
 
 describe('useBudgetStore (redesigned)', () => {
   beforeEach(() => {
@@ -114,8 +116,8 @@ describe('useBudgetStore (redesigned)', () => {
       store.savePeriod('2026-04');
 
       const txns = [
-        { category: { id: 'groceries' }, amount: 8500, isExpense: true, date: new Date('2026-04-10') },
-      ] as any[];
+        makeTransaction({ category: makeCategory('groceries'), amount: 8500, date: new Date('2026-04-10') }),
+      ];
 
       const progress = store.computeProgress('2026-04', txns);
       const groceries = progress.find(p => p.categoryId === 'groceries')!;
@@ -129,8 +131,8 @@ describe('useBudgetStore (redesigned)', () => {
       store.savePeriod('2026-04');
 
       const txns = [
-        { category: { id: 'groceries' }, amount: 12000, isExpense: true, date: new Date('2026-04-10') },
-      ] as any[];
+        makeTransaction({ category: makeCategory('groceries'), amount: 12000, date: new Date('2026-04-10') }),
+      ];
 
       const progress = store.computeProgress('2026-04', txns);
       const groceries = progress.find(p => p.categoryId === 'groceries')!;
@@ -143,8 +145,8 @@ describe('useBudgetStore (redesigned)', () => {
       store.savePeriod('2026-04');
 
       const txns = [
-        { category: { id: 'groceries' }, amount: 500, isExpense: true, date: new Date('2026-04-10') },
-      ] as any[];
+        makeTransaction({ category: makeCategory('groceries'), amount: 500, date: new Date('2026-04-10') }),
+      ];
 
       const progress = store.computeProgress('2026-04', txns);
       const groceries = progress.find(p => p.categoryId === 'groceries')!;
@@ -263,9 +265,9 @@ describe('useBudgetStore (redesigned)', () => {
       store.savePeriod('2026-04');
 
       const txns = [
-        { category: { id: 'groceries' }, amount: 5000, isExpense: true, date: new Date('2026-04-10') },
-        { category: { id: 'dining' }, amount: 3000, isExpense: true, date: new Date('2026-04-10') },
-      ] as any[];
+        makeTransaction({ category: makeCategory('groceries'), amount: 5000, date: new Date('2026-04-10') }),
+        makeTransaction({ category: makeCategory('dining'), amount: 3000, date: new Date('2026-04-10') }),
+      ];
 
       const progress = store.computeProgress('2026-04', txns);
       const groceries = progress.find(p => p.categoryId === 'groceries')!;
@@ -289,9 +291,9 @@ describe('useBudgetStore (redesigned)', () => {
       store.savePeriod('2026-04');
 
       const txns = [
-        { category: { id: 'groceries' }, amount: 4000, isExpense: false, date: new Date('2026-04-10') },
-        { category: { id: 'groceries' }, amount: 3000, isExpense: true, date: new Date('2026-04-10') },
-      ] as any[];
+        makeTransaction({ category: makeCategory('salary', CategoryType.Income), amount: 4000, date: new Date('2026-04-10') }),
+        makeTransaction({ category: makeCategory('groceries'), amount: 3000, date: new Date('2026-04-10') }),
+      ];
 
       const progress = store.computeProgress('2026-04', txns);
       const groceries = progress.find(p => p.categoryId === 'groceries')!;
@@ -305,9 +307,9 @@ describe('useBudgetStore (redesigned)', () => {
       store.savePeriod('2026-04');
 
       const txns = [
-        { category: { id: 'groceries' }, amount: 5000, isExpense: true, date: new Date('2026-03-15') },
-        { category: { id: 'groceries' }, amount: 2000, isExpense: true, date: new Date('2026-04-10') },
-      ] as any[];
+        makeTransaction({ category: makeCategory('groceries'), amount: 5000, date: new Date('2026-03-15') }),
+        makeTransaction({ category: makeCategory('groceries'), amount: 2000, date: new Date('2026-04-10') }),
+      ];
 
       const progress = store.computeProgress('2026-04', txns);
       const groceries = progress.find(p => p.categoryId === 'groceries')!;

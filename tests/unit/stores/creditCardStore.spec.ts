@@ -23,7 +23,7 @@ vi.mock('@/lib/creditCard/constants', () => ({
 import { generateProjection } from '@/lib/creditCard/interestCalculator';
 import { calculateAvalanche, calculateSnowball } from '@/lib/creditCard/paymentStrategy';
 import { calculateDebtTrapAnalysis } from '@/lib/creditCard/revolvingDetector';
-import { getAPRForIssuer } from '@/lib/creditCard/constants';
+import type { InterestProjection, DebtTrapAnalysis } from '@/types/creditCard';
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -392,7 +392,7 @@ describe('creditCardStore', () => {
 
   describe('getInterestProjections', () => {
     it('delegates to generateProjection for each card with debt', () => {
-      const mockProjection = {
+      const mockProjection: InterestProjection = {
         cardIssuer: 'HDFC',
         cardLastFour: '1234',
         currentBalance: 50000,
@@ -402,7 +402,7 @@ describe('creditCardStore', () => {
         fixedPaymentScenarios: [],
         fullPaySavings: 15000,
       };
-      vi.mocked(generateProjection).mockReturnValue(mockProjection as any);
+      vi.mocked(generateProjection).mockReturnValue(mockProjection);
 
       useCreditCardStore.getState().addStatement(makeStatement());
       const result = useCreditCardStore.getState().getInterestProjections();
@@ -453,12 +453,13 @@ describe('creditCardStore', () => {
 
   describe('getDebtTrapAnalysis', () => {
     it('delegates to calculateDebtTrapAnalysis', () => {
-      vi.mocked(calculateDebtTrapAnalysis).mockReturnValue({
-        isInDebtTrap: false,
-        riskLevel: 'low',
+      const mockAnalysis: DebtTrapAnalysis = {
         cards: [],
+        totalRevolvingDebt: 0,
+        overallRiskLevel: 'low',
         recommendations: [],
-      } as any);
+      };
+      vi.mocked(calculateDebtTrapAnalysis).mockReturnValue(mockAnalysis);
 
       useCreditCardStore.getState().addStatement(makeStatement());
       useCreditCardStore.getState().getDebtTrapAnalysis();

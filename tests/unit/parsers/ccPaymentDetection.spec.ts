@@ -4,22 +4,20 @@ import { normalizeCCTransactionSubTypes } from '@/lib/parsers/ccPaymentDetection
 import { makeTransaction } from '@tests/unit/factories';
 import type { Transaction } from '@/types';
 import type { TransactionSubType } from '@/models/Transaction';
+import { SourceType } from '@/models';
 
 function makeCCTransaction(overrides: {
   description: string;
   amount?: number;
-  originalText?: string;
   transactionSubType?: string;
   isCredit?: boolean;
 }): Transaction {
   return makeTransaction({
-    sourceType: 'credit_card' as const,
+    sourceType: SourceType.CreditCard,
     type: overrides.isCredit !== false ? 'credit' : 'debit',
-    isCredit: overrides.isCredit !== false,
     transactionSubType: (overrides.transactionSubType ?? 'bill_payment') as TransactionSubType,
     description: overrides.description,
     amount: overrides.amount ?? 5000,
-    originalText: overrides.originalText,
   });
 }
 
@@ -84,9 +82,8 @@ describe('normalizeCCTransactionSubTypes', () => {
 
   it('does not reclassify bank transactions', () => {
     const txn = makeTransaction({
-      sourceType: 'bank' as const,
+      sourceType: SourceType.Bank,
       type: 'credit',
-      isCredit: true,
       transactionSubType: 'bill_payment' as TransactionSubType,
       description: 'SOME PAYMENT',
     });

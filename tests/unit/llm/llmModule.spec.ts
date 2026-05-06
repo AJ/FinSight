@@ -1,7 +1,6 @@
 import { describe, it, expect } from 'vitest';
 
 import { getDefaultUrl, getServerClient, getBrowserClient, DEFAULT_URLS } from '@/lib/llm/index';
-import type { LLMProvider } from '@/lib/llm/types';
 
 describe('getDefaultUrl', () => {
   it('returns correct URL for ollama', () => {

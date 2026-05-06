@@ -7,7 +7,7 @@ beforeEach(() => {
 });
 
 function makeMsg(id: string, content: string, role: 'user' | 'assistant' = 'user') {
-  return { id, content, role, timestamp: new Date() };
+  return { id, content, role, timestamp: new Date().toISOString() };
 }
 
 describe('chatStore', () => {

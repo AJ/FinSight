@@ -10,7 +10,7 @@ import {
   buildStoredTransactionCategoryUpdate,
   handleStoredTransactionManualCategoryEdit,
 } from '@/lib/services/storedTransactionEditService';
-import { makeTransaction } from '@tests/unit/factories';
+import { makeTransaction, makeCategory } from '@tests/unit/factories';
 import { CategorizedBy } from '@/models';
 
 beforeEach(() => {
@@ -19,7 +19,7 @@ beforeEach(() => {
 
 describe('buildStoredTransactionCategoryUpdate', () => {
   it('sets category from valid id', () => {
-    const txn = makeTransaction({ category: { id: 'old', name: 'Old', type: 1, keywords: [] } as any });
+    const txn = makeTransaction({ category: makeCategory('old') });
     const result = buildStoredTransactionCategoryUpdate(txn, 'groceries', CategorizedBy.Manual);
 
     expect(result.category.id).toBe('groceries');

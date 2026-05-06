@@ -1,4 +1,4 @@
-import { test, expect, BrowserContext } from '@playwright/test';
+import { test, expect } from '@playwright/test';
 import { setupTestContext, mockCategorizationAPI } from '../e2e/helpers/e2eHelpers';
 
 test.describe('Dashboard page', () => {

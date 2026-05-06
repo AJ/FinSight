@@ -7,7 +7,6 @@ import {
   DATE_KEYWORDS,
   DEBIT_KEYWORDS,
   CREDIT_KEYWORDS,
-  TYPE_KEYWORDS,
 } from '@/lib/parsers/columnDetection';
 import type { ColumnMapping } from '@/lib/parsers/columnDetection';
 

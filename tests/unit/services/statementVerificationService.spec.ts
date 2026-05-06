@@ -3,6 +3,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import {
   verifyStatement,
   verifyCCStatement,
+  type VerificationReport,
+  type CCVerificationReport,
+  type VerifiedTransaction,
 } from '@/lib/verification/verificationEngine';
 
 vi.mock('@/lib/verification/verificationEngine', () => ({
@@ -14,11 +17,26 @@ import { attachVerificationToExtractionBundle } from '@/lib/services/statementVe
 import type { ExtractionBundle } from '@/lib/parsers/contracts';
 import { makeTransaction } from '@tests/unit/factories';
 
+const stubVerificationReport: VerificationReport = {
+  verified: [],
+  rejected: [],
+  duplicates: [],
+  reconciliation: { passed: true, difference: 0 },
+  overallConfidence: 1,
+};
+
+const stubCCReport: CCVerificationReport = {
+  statementTotals: { passed: true, expectedTotalDue: 0, computedTotalDue: 0, difference: 0, formula: '' },
+  transactionSums: { passed: true, totalPurchases: 0, totalPayments: 0, totalFees: 0 },
+  overallConfidence: 1,
+  passed: true,
+};
+
 function makeBundle(overrides: Partial<ExtractionBundle> = {}): ExtractionBundle {
   return {
     transactions: [makeTransaction()],
     warnings: ['existing warning'],
-    verificationInputs: null,
+    verificationInputs: undefined,
     summary: null,
     ...overrides,
   } as ExtractionBundle;
@@ -30,7 +48,7 @@ describe('attachVerificationToExtractionBundle', () => {
   });
 
   it('returns bundle unchanged when verificationInputs is null', () => {
-    const bundle = makeBundle({ verificationInputs: null });
+    const bundle = makeBundle({ verificationInputs: undefined });
     const result = attachVerificationToExtractionBundle(bundle);
 
     expect(verifyStatement).not.toHaveBeenCalled();
@@ -49,9 +67,13 @@ describe('attachVerificationToExtractionBundle', () => {
     });
 
     vi.mocked(verifyStatement).mockReturnValue({
-      verified: [{ id: txn.id, confidence: 0.95 }],
-      reconciliation: { passed: true, difference: 0 },
-    } as any);
+      ...stubVerificationReport,
+      verified: [{
+        ...txn,
+        confidence: 0.95,
+        verification: { amountMatched: true, dateMatched: true, descriptionMatched: true, contextMatched: true, currencyMatched: true },
+      } as VerifiedTransaction],
+    });
 
     const result = attachVerificationToExtractionBundle(bundle);
 
@@ -71,9 +93,9 @@ describe('attachVerificationToExtractionBundle', () => {
     });
 
     vi.mocked(verifyStatement).mockReturnValue({
-      verified: [],
+      ...stubVerificationReport,
       reconciliation: { passed: false, difference: 50.25 },
-    } as any);
+    });
 
     const result = attachVerificationToExtractionBundle(bundle);
     expect(result.warnings).toContain('existing warning');
@@ -90,10 +112,7 @@ describe('attachVerificationToExtractionBundle', () => {
       },
     });
 
-    vi.mocked(verifyStatement).mockReturnValue({
-      verified: [],
-      reconciliation: { passed: true, difference: 0 },
-    } as any);
+    vi.mocked(verifyStatement).mockReturnValue(stubVerificationReport);
 
     const result = attachVerificationToExtractionBundle(bundle);
     expect(result.warnings).toHaveLength(1); // only the existing warning
@@ -109,19 +128,14 @@ describe('attachVerificationToExtractionBundle', () => {
           previousBalance: 5000,
           totalDue: 10000,
           currency: 'INR',
-          minimumDue: 500,
-          creditLimit: 100000,
-        } as any,
+        },
       },
     });
 
-    vi.mocked(verifyCCStatement).mockReturnValue({ passed: true } as any);
-    vi.mocked(verifyStatement).mockReturnValue({
-      verified: [],
-      reconciliation: { passed: true, difference: 0 },
-    } as any);
+    vi.mocked(verifyCCStatement).mockReturnValue(stubCCReport);
+    vi.mocked(verifyStatement).mockReturnValue(stubVerificationReport);
 
-    const result = attachVerificationToExtractionBundle(bundle);
+    attachVerificationToExtractionBundle(bundle);
     expect(verifyCCStatement).toHaveBeenCalledOnce();
     expect(verifyStatement).toHaveBeenCalledOnce();
   });
@@ -136,17 +150,15 @@ describe('attachVerificationToExtractionBundle', () => {
           previousBalance: 5000,
           totalDue: 10000,
           currency: 'INR',
-          minimumDue: 500,
-          creditLimit: 100000,
-        } as any,
+        },
       },
     });
 
-    vi.mocked(verifyCCStatement).mockReturnValue({ passed: false } as any);
-    vi.mocked(verifyStatement).mockReturnValue({
-      verified: [],
-      reconciliation: { passed: true, difference: 0 },
-    } as any);
+    vi.mocked(verifyCCStatement).mockReturnValue({
+      ...stubCCReport,
+      statementTotals: { ...stubCCReport.statementTotals, passed: false },
+    });
+    vi.mocked(verifyStatement).mockReturnValue(stubVerificationReport);
 
     const result = attachVerificationToExtractionBundle(bundle);
     expect(result.warnings.some((w) => w.includes('Credit card'))).toBe(true);
@@ -163,10 +175,7 @@ describe('attachVerificationToExtractionBundle', () => {
       },
     });
 
-    vi.mocked(verifyStatement).mockReturnValue({
-      verified: [], // no match for this transaction
-      reconciliation: { passed: true, difference: 0 },
-    } as any);
+    vi.mocked(verifyStatement).mockReturnValue(stubVerificationReport);
 
     const result = attachVerificationToExtractionBundle(bundle);
     expect(result.transactions[0].verificationConfidence).toBeUndefined();

@@ -14,7 +14,7 @@ import '@/lib/categorization/categories';
 
 import { applyCategorizationResults, categorizeByKeywords } from '@/lib/categorization/aiCategorizer';
 import { CategorizedBy } from '@/types';
-import { makeTransaction, makeCategory } from '@tests/unit/factories';
+import { makeTransaction } from '@tests/unit/factories';
 
 describe('categorizeByKeywords (re-exported)', () => {
   it('returns shopping for Amazon descriptions', () => {

@@ -57,7 +57,7 @@ async function seedTransactions(context: import('@playwright/test').BrowserConte
 }
 
 test.describe('Budget With Transactions', () => {
-  test.beforeEach(async ({ page, context }) => {
+  test.beforeEach(async ({ context }) => {
     await clearAllStorage(context);
     await setupTestContext(context);
   });

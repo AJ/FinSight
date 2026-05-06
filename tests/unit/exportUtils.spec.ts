@@ -17,7 +17,7 @@ class MockBlob {
   constructor(content: unknown, options?: unknown) {
     this.content = content;
     this.options = options;
-    capturedBlobContent = content?.[0] as string ?? null;
+    capturedBlobContent = Array.isArray(content) ? (content[0] as string) ?? null : null;
   }
 }
 
@@ -28,11 +28,10 @@ beforeEach(() => {
     createObjectURL: vi.fn(() => 'blob:mock-url'),
     revokeObjectURL: vi.fn(),
   });
-  vi.spyOn(document, 'createElement').mockReturnValue({
-    setAttribute: vi.fn(),
-    style: {},
-    click: mockClick,
-  } as any);
+  const anchor = document.createElement('a');
+  vi.spyOn(anchor, 'click').mockImplementation(mockClick);
+  vi.spyOn(anchor, 'setAttribute');
+  vi.spyOn(document, 'createElement').mockReturnValue(anchor);
   vi.spyOn(document.body, 'appendChild').mockImplementation(mockAppendChild);
   vi.spyOn(document.body, 'removeChild').mockImplementation(mockRemoveChild);
   vi.stubGlobal('alert', vi.fn());

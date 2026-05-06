@@ -1,31 +1,15 @@
 import { describe, it, expect } from 'vitest';
 
 import { categorizeTransaction, normalizeMerchantName } from '@/lib/categorizer';
-import { makeCategory } from '@tests/unit/factories';
-import { CategoryType, TransactionType } from '@/models';
-
-function makeExpenseCategory(id: string, keywords: string[]) {
-  return makeCategory(id, CategoryType.Expense);
-}
+import { Category, CategoryType, TransactionType } from '@/models';
 
 describe('categorizeTransaction', () => {
   const categories = [
-    makeCategory('groceries', CategoryType.Expense),
-    makeCategory('dining', CategoryType.Expense),
-    makeCategory('salary', CategoryType.Income),
-    makeCategory('transfer', CategoryType.Excluded),
+    new Category('groceries', 'groceries', CategoryType.Expense, ['grocery', 'supermarket', 'bigbasket', 'swiggy']),
+    new Category('dining', 'dining', CategoryType.Expense, ['restaurant', 'cafe', 'zomato']),
+    new Category('salary', 'salary', CategoryType.Income, ['salary', 'wage', 'payroll']),
+    new Category('transfer', 'transfer', CategoryType.Excluded),
   ];
-
-  // Manually set keywords since makeCategory doesn't accept them
-  categories[0] = new (categories[0].constructor as typeof categories[0])(
-    'groceries', 'groceries', CategoryType.Expense, ['grocery', 'supermarket', 'bigbasket', 'swiggy'],
-  );
-  categories[1] = new (categories[0].constructor as typeof categories[0])(
-    'dining', 'dining', CategoryType.Expense, ['restaurant', 'cafe', 'zomato'],
-  );
-  categories[2] = new (categories[0].constructor as typeof categories[0])(
-    'salary', 'salary', CategoryType.Income, ['salary', 'wage', 'payroll'],
-  );
 
   it('matches expense category by keyword', () => {
     const result = categorizeTransaction('SWIGGY FOOD ORDER', 350, categories);

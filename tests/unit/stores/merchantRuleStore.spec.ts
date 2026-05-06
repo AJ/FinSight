@@ -3,12 +3,11 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import {
   findMatchingMerchantRule,
   applyMerchantRuleDecision,
-  isLegacyMerchantRule,
-  migrateLegacyMerchantRule,
   type MerchantRule,
   type MerchantRuleDecision,
   type MerchantRuleMatchInput,
 } from '@/lib/categorization/merchantRules';
+import { SourceType } from '@/models';
 
 // Mock the merchantRules module
 vi.mock('@/lib/categorization/merchantRules', async (importOriginal) => {
@@ -31,7 +30,7 @@ function makeRule(merchantKey: string, overrides: Partial<MerchantRule> = {}): M
   return {
     merchantKey,
     direction: 'debit',
-    sourceType: 'bank',
+    sourceType: SourceType.Bank,
     categoryVotes: { groceries: 3 },
     activeCategoryId: 'groceries',
     status: 'confident',
@@ -47,7 +46,7 @@ function makeDecision(merchantKey: string, categoryId = 'groceries'): MerchantRu
     merchantKey,
     categoryId,
     direction: 'debit',
-    sourceType: 'bank',
+    sourceType: SourceType.Bank,
     sampleDescription: `Payment to ${merchantKey}`,
   };
 }
@@ -58,7 +57,7 @@ describe('merchantRuleStore', () => {
       const rule = makeRule('AMAZON');
       vi.mocked(findMatchingMerchantRule).mockReturnValue(rule);
 
-      const input: MerchantRuleMatchInput = { merchantKey: 'AMAZON', direction: 'debit', sourceType: 'bank' };
+      const input: MerchantRuleMatchInput = { merchantKey: 'AMAZON', direction: 'debit', sourceType: SourceType.Bank };
       const result = useMerchantRuleStore.getState().getRule(input);
 
       expect(findMatchingMerchantRule).toHaveBeenCalledWith([], input);
@@ -66,11 +65,11 @@ describe('merchantRuleStore', () => {
     });
 
     it('returns undefined when no match found', () => {
-      vi.mocked(findMatchingMerchantRule).mockReturnValue(undefined);
+      vi.mocked(findMatchingMerchantRule).mockReturnValue(null);
       const result = useMerchantRuleStore.getState().getRule({
         merchantKey: 'UNKNOWN',
         direction: 'debit',
-        sourceType: 'bank',
+        sourceType: SourceType.Bank,
       });
       expect(result).toBeUndefined();
     });

@@ -2,12 +2,26 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 import { getBrowserClient } from '@/lib/llm/index';
 import { useSettingsStore } from '@/lib/store/settingsStore';
+import type { LLMClient } from '@/lib/llm/types';
 
 vi.mock('@/lib/llm/index', () => ({
   getBrowserClient: vi.fn(),
 }));
 
 import { checkLLMStatus } from '@/lib/llm/checkStatus';
+
+function makeLLMClient(checkStatusOverride?: LLMClient['checkStatus']): LLMClient {
+  return {
+    checkStatus: checkStatusOverride ?? vi.fn().mockResolvedValue({
+      connected: false,
+      models: [],
+      selectedModel: null,
+    }),
+    listModels: vi.fn().mockResolvedValue([]),
+    generate: vi.fn().mockResolvedValue(''),
+    chatStream: vi.fn().mockResolvedValue(new ReadableStream()),
+  };
+}
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -17,12 +31,10 @@ describe('checkLLMStatus', () => {
   it('uses store URL and provider when no args given', async () => {
     const mockCheckStatus = vi.fn().mockResolvedValue({
       connected: true,
-      models: ['llama3'],
+      models: [{ id: 'llama3' }],
       selectedModel: 'llama3',
     });
-    vi.mocked(getBrowserClient).mockReturnValue({
-      checkStatus: mockCheckStatus,
-    } as any);
+    vi.mocked(getBrowserClient).mockReturnValue(makeLLMClient(mockCheckStatus));
 
     const result = await checkLLMStatus();
 
@@ -38,9 +50,7 @@ describe('checkLLMStatus', () => {
       models: [],
       selectedModel: null,
     });
-    vi.mocked(getBrowserClient).mockReturnValue({
-      checkStatus: mockCheckStatus,
-    } as any);
+    vi.mocked(getBrowserClient).mockReturnValue(makeLLMClient(mockCheckStatus));
 
     await checkLLMStatus('http://custom:9999', 'ollama');
 
@@ -53,9 +63,7 @@ describe('checkLLMStatus', () => {
       models: [],
       selectedModel: null,
     });
-    vi.mocked(getBrowserClient).mockReturnValue({
-      checkStatus: mockCheckStatus,
-    } as any);
+    vi.mocked(getBrowserClient).mockReturnValue(makeLLMClient(mockCheckStatus));
 
     await checkLLMStatus(undefined, 'lmstudio');
 
@@ -68,9 +76,7 @@ describe('checkLLMStatus', () => {
       models: [{ id: 'qwen2.5', contextLength: 8192 }],
       selectedModel: 'qwen2.5',
     });
-    vi.mocked(getBrowserClient).mockReturnValue({
-      checkStatus: mockCheckStatus,
-    } as any);
+    vi.mocked(getBrowserClient).mockReturnValue(makeLLMClient(mockCheckStatus));
 
     const result = await checkLLMStatus('http://localhost:11434', 'ollama');
 

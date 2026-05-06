@@ -49,6 +49,8 @@ interface MakeTransactionInput {
   // Construction parameters
   sourceType?: SourceType;
   currency?: Currency;
+  // Post-construction overrides (readonly fields via Object.defineProperty)
+  merchant?: string;
 }
 
 /**
@@ -104,6 +106,7 @@ export function makeTransaction(input: MakeTransactionInput = {}): Transaction {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- readonly field override for test setup
   if (input.anomalyDetails !== undefined) txn.anomalyDetails = input.anomalyDetails as any;
   if (input.anomalyDismissed !== undefined) txn.anomalyDismissed = input.anomalyDismissed;
+  if (input.merchant !== undefined) Object.defineProperty(txn, 'merchant', { value: input.merchant, writable: true });
 
   return txn;
 }
