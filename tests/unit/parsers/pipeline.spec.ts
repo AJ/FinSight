@@ -525,6 +525,54 @@ describe('processStatement — adaptive chunking', () => {
     expect(result.success).toBe(true);
     expect(result.data?.transactions).toHaveLength(1);
   });
+
+  it('reports chunk failures in warnings instead of silently discarding them', async () => {
+    const txChunk1 = [makeExtractedTx({ description: 'Good chunk' })];
+    const summary = makeBankSummary();
+
+    const chunkPlan = {
+      chunkingUsed: true,
+      chunkTriggerReason: 'line_threshold' as const,
+      normalizedTextLength: 15000,
+      normalizedLineCount: 300,
+      chunks: [
+        { text: 'chunk1 text', index: 0, totalChunks: 2, isFirst: true, isLast: false, startLine: 0, endLine: 179, lineCount: 180, overlapStartLine: null as number | null },
+        { text: 'chunk2 text', index: 1, totalChunks: 2, isFirst: false, isLast: true, startLine: 168, endLine: 299, lineCount: 132, overlapStartLine: 168 },
+      ],
+    };
+
+    mockRunWithRetry
+      .mockImplementationOnce(() => mockSuccessfulRetry(summary))
+      .mockImplementationOnce(() => mockSuccessfulRetry({ transactions: txChunk1 }))
+      .mockImplementationOnce(() => ({
+        success: false,
+        data: null,
+        errors: ['Chunk extraction failed'],
+        warnings: [],
+        attempts: 3,
+      }));
+    mockCreateChunkPlan.mockReturnValue(chunkPlan);
+    mockMergeChunkTransactions.mockReturnValue({
+      transactions: txChunk1,
+      duplicatesRemoved: 0,
+    });
+    mockMergeOutputs.mockReturnValue(makeMergedOutput(txChunk1, summary));
+    mockValidateTransactions.mockImplementation((d: unknown) => ({
+      valid: true,
+      errors: [],
+      warnings: [],
+      data: d,
+    }));
+
+    const result = await processStatement('raw text', {
+      ...defaultOptions,
+      statementType: 'bank',
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.data?.transactions).toHaveLength(1);
+    expect(result.warnings).toEqual(expect.arrayContaining([expect.stringContaining('Chunk extraction failed')]));
+  });
 });
 
 describe('processStatement — signal propagation', () => {

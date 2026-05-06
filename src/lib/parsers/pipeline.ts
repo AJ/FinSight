@@ -8,7 +8,6 @@
 import type { LLMRuntimeConfig } from '@/lib/llm/types';
 import { debugLog, debugWarn } from '@/lib/utils/debug';
 import type { ExtractedTransaction } from '@/types/extractedTransaction';
-import type { TransactionSubType } from '@/models/Transaction';
 import { Transaction as CanonicalTransaction } from '@/models/Transaction';
 import { SourceType } from '@/types';
 import type { Currency, StatementFormat, Transaction } from '@/types';
@@ -25,6 +24,7 @@ import { mergeOutputs } from '../verification/mergeEngine';
 import { runWithRetry } from './retryEngine';
 import { validateCCSummary, validateBankSummary, validateTransactions } from '../verification/validationEngine';
 import type { ExtractionBundle, VerificationInputs } from './contracts';
+import { normalizeCCTransactionSubTypes } from './ccPaymentDetection';
 import {
   createTransactionChunkPlan,
   getDroppedTransactionCount,
@@ -161,6 +161,8 @@ async function processCreditCard(
 
   if (!transactionsResult.success) {
     errors.push(`Transaction extraction failed: ${transactionsResult.errors.join(', ')}`);
+  } else if (transactionsResult.errors.length > 0) {
+    warnings.push(`Partial extraction: ${transactionsResult.errors.join(', ')}`);
   }
 
   const rewardsPrompt = buildRewardsPrompt(normalizedText);
@@ -208,7 +210,7 @@ async function processCreditCard(
   return {
     success: errors.length === 0,
     data,
-    warnings: data.warnings,
+    warnings: [...warnings, ...data.warnings],
     errors,
   };
 }
@@ -258,6 +260,8 @@ async function processBank(
 
   if (!transactionsResult.success) {
     errors.push(`Transaction extraction failed: ${transactionsResult.errors.join(', ')}`);
+  } else if (transactionsResult.errors.length > 0) {
+    warnings.push(`Partial extraction: ${transactionsResult.errors.join(', ')}`);
   }
 
   const failedChunks = transactionsResult.debugInfo && typeof transactionsResult.debugInfo === 'object'
@@ -285,7 +289,7 @@ async function processBank(
   return {
     success: errors.length === 0,
     data,
-    warnings: data.warnings,
+    warnings: [...warnings, ...data.warnings],
     errors,
   };
 }
@@ -436,14 +440,16 @@ async function runTransactionExtraction(
   const mergedErrors = [...transactionErrors, ...mergedValidation.errors];
 
   if (hasUsableData) {
+    // Chunk failures become warnings (partial data is usable) but are NOT
+    // silently discarded — they remain in warnings for downstream inspection.
     mergedWarnings.push(...transactionErrors);
     mergedWarnings.push(...mergedValidation.errors);
   }
 
   return {
-    success: mergedErrors.length === 0 || hasUsableData,
+    success: hasUsableData || mergedErrors.length === 0,
     data: mergedValidation.data,
-    errors: hasUsableData ? [] : mergedErrors,
+    errors: mergedErrors,
     warnings: mergedWarnings,
     attempts: totalAttempts,
     debugInfo: {
@@ -458,110 +464,6 @@ async function runTransactionExtraction(
       diagnostics,
     },
   };
-}
-
-const cashbackKeywords = ['cashback', 'valueback', 'reward cash', 'reward cashback'];
-const ccPaymentKeywords = [
-  'credit card',
-  'cc payment',
-  'card payment',
-  'hdfc card',
-  'icici card',
-  'axis card',
-  'sbi card',
-  'kotak card',
-  'citi card',
-  'amex card',
-  'idfc card',
-  'tele-transfer',
-  'tele transfer',
-  'neft-hdfc',
-  'neft-icici',
-  'neft-axis',
-  'neft-sbi',
-  'neft-kotak',
-  'billdesk*hdfc',
-  'billdesk*icici',
-  'billdesk*axis',
-  'autopay cc',
-];
-const ccIssuers = [
-  'hdfc',
-  'icici',
-  'axis',
-  'sbi',
-  'kotak',
-  'citi',
-  'amex',
-  'idfc',
-  'au bank',
-  'bob',
-  'canara',
-  'pnb',
-  'hsbc',
-  'standard chartered',
-  'scb',
-  'rbl',
-  'yes bank',
-];
-
-function normalizeCCTransactionSubTypes(transactions: Transaction[]): Transaction[] {
-  return transactions.map((transaction) => {
-    if (transaction.sourceType !== SourceType.CreditCard) {
-      return transaction;
-    }
-    if (!transaction.isCredit) {
-      return transaction;
-    }
-    if (transaction.transactionSubType !== 'bill_payment') {
-      return transaction;
-    }
-
-    const text = `${transaction.description} ${transaction.originalText ?? ''}`.toLowerCase();
-    const looksLikeCashback = cashbackKeywords.some((keyword) => text.includes(keyword));
-    const looksLikeBillPayment =
-      ccPaymentKeywords.some((keyword) => text.includes(keyword)) ||
-      ccIssuers.some(
-        (issuer) => text.includes(issuer) && (text.includes('card') || text.includes('bill')),
-      );
-
-    if (looksLikeCashback || looksLikeBillPayment) {
-      return transaction;
-    }
-
-    return new CanonicalTransaction(
-      transaction.id,
-      transaction.date,
-      transaction.description,
-      transaction.amount,
-      transaction.type,
-      transaction.category,
-      transaction.balance,
-      transaction.merchant,
-      transaction.originalText,
-      transaction.budgetMonth,
-      transaction.categoryConfidence,
-      transaction.needsReview,
-      transaction.categorizedBy,
-      transaction.sourceType,
-      transaction.statementId,
-      transaction.cardIssuer,
-      transaction.cardLastFour,
-      transaction.cardHolder,
-      transaction.localCurrency,
-      transaction.originalCurrency,
-      transaction.originalAmount,
-      transaction.isInternational,
-      transaction.isAnomaly,
-      transaction.anomalyTypes,
-      transaction.anomalyDetails,
-      transaction.anomalyDismissed,
-      'refund' as TransactionSubType,
-      transaction.suggestedCategory,
-      transaction.llmConfidence,
-      transaction.verificationConfidence,
-    );
-  });
 }
 
 function toCanonicalTransactions(
