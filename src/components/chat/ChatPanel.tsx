@@ -31,7 +31,7 @@ import {
   ArrowDown,
   Square,
 } from 'lucide-react';
-import { getBrowserClient } from '@/lib/llm/index';
+import { getClient } from '@/lib/llm/index';
 import { debugError } from '@/lib/utils/debug';
 
 const messageVariants = {
@@ -159,12 +159,11 @@ export function ChatPanel() {
       addMessage(assistantMsg);
 
       setIsStreaming(true);
-      const streamController = new AbortController();
-      activeStreamControllerRef.current.signal(); // Register with manager
+      const streamSignal = activeStreamControllerRef.current.signal();
       let streamedContent = '';
 
       try {
-        const client = getBrowserClient(llmProvider);
+        const client = getClient(llmProvider);
 
         // Resolve model
         let selectedModel = activeModel ?? undefined;
@@ -217,96 +216,17 @@ Guidelines:
         ];
 
         // Stream directly from browser → LLM
-        const stream = await client.chatStream(llmServerUrl, selectedModel, chatMessages, {
-          ...optimizationPlan.requestOptions,
-          signal: streamController.signal,
+        const stream = client.chatStream(llmServerUrl, selectedModel, chatMessages, {
+          temperature: optimizationPlan.temperature,
+          maxTokens: optimizationPlan.maxTokens,
+          signal: streamSignal,
+          extra: optimizationPlan.extra,
         });
-        const reader = stream.getReader();
-        const decoder = new TextDecoder();
-        let buffer = '';
 
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-
-          const chunk = decoder.decode(value, { stream: true });
-          buffer += chunk;
-
-          if (llmProvider === 'lmstudio') {
-            // LM Studio uses SSE format: process complete events and keep partials buffered.
-            const events = buffer.split('\n\n');
-            buffer = events.pop() ?? '';
-
-            for (const event of events) {
-              const lines = event.split('\n').filter((l) => l.trim());
-              for (const line of lines) {
-                const trimmed = line.trim();
-                if (!trimmed.startsWith('data:')) continue;
-                const data = trimmed.slice(5).trimStart();
-                if (data === '[DONE]') continue;
-
-                try {
-                  const parsed = JSON.parse(data);
-                  const content = parsed.choices?.[0]?.delta?.content;
-                  if (content) {
-                    streamedContent += content;
-                    updateMessage(assistantId, streamedContent);
-                  }
-                } catch {
-                  /* skip malformed lines */
-                }
-              }
-            }
-          } else {
-            // Ollama uses NDJSON format: process complete lines and keep partial line buffered.
-            const lines = buffer.split('\n');
-            buffer = lines.pop() ?? '';
-
-            for (const line of lines) {
-              if (!line.trim()) continue;
-              try {
-                const parsed = JSON.parse(line);
-                if (parsed.message?.content) {
-                  streamedContent += parsed.message.content;
-                  updateMessage(assistantId, streamedContent);
-                }
-              } catch {
-                /* skip malformed lines */
-              }
-            }
-          }
-        }
-
-        // Flush any remaining buffered frame at end-of-stream.
-        if (buffer.trim()) {
-          if (llmProvider === 'lmstudio') {
-            const lines = buffer.split('\n').filter((l) => l.trim());
-            for (const line of lines) {
-              const trimmed = line.trim();
-              if (!trimmed.startsWith('data:')) continue;
-              const data = trimmed.slice(5).trimStart();
-              if (data === '[DONE]') continue;
-              try {
-                const parsed = JSON.parse(data);
-                const content = parsed.choices?.[0]?.delta?.content;
-                if (content) {
-                  streamedContent += content;
-                  updateMessage(assistantId, streamedContent);
-                }
-              } catch {
-                /* skip malformed lines */
-              }
-            }
-          } else {
-            try {
-              const parsed = JSON.parse(buffer.trim());
-              if (parsed.message?.content) {
-                streamedContent += parsed.message.content;
-                updateMessage(assistantId, streamedContent);
-              }
-            } catch {
-              /* skip malformed trailing frame */
-            }
+        for await (const chunk of stream) {
+          if (chunk.delta) {
+            streamedContent += chunk.delta;
+            updateMessage(assistantId, streamedContent);
           }
         }
 
@@ -317,7 +237,7 @@ Guidelines:
           );
         }
       } catch (err) {
-        if (streamController.signal.aborted) {
+        if (streamSignal.aborted) {
           if (!streamedContent) {
             updateMessage(
               assistantId,
@@ -334,7 +254,7 @@ Guidelines:
             : '⚠️ Connection error — check that your LLM is running and try again.'
         );
       } finally {
-        if (streamController.signal.aborted) {
+        if (streamSignal.aborted) {
           return;
         }
         activeStreamControllerRef.current.abortAll();

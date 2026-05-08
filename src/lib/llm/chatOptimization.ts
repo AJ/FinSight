@@ -4,7 +4,9 @@ import { LLMProvider } from './types';
 export interface ChatOptimizationPlan {
   historyWindow: number;
   contextMaxChars: number;
-  requestOptions: Record<string, unknown>;
+  temperature: number;
+  maxTokens: number;
+  extra: Record<string, unknown>;
 }
 
 export function estimateTokens(text: string): number {
@@ -36,14 +38,15 @@ export function buildChatOptimizationPlan(
   const contextTokens = Math.max(0, contextLength - overhead);
   const contextMaxChars = contextTokens * 4;
 
-  const requestOptions: Record<string, unknown> =
-    provider === 'ollama'
-      ? { num_ctx: contextLength, num_predict: RESPONSE_RESERVE, temperature: 0.05, top_p: 0.9, keep_alive: '15m' }
-      : { max_tokens: RESPONSE_RESERVE, temperature: 0.05, top_p: 0.9 };
+  const extra: Record<string, unknown> = provider === 'ollama'
+    ? { num_ctx: contextLength, top_p: 0.9, keep_alive: '15m' }
+    : { top_p: 0.9 };
 
   return {
     historyWindow: HISTORY_WINDOW,
     contextMaxChars,
-    requestOptions,
+    temperature: 0.05,
+    maxTokens: RESPONSE_RESERVE,
+    extra,
   };
 }

@@ -10,6 +10,7 @@ import { getTransactionAnalytics } from '@/lib/insights';
 import { InsightCard } from './InsightCard';
 import { Sparkles, RefreshCw, AlertCircle, Loader2 } from 'lucide-react';
 import { Insight } from '@/lib/insights/types';
+import { generateInsights } from '@/lib/insights/browserGenerator';
 import { debugLog } from '@/lib/utils/debug';
 
 export function InsightsPanel() {
@@ -35,45 +36,21 @@ export function InsightsPanel() {
     setGenerating(true);
 
     try {
-      //console.log('[InsightsPanel] Starting generation with', transactions.length, 'transactions');
       debugLog("InsightsPanel", "Starting insight generation with transaction count", transactions.length," transactions:", transactions);
 
-      // Call server-side API
-      const response = await fetch('/api/insights', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          analytics,
-          provider: llmProvider,
-          baseUrl: llmServerUrl,
-          model: llmModel,
-          currency,
-        }),
+      const insightsWithIds = await generateInsights({
+        analytics,
+        currency,
+        provider: llmProvider,
+        baseUrl: llmServerUrl,
+        model: llmModel ?? undefined,
       });
 
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.error || 'Failed to generate insights');
-      }
-
-      const data = await response.json();
-
-      if (!data.insights || data.insights.length === 0) {
+      if (!insightsWithIds || insightsWithIds.length === 0) {
         setError('The AI could not generate insights from your data. Try again.');
         return;
       }
 
-      // Add unique IDs to each insight
-      const insightsWithIds: Insight[] = data.insights.map((insight: Partial<Insight>, index: number) => ({
-        id: `insight-${Date.now()}-${index}`,
-        type: insight.type || 'category_trend',
-        title: insight.title || 'Insight',
-        description: insight.description || '',
-        severity: insight.severity || 'info',
-        category: insight.category,
-      }));
-
-      //console.log('[InsightsPanel] Generated', insightsWithIds.length, 'insights');
       debugLog("InsightsPanel", "Generated insights:", insightsWithIds);
       setInsights(insightsWithIds);
     } catch (err) {

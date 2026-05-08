@@ -6,7 +6,7 @@ vi.mock('@/lib/services/merchantRuleService', () => ({
 }));
 
 vi.mock('@/lib/llm/index', () => ({
-  getBrowserClient: vi.fn(),
+  getClient: vi.fn(),
 }));
 
 // Import categories first

@@ -1,19 +1,16 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-// We need to mock callLLM since it makes network calls
-vi.mock('@/lib/llm/llmClient', () => ({
-  callLLM: vi.fn(),
+const mockGenerate = vi.fn();
+
+vi.mock('@/lib/llm/index', () => ({
+  getClient: () => ({ generate: mockGenerate }),
 }));
 
 vi.mock('@/lib/utils/debug', () => ({
   debugLog: vi.fn(),
 }));
 
-// Need to import after mocking
 import { runWithRetry, type ValidationResult } from '@/lib/parsers/retryEngine';
-import { callLLM } from '@/lib/llm/llmClient';
-
-const mockCallLLM = vi.mocked(callLLM);
 
 describe('runWithRetry', () => {
   beforeEach(() => {
@@ -21,7 +18,7 @@ describe('runWithRetry', () => {
   });
 
   it('succeeds on first attempt', async () => {
-    mockCallLLM.mockResolvedValueOnce('{"key": "value"}');
+    mockGenerate.mockResolvedValueOnce('{"key": "value"}');
     const validateFn = vi.fn().mockReturnValue({
       valid: true, errors: [], warnings: [], data: { key: 'value' },
     } as ValidationResult<{ key: string }>);
@@ -39,8 +36,7 @@ describe('runWithRetry', () => {
   });
 
   it('succeeds on retry after JSON parse failure', async () => {
-    // First call returns bad JSON, second returns good
-    mockCallLLM
+    mockGenerate
       .mockResolvedValueOnce('not json')
       .mockResolvedValueOnce('{"key": "value"}');
 
@@ -60,8 +56,7 @@ describe('runWithRetry', () => {
   });
 
   it('includes validation errors in retry prompt', async () => {
-    // First call returns valid JSON but fails validation
-    mockCallLLM
+    mockGenerate
       .mockResolvedValueOnce('{"amount": "string"}')
       .mockResolvedValueOnce('{"amount": 123}');
 
@@ -86,8 +81,8 @@ describe('runWithRetry', () => {
       { maxRetries: 3, stage: 'test', llmConfig: { provider: 'lmstudio', baseUrl: 'http://localhost:1234', model: 'test' } },
     );
 
-    // Second callLLM should receive a prompt containing the validation error
-    const secondCallPrompt = mockCallLLM.mock.calls[1][0];
+    // Second generate call should receive a prompt containing the validation error
+    const secondCallPrompt = mockGenerate.mock.calls[1][2];
     expect(secondCallPrompt).toContain('VALIDATION ERRORS TO FIX');
     expect(secondCallPrompt).toContain('amount is not a valid number');
     expect(result.success).toBe(true);
@@ -95,8 +90,7 @@ describe('runWithRetry', () => {
   });
 
   it('returns failure after all retries exhausted', async () => {
-    // All calls return bad JSON
-    mockCallLLM.mockResolvedValue('not json');
+    mockGenerate.mockResolvedValue('not json');
 
     const validateFn = vi.fn().mockReturnValue({
       valid: true, errors: [], warnings: [], data: { key: 'value' },
@@ -115,8 +109,7 @@ describe('runWithRetry', () => {
   });
 
   it('returns failure with validation errors after max retries', async () => {
-    // All calls return valid JSON but fail validation
-    mockCallLLM.mockResolvedValue('{"amount": "string"}');
+    mockGenerate.mockResolvedValue('{"amount": "string"}');
 
     const validateFn = vi.fn().mockReturnValue({
       valid: false,

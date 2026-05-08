@@ -6,8 +6,8 @@
  */
 
 import { parseLLMJsonResponse } from '@/lib/utils/llm-response-parser';
-import { callLLM } from '../llm/llmClient';
-import type { LLMRuntimeConfig } from '../llm/types';
+import { getClient } from '@/lib/llm/index';
+import type { LLMRuntimeConfig } from '@/lib/llm/types';
 import { debugLog } from '@/lib/utils/debug';
 
 export interface RetryConfig {
@@ -79,12 +79,7 @@ export async function runWithRetry<T>(
   let lastValidationWarnings: string[] = [];
   let lastDebugInfo: unknown;
 
-  const callOptions = {
-    stage: config.stage,
-    maxTokens: config.maxTokens ?? 4096,
-    signal: config.signal,
-    runtime: config.llmConfig,
-  };
+  const client = getClient(config.llmConfig.provider);
 
   for (let attempt = 1; attempt <= config.maxRetries; attempt++) {
     try {
@@ -98,7 +93,12 @@ export async function runWithRetry<T>(
         debugLog(config.stage, '--- END NORMALIZED TEXT ---');
       }
 
-      const rawResponse = await callLLM(prompt, callOptions);
+      const rawResponse = await client.generate(
+        config.llmConfig.baseUrl,
+        config.llmConfig.model,
+        prompt,
+        { stage: config.stage, maxTokens: config.maxTokens ?? 4096, signal: config.signal },
+      );
       lastRawOutput = rawResponse;
 
       let parsed: T;

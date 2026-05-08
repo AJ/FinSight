@@ -28,17 +28,14 @@ describe('buildChatOptimizationPlan', () => {
       modelContextLength: 8192,
     });
 
-    // 8192 - 800 (response) - 300 (system) - question tokens - 0 history = ~7000+ tokens
-    // contextMaxChars = tokens * 4 = 28000+
     expect(plan.contextMaxChars).toBeGreaterThan(20000);
-    expect(plan.requestOptions.num_ctx).toBe(8192);
+    expect(plan.extra.num_ctx).toBe(8192);
   });
 
   it('falls back to 4096 when no model context length provided', () => {
     const plan = buildChatOptimizationPlan('ollama', 'What is my spending?', []);
 
-    expect(plan.requestOptions.num_ctx).toBe(4096);
-    // 4096 - 800 - 300 - question(~8 tokens) = ~2988 tokens → ~11952 chars
+    expect(plan.extra.num_ctx).toBe(4096);
     expect(plan.contextMaxChars).toBeGreaterThan(10000);
     expect(plan.contextMaxChars).toBeLessThan(13000);
   });
@@ -48,8 +45,7 @@ describe('buildChatOptimizationPlan', () => {
       modelContextLength: 32768,
     });
 
-    expect(plan.requestOptions.num_ctx).toBe(32768);
-    // ~31500 tokens * 4 = ~126000 chars
+    expect(plan.extra.num_ctx).toBe(32768);
     expect(plan.contextMaxChars).toBeGreaterThan(120000);
   });
 
@@ -81,31 +77,31 @@ describe('buildChatOptimizationPlan', () => {
     expect(plan.historyWindow).toBe(6);
   });
 
-  it('builds correct Ollama request options', () => {
+  it('builds correct Ollama options', () => {
     const plan = buildChatOptimizationPlan('ollama', 'test', [], {
       modelContextLength: 8192,
     });
 
-    expect(plan.requestOptions).toMatchObject({
+    expect(plan.temperature).toBe(0.05);
+    expect(plan.maxTokens).toBe(800);
+    expect(plan.extra).toMatchObject({
       num_ctx: 8192,
-      num_predict: 800,
-      temperature: 0.05,
       top_p: 0.9,
       keep_alive: '15m',
     });
   });
 
-  it('builds correct LM Studio request options', () => {
+  it('builds correct LM Studio options', () => {
     const plan = buildChatOptimizationPlan('lmstudio', 'test', [], {
       modelContextLength: 8192,
     });
 
-    expect(plan.requestOptions).toMatchObject({
-      max_tokens: 800,
-      temperature: 0.05,
+    expect(plan.temperature).toBe(0.05);
+    expect(plan.maxTokens).toBe(800);
+    expect(plan.extra).toMatchObject({
       top_p: 0.9,
     });
-    expect(plan.requestOptions).not.toHaveProperty('num_ctx');
+    expect(plan.extra).not.toHaveProperty('num_ctx');
   });
 
   it('handles zero context length gracefully', () => {
@@ -113,7 +109,6 @@ describe('buildChatOptimizationPlan', () => {
       modelContextLength: 0,
     });
 
-    // All tokens consumed by overhead → contextMaxChars = 0
     expect(plan.contextMaxChars).toBe(0);
   });
 });

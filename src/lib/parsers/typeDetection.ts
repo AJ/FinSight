@@ -5,8 +5,8 @@
  * Returns type + confidence score.
  */
 
-import { callLLM } from '../llm/llmClient';
-import type { LLMRuntimeConfig } from '../llm/types';
+import { getClient } from '@/lib/llm/index';
+import type { LLMRuntimeConfig } from '@/lib/llm/types';
 import { parseLLMJsonResponse } from '@/lib/utils/llm-response-parser';
 import { TYPE_DETECTION_PROMPT } from './prompts';
 
@@ -50,12 +50,13 @@ export async function detectStatementType(
     : normalizedText;
 
   const prompt = TYPE_DETECTION_PROMPT.replace('{RAW_TEXT}', contextSlice);
-  const rawResponse = await callLLM(prompt, {
-    stage: 'type_detection',
-    maxTokens: 512,
-    signal,
-    runtime: llmConfig,
-  });
+  const client = getClient(llmConfig.provider);
+  const rawResponse = await client.generate(
+    llmConfig.baseUrl,
+    llmConfig.model,
+    prompt,
+    { stage: 'type_detection', maxTokens: 512, signal },
+  );
 
   try {
     const parsed = parseLLMJsonResponse<{ type: string; confidence: number; reason?: string; bankName?: string }>(rawResponse);
