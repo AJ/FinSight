@@ -41,4 +41,17 @@ describe('Category', () => {
     expect(cat.isExpense).toBe(false);
     expect(cat.isExcluded).toBe(false);
   });
+
+  it('getAll returns all registered categories', () => {
+    const all = Category.getAll();
+    expect(all.length).toBeGreaterThan(0);
+    expect(all.some(c => c.id === 'groceries')).toBe(true);
+  });
+
+  it('constructor stores keywords and optional fields', () => {
+    const cat = new Category('kw_test', 'KW Test', CategoryType.Expense, ['foo', 'bar'], 'icon', '#fff');
+    expect(cat.keywords).toEqual(['foo', 'bar']);
+    expect(cat.icon).toBe('icon');
+    expect(cat.color).toBe('#fff');
+  });
 });

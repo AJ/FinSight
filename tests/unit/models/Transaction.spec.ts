@@ -1,9 +1,10 @@
 import { describe, it, expect } from 'vitest';
 import { Transaction, TransactionType, Category, CategoryType, SourceType } from '@/types';
+import { formatSubType, TRANSACTION_SUB_TYPES, type TransactionJSON } from '@/models/Transaction';
 import '@/lib/categorization/categories';
 
-function makeCategory(id: string): Category {
-  return new Category(id, id, CategoryType.Expense);
+function makeCategory(id: string, type: CategoryType = CategoryType.Expense): Category {
+  return new Category(id, id, type);
 }
 
 describe('Transaction.fromExtracted', () => {
@@ -192,5 +193,127 @@ describe('Transaction.sourceFileHash', () => {
     const cloned = txn.cloneWith({ description: 'Updated' });
     expect(cloned.sourceFileHash).toBe(hash);
     expect(cloned.description).toBe('Updated');
+  });
+});
+
+// ── Getters ────────────────────────────────────────────────────────────────
+
+describe('Transaction getters', () => {
+  it('signedAmount is negative for debits', () => {
+    const txn = new Transaction('1', new Date(), 'T', 100, TransactionType.Debit, makeCategory('food'));
+    expect(txn.signedAmount).toBe(-100);
+  });
+
+  it('signedAmount is positive for credits', () => {
+    const txn = new Transaction('1', new Date(), 'T', 100, TransactionType.Credit, makeCategory('salary', CategoryType.Income));
+    expect(txn.signedAmount).toBe(100);
+  });
+
+  it('isCredit is true for Credit type', () => {
+    const txn = new Transaction('1', new Date(), 'T', 100, TransactionType.Credit, makeCategory('salary', CategoryType.Income));
+    expect(txn.isCredit).toBe(true);
+    expect(txn.isDebit).toBe(false);
+  });
+
+  it('isDebit is true for Debit type', () => {
+    const txn = new Transaction('1', new Date(), 'T', 100, TransactionType.Debit, makeCategory('food'));
+    expect(txn.isDebit).toBe(true);
+    expect(txn.isCredit).toBe(false);
+  });
+
+  it('isIncome delegates to category', () => {
+    const txn = new Transaction('1', new Date(), 'T', 100, TransactionType.Credit, makeCategory('salary', CategoryType.Income));
+    expect(txn.isIncome).toBe(true);
+  });
+
+  it('isExpense delegates to category', () => {
+    const txn = new Transaction('1', new Date(), 'T', 100, TransactionType.Debit, makeCategory('food'));
+    expect(txn.isExpense).toBe(true);
+  });
+
+  it('isExcluded delegates to category', () => {
+    const txn = new Transaction('1', new Date(), 'T', 100, TransactionType.Debit, makeCategory('transfer', CategoryType.Excluded));
+    expect(txn.isExcluded).toBe(true);
+  });
+});
+
+// ── fromJSON edge cases ────────────────────────────────────────────────────
+
+describe('Transaction.fromJSON edge cases', () => {
+  it('falls back to default category for unknown ID', () => {
+    const json = {
+      id: '1', date: '2024-01-15T00:00:00.000Z', description: 'T', amount: 100,
+      type: TransactionType.Debit, category: 'nonexistent_category',
+      localCurrency: { code: 'INR', symbol: '₹', name: 'Indian Rupee' },
+      isInternational: false,
+    };
+    const txn = Transaction.fromJSON(json);
+    expect(txn.category.id).toBe('other');
+  });
+
+  it('defaults localCurrency to INR when missing', () => {
+    const { localCurrency, ...json } = {
+      id: '1', date: '2024-01-15T00:00:00.000Z', description: 'T', amount: 100,
+      type: TransactionType.Debit, category: 'food',
+      localCurrency: { code: 'INR', symbol: '₹', name: 'Indian Rupee' },
+      isInternational: false,
+    } satisfies TransactionJSON;
+    const txn = Transaction.fromJSON(json as TransactionJSON);
+    expect(txn.localCurrency.code).toBe('INR');
+  });
+
+  it('defaults isInternational to false when missing', () => {
+    const { isInternational, ...json } = {
+      id: '1', date: '2024-01-15T00:00:00.000Z', description: 'T', amount: 100,
+      type: TransactionType.Debit, category: 'food',
+      localCurrency: { code: 'INR', symbol: '₹', name: 'Indian Rupee' },
+      isInternational: false,
+    } satisfies TransactionJSON;
+    const txn = Transaction.fromJSON(json as TransactionJSON);
+    expect(txn.isInternational).toBe(false);
+  });
+
+  it('takes absolute value of amount', () => {
+    const json = {
+      id: '1', date: '2024-01-15T00:00:00.000Z', description: 'T', amount: -500,
+      type: TransactionType.Debit, category: 'food',
+      localCurrency: { code: 'INR', symbol: '₹', name: 'Indian Rupee' },
+      isInternational: false,
+    };
+    const txn = Transaction.fromJSON(json);
+    expect(txn.amount).toBe(500);
+  });
+});
+
+// ── formatSubType ──────────────────────────────────────────────────────────
+
+describe('formatSubType', () => {
+  it('capitalizes first letter', () => {
+    expect(formatSubType('purchase')).toBe('Purchase');
+  });
+
+  it('replaces underscores with spaces', () => {
+    expect(formatSubType('bill_payment')).toBe('Bill payment');
+  });
+
+  it('handles multi-underscore types', () => {
+    expect(formatSubType('transfer_in')).toBe('Transfer in');
+  });
+});
+
+// ── TRANSACTION_SUB_TYPES ──────────────────────────────────────────────────
+
+describe('TRANSACTION_SUB_TYPES', () => {
+  it('is a non-empty readonly array', () => {
+    expect(TRANSACTION_SUB_TYPES.length).toBeGreaterThan(0);
+  });
+
+  it('contains expected sub-types', () => {
+    expect(TRANSACTION_SUB_TYPES).toContain('purchase');
+    expect(TRANSACTION_SUB_TYPES).toContain('bill_payment');
+    expect(TRANSACTION_SUB_TYPES).toContain('refund');
+    expect(TRANSACTION_SUB_TYPES).toContain('fee');
+    expect(TRANSACTION_SUB_TYPES).toContain('transfer_in');
+    expect(TRANSACTION_SUB_TYPES).toContain('transfer_out');
   });
 });

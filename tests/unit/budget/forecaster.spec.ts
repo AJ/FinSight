@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { forecastCategorySpending, calculateMedianMonthlyIncome, calculateAverageMonthlyIncome } from '@/lib/forecaster';
+import { forecastCategorySpending, forecastAllCategories, calculateMedianMonthlyIncome, calculateAverageMonthlyIncome } from '@/lib/forecaster';
 import { makeTransaction } from '@tests/unit/factories';
 import { Category } from '@/models';
 import '@/lib/categorization/categories';
@@ -116,5 +116,24 @@ describe('calculateAverageMonthlyIncome (deprecated alias)', () => {
     ];
 
     expect(calculateAverageMonthlyIncome(txns, 3)).toBe(calculateMedianMonthlyIncome(txns, 3));
+  });
+});
+
+describe('forecastAllCategories', () => {
+  it('returns 0 for each category when no transactions', () => {
+    const result = forecastAllCategories([], ['groceries', 'dining']);
+    expect(result).toEqual({ groceries: 0, dining: 0 });
+  });
+
+  it('returns forecasts for each category', () => {
+    const groceries = Category.fromId('groceries')!;
+    const txns = [
+      makeTransaction({ description: 'a', amount: 200, date: '2026-03-15', category: groceries }),
+      makeTransaction({ description: 'b', amount: 400, date: '2026-04-15', category: groceries }),
+    ];
+
+    const result = forecastAllCategories(txns, ['groceries', 'dining']);
+    expect(result.groceries).toBeGreaterThan(0);
+    expect(result.dining).toBe(0);
   });
 });

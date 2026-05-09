@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { formatCurrency, getCurrencyByCode } from '@/lib/currencyFormatter';
+import { formatCurrency, getCurrencyByCode, parseCurrencyAmount, formatSignedAmount, formatTransactionAmount } from '@/lib/currencyFormatter';
 
 const INR = { code: 'INR', symbol: '₹', name: 'Indian Rupee' };
 const USD = { code: 'USD', symbol: '$', name: 'US Dollar' };
@@ -36,5 +36,51 @@ describe('getCurrencyByCode', () => {
 
   it('returns undefined for unknown code', () => {
     expect(getCurrencyByCode('XYZ')).toBeUndefined();
+  });
+});
+
+describe('parseCurrencyAmount', () => {
+  it('parses a plain number string', () => {
+    expect(parseCurrencyAmount('123.45')).toBe(123.45);
+  });
+
+  it('strips currency symbols and commas', () => {
+    expect(parseCurrencyAmount('₹1,299.50')).toBe(1299.5);
+  });
+
+  it('returns 0 for non-numeric input', () => {
+    expect(parseCurrencyAmount('abc')).toBe(0);
+  });
+});
+
+describe('formatSignedAmount', () => {
+  it('shows negative sign for debits', () => {
+    const result = formatSignedAmount(500, true, INR);
+    expect(result).toBe('-₹500');
+  });
+
+  it('shows no sign for credits', () => {
+    const result = formatSignedAmount(500, false, INR);
+    expect(result).toBe('₹500');
+  });
+});
+
+describe('formatTransactionAmount', () => {
+  it('formats debit transaction with negative sign', () => {
+    const result = formatTransactionAmount({
+      amount: 100,
+      type: { isDebit: true },
+      localCurrency: INR,
+    });
+    expect(result).toBe('-₹100');
+  });
+
+  it('formats credit transaction with no sign', () => {
+    const result = formatTransactionAmount({
+      amount: 100,
+      type: { isDebit: false },
+      localCurrency: INR,
+    });
+    expect(result).toBe('₹100');
   });
 });

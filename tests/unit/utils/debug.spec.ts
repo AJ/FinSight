@@ -52,4 +52,41 @@ describe('debug', () => {
     debugError('test', 'error message');
     expect(console.error).toHaveBeenCalled();
   });
+
+  it('debugWarn outputs in development mode', async () => {
+    vi.stubEnv('NODE_ENV', 'development');
+    vi.resetModules();
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const mod = await import('@/lib/utils/debug');
+    mod.debugWarn('stage', 'warning message');
+    expect(console.warn).toHaveBeenCalledWith('[stage]', 'warning message');
+  });
+
+  it('debugWarn suppressed in production without DEBUG_LOGGING', async () => {
+    vi.stubEnv('NODE_ENV', 'production');
+    delete process.env.DEBUG_LOGGING;
+    vi.resetModules();
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const mod = await import('@/lib/utils/debug');
+    mod.debugWarn('stage', 'warning message');
+    expect(console.warn).not.toHaveBeenCalled();
+  });
+
+  it('debugSensitive outputs only with DEBUG_LOGGING=true', async () => {
+    vi.stubEnv('DEBUG_LOGGING', 'true');
+    vi.resetModules();
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    const mod = await import('@/lib/utils/debug');
+    mod.debugSensitive('prompt', 'sensitive data');
+    expect(console.log).toHaveBeenCalledWith('[prompt]', 'sensitive data');
+  });
+
+  it('debugSensitive suppressed without DEBUG_LOGGING', async () => {
+    delete process.env.DEBUG_LOGGING;
+    vi.resetModules();
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    const mod = await import('@/lib/utils/debug');
+    mod.debugSensitive('prompt', 'sensitive data');
+    expect(console.log).not.toHaveBeenCalled();
+  });
 });
