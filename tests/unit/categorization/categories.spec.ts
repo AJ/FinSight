@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { Category, CategoryType } from '@/models';
-import { DEFAULT_CATEGORIES } from '@/lib/categorization/categories';
+import { DEFAULT_CATEGORIES, getCategoryById, getCategoryIds, getCategoriesByType } from '@/lib/categorization/categories';
 
 describe('DEFAULT_CATEGORIES', () => {
   it('has all expected categories', () => {
@@ -51,5 +51,40 @@ describe('Category', () => {
     const ids = all.map(c => c.id);
     const uniqueIds = new Set(ids);
     expect(uniqueIds.size).toBe(ids.length);
+  });
+});
+
+describe('getCategoryById', () => {
+  it('returns category for valid ID', () => {
+    const cat = getCategoryById('groceries');
+    expect(cat).toBeDefined();
+    expect(cat!.name).toBe('Groceries');
+  });
+
+  it('returns undefined for unknown ID', () => {
+    expect(getCategoryById('nonexistent')).toBeUndefined();
+  });
+});
+
+describe('getCategoryIds', () => {
+  it('returns all category IDs as strings', () => {
+    const ids = getCategoryIds();
+    expect(ids.length).toBe(21);
+    expect(ids).toContain('groceries');
+    expect(ids).toContain('other');
+  });
+});
+
+describe('getCategoriesByType', () => {
+  it('returns only expense categories', () => {
+    const cats = getCategoriesByType(CategoryType.Expense);
+    expect(cats.length).toBeGreaterThan(0);
+    expect(cats.every(c => c.isExpense)).toBe(true);
+  });
+
+  it('returns only income categories', () => {
+    const cats = getCategoriesByType(CategoryType.Income);
+    expect(cats.length).toBeGreaterThan(0);
+    expect(cats.every(c => c.isIncome)).toBe(true);
   });
 });

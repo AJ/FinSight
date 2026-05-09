@@ -1,6 +1,20 @@
 import { describe, it, expect } from 'vitest';
-import { buildMerchantKey, findMatchingMerchantRule, applyMerchantRuleDecision, type MerchantRule } from '@/lib/categorization/merchantRules';
-import { SourceType } from '@/types';
+import {
+  buildMerchantKey,
+  findMatchingMerchantRule,
+  applyMerchantRuleDecision,
+  getMerchantRuleInput,
+  getMerchantRuleDecision,
+  isLegacyMerchantRule,
+  migrateLegacyMerchantRule,
+  MERCHANT_RULE_MIN_CONFIRMATIONS,
+  MERCHANT_RULE_MIN_LEAD,
+  type MerchantRule,
+  type MerchantRuleSourceType,
+} from '@/lib/categorization/merchantRules';
+import { SourceType, TransactionType } from '@/types';
+import { Category } from '@/models/Category';
+import '@/lib/categorization/categories';
 
 describe('buildMerchantKey', () => {
   it('normalizes known merchant patterns', () => {
@@ -151,3 +165,165 @@ function makeRule(overrides: Partial<MerchantRule>): MerchantRule {
     ...overrides,
   };
 }
+
+// ── Constants ──────────────────────────────────────────────────────────────
+
+describe('MERCHANT_RULE_MIN_CONFIRMATIONS', () => {
+  it('has expected value', () => {
+    expect(MERCHANT_RULE_MIN_CONFIRMATIONS).toBe(3);
+  });
+});
+
+describe('MERCHANT_RULE_MIN_LEAD', () => {
+  it('has expected value', () => {
+    expect(MERCHANT_RULE_MIN_LEAD).toBe(2);
+  });
+});
+
+// ── getMerchantRuleInput ───────────────────────────────────────────────────
+
+describe('getMerchantRuleInput', () => {
+  it('builds input from transaction with merchant', () => {
+    const input = getMerchantRuleInput({
+      description: 'AMAZON PURCHASE',
+      merchant: 'AMAZON',
+      type: TransactionType.Debit,
+      sourceType: SourceType.Bank,
+    });
+    expect(input.merchantKey).toBe('AMAZON');
+    expect(input.direction).toBe(TransactionType.Debit);
+    expect(input.sourceType).toBe(SourceType.Bank);
+  });
+
+  it('falls back to description when no merchant', () => {
+    const input = getMerchantRuleInput({
+      description: 'SWIGGY ORDER',
+      merchant: undefined,
+      type: TransactionType.Debit,
+      sourceType: SourceType.Bank,
+    });
+    expect(input.merchantKey).toBe('SWIGGY');
+  });
+
+  it('defaults sourceType to any when undefined', () => {
+    const input = getMerchantRuleInput({
+      description: 'AMAZON',
+      merchant: 'AMAZON',
+      type: TransactionType.Credit,
+      sourceType: undefined,
+    });
+    expect(input.sourceType).toBe('any');
+  });
+});
+
+// ── getMerchantRuleDecision ────────────────────────────────────────────────
+
+describe('getMerchantRuleDecision', () => {
+  it('builds decision from categorized transaction', () => {
+    const cat = Category.fromId('shopping')!;
+    const decision = getMerchantRuleDecision({
+      description: 'AMAZON PURCHASE',
+      merchant: 'AMAZON',
+      type: TransactionType.Debit,
+      sourceType: SourceType.Bank,
+      category: cat,
+    });
+    expect(decision).not.toBeNull();
+    expect(decision!.categoryId).toBe('shopping');
+    expect(decision!.sampleDescription).toBe('AMAZON PURCHASE');
+  });
+});
+
+// ── isLegacyMerchantRule ───────────────────────────────────────────────────
+
+describe('isLegacyMerchantRule', () => {
+  it('returns true for legacy rule shape', () => {
+    const legacy = {
+      merchantKey: 'AMAZON',
+      categoryId: 'shopping',
+      direction: 'debit' as const,
+      sourceType: SourceType.Bank,
+      confirmations: 5,
+      lastConfirmedAt: '2024-01-01',
+      sampleDescription: 'AMAZON PURCHASE',
+    };
+    expect(isLegacyMerchantRule(legacy)).toBe(true);
+  });
+
+  it('returns false for new rule shape (has categoryVotes)', () => {
+    const newRule = {
+      merchantKey: 'AMAZON',
+      categoryId: 'shopping',
+      categoryVotes: { shopping: 5 },
+      totalConfirmations: 5,
+      confirmations: 5,
+      direction: 'debit' as const,
+      sourceType: SourceType.Bank,
+      lastConfirmedAt: '2024-01-01',
+      sampleDescription: 'AMAZON PURCHASE',
+    };
+    expect(isLegacyMerchantRule(newRule)).toBe(false);
+  });
+
+  it('returns false for non-object', () => {
+    expect(isLegacyMerchantRule(null)).toBe(false);
+    expect(isLegacyMerchantRule('string')).toBe(false);
+  });
+});
+
+// ── migrateLegacyMerchantRule ──────────────────────────────────────────────
+
+describe('migrateLegacyMerchantRule', () => {
+  it('migrates a confident legacy rule', () => {
+    const legacy = {
+      merchantKey: 'AMAZON',
+      categoryId: 'shopping',
+      direction: 'debit' as const,
+      sourceType: SourceType.Bank,
+      confirmations: 5,
+      lastConfirmedAt: '2024-01-01',
+      sampleDescription: 'AMAZON PURCHASE',
+      ambiguous: false,
+    };
+    const migrated = migrateLegacyMerchantRule(legacy);
+    expect(migrated.merchantKey).toBe('AMAZON');
+    expect(migrated.categoryVotes).toEqual({ shopping: 5 });
+    expect(migrated.activeCategoryId).toBe('shopping');
+    expect(migrated.status).toBe('confident');
+    expect(migrated.totalConfirmations).toBe(5);
+    expect(migrated.statusReason).toBe('single-category');
+  });
+
+  it('migrates an ambiguous legacy rule', () => {
+    const legacy = {
+      merchantKey: 'SWIGGY',
+      categoryId: 'dining',
+      direction: 'debit' as const,
+      sourceType: SourceType.Bank,
+      confirmations: 2,
+      lastConfirmedAt: '2024-01-01',
+      sampleDescription: 'SWIGGY ORDER',
+      ambiguous: true,
+    };
+    const migrated = migrateLegacyMerchantRule(legacy);
+    expect(migrated.status).toBe('ambiguous');
+    expect(migrated.activeCategoryId).toBeUndefined();
+    expect(migrated.statusReason).toBe('conflict');
+  });
+
+  it('ensures minimum 1 confirmation', () => {
+    const legacy = {
+      merchantKey: 'TEST',
+      categoryId: 'other',
+      direction: 'debit' as const,
+      sourceType: 'any' as MerchantRuleSourceType,
+      confirmations: 0,
+      lastConfirmedAt: '2024-01-01',
+      sampleDescription: 'TEST',
+      ambiguous: false,
+    };
+    const migrated = migrateLegacyMerchantRule(legacy);
+    expect(migrated.totalConfirmations).toBe(1);
+    expect(migrated.categoryVotes.other).toBe(1);
+  });
+});

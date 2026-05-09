@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { Transaction, TransactionType, Category, CategoryType, SourceType } from '@/types';
-import { formatSubType, TRANSACTION_SUB_TYPES, type TransactionJSON } from '@/models/Transaction';
+import { formatSubType, TRANSACTION_SUB_TYPES } from '@/models/Transaction';
 import '@/lib/categorization/categories';
 
 function makeCategory(id: string, type: CategoryType = CategoryType.Expense): Category {
@@ -252,24 +252,22 @@ describe('Transaction.fromJSON edge cases', () => {
   });
 
   it('defaults localCurrency to INR when missing', () => {
-    const { localCurrency, ...json } = {
+    const json = {
       id: '1', date: '2024-01-15T00:00:00.000Z', description: 'T', amount: 100,
       type: TransactionType.Debit, category: 'food',
-      localCurrency: { code: 'INR', symbol: '₹', name: 'Indian Rupee' },
       isInternational: false,
-    } satisfies TransactionJSON;
-    const txn = Transaction.fromJSON(json as TransactionJSON);
+    };
+    const txn = Transaction.fromJSON(json as Parameters<typeof Transaction.fromJSON>[0]);
     expect(txn.localCurrency.code).toBe('INR');
   });
 
   it('defaults isInternational to false when missing', () => {
-    const { isInternational, ...json } = {
+    const json = {
       id: '1', date: '2024-01-15T00:00:00.000Z', description: 'T', amount: 100,
       type: TransactionType.Debit, category: 'food',
       localCurrency: { code: 'INR', symbol: '₹', name: 'Indian Rupee' },
-      isInternational: false,
-    } satisfies TransactionJSON;
-    const txn = Transaction.fromJSON(json as TransactionJSON);
+    };
+    const txn = Transaction.fromJSON(json as Parameters<typeof Transaction.fromJSON>[0]);
     expect(txn.isInternational).toBe(false);
   });
 

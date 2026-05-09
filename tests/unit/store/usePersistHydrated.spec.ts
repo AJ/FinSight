@@ -71,13 +71,7 @@ describe('usePersistHydrated', () => {
 
     unmount();
 
-    // After unmount, the unsubscribe functions were called.
-    // We verify by firing events and checking hasHydrated wasn't called again.
-    const callCountBefore = store.persist.hasHydrated.mock.calls.length;
-    store._fireFinish();
-    // hasHydrated may be called during event handling if subscription wasn't cleaned,
-    // but since we unsubscribed, it shouldn't be called from the subscriber side.
-    // The key assertion is that the subscriptions returned cleanup functions.
+    // The subscriptions returned cleanup functions that were called on unmount.
     expect(typeof hydrateSub).toBe('function');
     expect(typeof finishSub).toBe('function');
   });
