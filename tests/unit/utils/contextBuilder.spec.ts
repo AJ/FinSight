@@ -1,9 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
-
-// Mock date-fns
-vi.mock('date-fns', () => ({
-  format: vi.fn((date: Date) => date.toISOString()),
-}));
+import { describe, it, expect } from 'vitest';
 
 import { buildChatContextForQuestion } from '@/lib/chat/contextBuilder';
 import { makeTransaction } from '@tests/unit/factories';

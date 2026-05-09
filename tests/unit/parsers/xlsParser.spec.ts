@@ -1,11 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-vi.mock('@/lib/utils/debug', () => ({
-  debugLog: vi.fn(),
-  debugWarn: vi.fn(),
-  debugError: vi.fn(),
-}));
-
 const mockSheetToJson = vi.fn();
 const mockSheetToCsv = vi.fn();
 const mockRead = vi.fn();

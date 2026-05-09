@@ -1,91 +1,87 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-import { getClient } from '@/lib/llm/index';
-import { useSettingsStore } from '@/lib/store/settingsStore';
-import type { LLMClient, ChatChunk } from '@/lib/llm/types';
-
-vi.mock('@/lib/llm/index', () => ({
-  getClient: vi.fn(),
-}));
-
 import { checkLLMStatus } from '@/lib/llm/checkStatus';
+import { useSettingsStore } from '@/lib/store/settingsStore';
 
-/** Creates a minimal async iterable that yields nothing, for mocking chatStream. */
-function emptyChatStream(): AsyncIterable<ChatChunk> {
-  return (async function* () {})();
+// Mock fetch — the only external boundary (LLM HTTP calls go through here)
+const mockFetch = vi.fn();
+vi.stubGlobal('fetch', mockFetch);
+
+// ── Helpers ────────────────────────────────────────────────────────────────────
+
+function ollamaConnectedSequence(models: Array<{ name: string }> = []) {
+  mockFetch
+    .mockResolvedValueOnce({ ok: true, status: 200 }) // root URL check
+    .mockResolvedValueOnce({ ok: true, status: 200, json: () => Promise.resolve({ models }) }); // /api/tags
 }
 
-function makeLLMClient(checkStatusOverride?: LLMClient['checkStatus']): LLMClient {
-  return {
-    checkStatus: checkStatusOverride ?? vi.fn().mockResolvedValue({
-      connected: false,
-      models: [],
-      selectedModel: null,
-    }),
-    listModels: vi.fn().mockResolvedValue([]),
-    generate: vi.fn().mockResolvedValue(''),
-    chatStream: vi.fn().mockReturnValue(emptyChatStream()),
-  };
+function lmstudioConnectedSequence(models: Array<{ id: string }> = []) {
+  mockFetch.mockResolvedValueOnce({
+    ok: true,
+    status: 200,
+    json: () => Promise.resolve({ data: models }),
+  }); // /v1/models
 }
+
+// ── Setup ──────────────────────────────────────────────────────────────────────
 
 beforeEach(() => {
   vi.clearAllMocks();
+  localStorage.clear();
+  useSettingsStore.setState({
+    llmProvider: 'ollama',
+    llmServerUrl: 'http://localhost:11434',
+    llmModel: 'llama3',
+  });
 });
+
+// ── Tests ──────────────────────────────────────────────────────────────────────
 
 describe('checkLLMStatus', () => {
   it('uses store URL and provider when no args given', async () => {
-    const mockCheckStatus = vi.fn().mockResolvedValue({
-      connected: true,
-      models: [{ id: 'llama3' }],
-      selectedModel: 'llama3',
-    });
-    vi.mocked(getClient).mockReturnValue(makeLLMClient(mockCheckStatus));
+    ollamaConnectedSequence([{ name: 'llama3' }]);
 
     const result = await checkLLMStatus();
 
     const settings = useSettingsStore.getState();
-    expect(getClient).toHaveBeenCalledWith(settings.llmProvider);
-    expect(mockCheckStatus).toHaveBeenCalledWith(settings.llmServerUrl);
+    // Root URL check uses the store's server URL
+    expect(mockFetch).toHaveBeenCalledWith(
+      settings.llmServerUrl,
+      expect.objectContaining({ cache: 'no-store' }),
+    );
     expect(result.connected).toBe(true);
   });
 
   it('uses provided URL over store URL', async () => {
-    const mockCheckStatus = vi.fn().mockResolvedValue({
-      connected: false,
-      models: [],
-      selectedModel: null,
-    });
-    vi.mocked(getClient).mockReturnValue(makeLLMClient(mockCheckStatus));
+    ollamaConnectedSequence();
 
     await checkLLMStatus('http://custom:9999', 'ollama');
 
-    expect(mockCheckStatus).toHaveBeenCalledWith('http://custom:9999');
+    // Root URL check uses the provided URL
+    expect(mockFetch).toHaveBeenCalledWith(
+      'http://custom:9999',
+      expect.objectContaining({ cache: 'no-store' }),
+    );
   });
 
   it('uses provided provider over store provider', async () => {
-    const mockCheckStatus = vi.fn().mockResolvedValue({
-      connected: false,
-      models: [],
-      selectedModel: null,
-    });
-    vi.mocked(getClient).mockReturnValue(makeLLMClient(mockCheckStatus));
+    lmstudioConnectedSequence();
 
-    await checkLLMStatus(undefined, 'lmstudio');
+    await checkLLMStatus('http://localhost:1234', 'lmstudio');
 
-    expect(getClient).toHaveBeenCalledWith('lmstudio');
+    // LM Studio adapter calls /v1/models
+    expect(mockFetch).toHaveBeenCalledWith(
+      'http://localhost:1234/v1/models',
+      expect.objectContaining({ cache: 'no-store' }),
+    );
   });
 
   it('delegates to correct client for ollama', async () => {
-    const mockCheckStatus = vi.fn().mockResolvedValue({
-      connected: true,
-      models: [{ id: 'qwen2.5', contextLength: 8192 }],
-      selectedModel: 'qwen2.5',
-    });
-    vi.mocked(getClient).mockReturnValue(makeLLMClient(mockCheckStatus));
+    ollamaConnectedSequence([{ name: 'qwen2.5' }]);
 
     const result = await checkLLMStatus('http://localhost:11434', 'ollama');
 
     expect(result.connected).toBe(true);
-    expect(result.models).toEqual([{ id: 'qwen2.5', contextLength: 8192 }]);
+    expect(result.models.some((m) => m.id === 'qwen2.5')).toBe(true);
   });
 });

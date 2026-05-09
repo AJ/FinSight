@@ -1,81 +1,110 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-vi.mock('@/lib/llm/checkStatus', () => ({
-  checkLLMStatus: vi.fn(),
-}));
-
-vi.mock('@/lib/store/settingsStore', () => ({
-  useSettingsStore: {
-    getState: vi.fn(),
-  },
-}));
-
 import { useLLMConnectionStore, checkLLMConnection, getLLMConnectionStatus } from '@/lib/store/llmConnectionStore';
-import { checkLLMStatus } from '@/lib/llm/checkStatus';
 import { useSettingsStore } from '@/lib/store/settingsStore';
 
-const mockCheckLLMStatus = vi.mocked(checkLLMStatus);
-const mockGetSettings = vi.mocked(useSettingsStore.getState);
+// Mock fetch — the only external boundary (LLM HTTP calls go through here)
+const mockFetch = vi.fn();
+vi.stubGlobal('fetch', mockFetch);
+
+// ── Helpers ────────────────────────────────────────────────────────────────────
+
+function ollamaRootResponse() {
+  return { ok: true, status: 200 };
+}
+
+function ollamaModelsResponse(models: Array<{ name: string }> = []) {
+  return {
+    ok: true,
+    status: 200,
+    json: () => Promise.resolve({ models }),
+  };
+}
+
+function ollamaConnectedSequence(models: Array<{ name: string }> = []) {
+  mockFetch
+    .mockResolvedValueOnce(ollamaRootResponse())
+    .mockResolvedValueOnce(ollamaModelsResponse(models));
+}
+
+// ── Setup ──────────────────────────────────────────────────────────────────────
 
 beforeEach(() => {
   vi.clearAllMocks();
+  localStorage.clear();
+
   useLLMConnectionStore.getState().clearStatus();
-  mockGetSettings.mockReturnValue({
-    llmProvider: 'lmstudio',
-    llmServerUrl: 'http://localhost:1234',
-    llmModel: 'test-model',
-    setModelContextLength: vi.fn(),
-  } as unknown as ReturnType<typeof useSettingsStore.getState>);
+  useSettingsStore.setState({
+    llmProvider: 'ollama',
+    llmServerUrl: 'http://localhost:11434',
+    llmModel: 'llama3',
+  });
+
+  // Default: connected Ollama server with no models
+  ollamaConnectedSequence();
 });
+
+// ── Tests ──────────────────────────────────────────────────────────────────────
 
 describe('useLLMConnectionStore', () => {
   it('checks connection and caches status', async () => {
-    mockCheckLLMStatus.mockResolvedValue({ connected: true, models: [{ id: 'test-model', contextLength: 4096 }], selectedModel: null });
     const status = await useLLMConnectionStore.getState().checkConnection();
+
     expect(status.connected).toBe(true);
     expect(getLLMConnectionStatus()).not.toBeNull();
   });
 
   it('returns cached status within TTL', async () => {
-    mockCheckLLMStatus.mockResolvedValue({ connected: true, models: [{ id: 'test-model', contextLength: 4096 }], selectedModel: null });
     await useLLMConnectionStore.getState().checkConnection();
     await useLLMConnectionStore.getState().checkConnection();
-    expect(mockCheckLLMStatus).toHaveBeenCalledTimes(1);
+
+    // First check: root + /api/tags = 2 fetch calls. Second check uses cache = 0 calls.
+    expect(mockFetch).toHaveBeenCalledTimes(2);
   });
 
   it('invalidates cache on force', async () => {
-    mockCheckLLMStatus.mockResolvedValue({ connected: true, models: [{ id: 'test-model', contextLength: 4096 }], selectedModel: null });
+    // beforeEach set up 2 responses for the first check; add 2 more for the forced check
+    ollamaConnectedSequence();
+
     await useLLMConnectionStore.getState().checkConnection();
     await useLLMConnectionStore.getState().checkConnection(true);
-    expect(mockCheckLLMStatus).toHaveBeenCalledTimes(2);
+
+    // First check: 2 fetch calls. Forced check: 2 more = 4 total.
+    expect(mockFetch).toHaveBeenCalledTimes(4);
   });
 
   it('deduplicates concurrent requests', async () => {
-    mockCheckLLMStatus.mockResolvedValue({ connected: true, models: [{ id: 'test-model', contextLength: 4096 }], selectedModel: null });
     const [s1, s2] = await Promise.all([
       useLLMConnectionStore.getState().checkConnection(),
       useLLMConnectionStore.getState().checkConnection(),
     ]);
-    expect(mockCheckLLMStatus).toHaveBeenCalledTimes(1);
+
+    // Only one check (2 fetch calls) — second request reuses in-flight promise
+    expect(mockFetch).toHaveBeenCalledTimes(2);
     expect(s1).toEqual(s2);
   });
 
   it('handles connection failure', async () => {
-    mockCheckLLMStatus.mockResolvedValue({ connected: false, models: [], selectedModel: null });
+    mockFetch.mockReset();
+    mockFetch.mockResolvedValue({ ok: false, status: 503 });
+
     const status = await useLLMConnectionStore.getState().checkConnection();
+
     expect(status.connected).toBe(false);
+    expect(status.models).toEqual([]);
   });
 
   it('clearStatus resets all state', () => {
     useLLMConnectionStore.getState().clearStatus();
+
     expect(getLLMConnectionStatus()).toBeNull();
   });
 });
 
 describe('checkLLMConnection convenience function', () => {
   it('delegates to store', async () => {
-    mockCheckLLMStatus.mockResolvedValue({ connected: true, models: [{ id: 'test-model', contextLength: 4096 }], selectedModel: null });
     const status = await checkLLMConnection();
+
     expect(status.connected).toBe(true);
   });
 });

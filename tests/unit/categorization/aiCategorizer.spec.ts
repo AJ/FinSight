@@ -1,16 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
-
-// Mock dependencies
-vi.mock('@/lib/services/merchantRuleService', () => ({
-  findMerchantRuleForTransaction: vi.fn(),
-}));
-
-vi.mock('@/lib/llm/index', () => ({
-  getClient: vi.fn(),
-}));
-
-// Import categories first
-import '@/lib/categorization/categories';
+import { describe, it, expect } from 'vitest';
 
 import { applyCategorizationResults, categorizeByKeywords } from '@/lib/categorization/aiCategorizer';
 import { CategorizedBy } from '@/types';

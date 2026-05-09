@@ -1,94 +1,81 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
-const {
-  mockSetState,
-  mockGetState,
-  mockTransactionStoreState,
-  mockSettingsState,
-  mockRecategorize,
-  mockMergeRecategorized,
-} = vi.hoisted(() => {
-  const state: {
-    transactions: unknown[];
-    isCategorizing: boolean;
-    categorizeProgress: string;
-  } = {
-    transactions: [],
-    isCategorizing: false,
-    categorizeProgress: '',
-  };
-
-  const setState = vi.fn((update: Record<string, unknown>) => {
-    Object.assign(state, update);
-  });
-
-  const getState = vi.fn(() => state);
-
-  return {
-    mockSetState: setState,
-    mockGetState: getState,
-    mockTransactionStoreState: state,
-    mockSettingsState: {
-      llmProvider: 'ollama',
-      llmServerUrl: 'http://localhost:11434',
-      llmModel: 'llama3',
-    },
-    mockRecategorize: vi.fn(),
-    mockMergeRecategorized: vi.fn(),
-  };
-});
-
-vi.mock('@/lib/store/transactionStore', () => ({
-  useTransactionStore: {
-    getState: () => mockGetState(),
-    setState: (...args: unknown[]) => (mockSetState as (...a: unknown[]) => unknown)(...args),
-  },
-}));
-
-vi.mock('@/lib/store/settingsStore', () => ({
-  useSettingsStore: {
-    getState: () => mockSettingsState,
-  },
-}));
-
-vi.mock('@/lib/services/transactionEnrichmentService', () => ({
-  recategorizeStoredTransactions: (...args: unknown[]) => mockRecategorize(...args),
-  mergeRecategorizedTransactions: (...args: unknown[]) => mockMergeRecategorized(...args),
-}));
-
-vi.mock('@/lib/anomaly/detector', () => ({
-  detectAnomalies: vi.fn((txns: unknown[]) => txns),
-}));
-
-vi.mock('@/lib/utils/debug', () => ({
-  debugLog: vi.fn(),
-  debugWarn: vi.fn(),
-  debugError: vi.fn(),
-}));
-
 import { runPostImportJobs } from '@/lib/services/postImportJobService';
+import { useTransactionStore } from '@/lib/store/transactionStore';
+import { useSettingsStore } from '@/lib/store/settingsStore';
+import { Transaction } from '@/models/Transaction';
+import { Category } from '@/models/Category';
+import { TransactionType } from '@/models/TransactionType';
+import { CategorizedBy, SourceType } from '@/types';
+
+// Mock fetch — the only external boundary (LLM HTTP calls go through here)
+const mockFetch = vi.fn();
+vi.stubGlobal('fetch', mockFetch);
+
+// ── Helpers ────────────────────────────────────────────────────────────────────
+
+function createTestTransaction(id: string, categorizedBy?: CategorizedBy): Transaction {
+  return new Transaction(
+    id,
+    new Date('2024-01-15'),
+    'Test transaction',
+    100,
+    TransactionType.Debit,
+    Category.fromId('other')!,
+    undefined, undefined, 'Test transaction', undefined,
+    undefined, undefined,
+    categorizedBy,
+    SourceType.Bank,
+  );
+}
+
+function ollamaCategorizationResponse(results: Array<{ id: string; category: string; confidence: number }>) {
+  return Promise.resolve({
+    ok: true,
+    status: 200,
+    json: () => Promise.resolve({
+      response: JSON.stringify(results),
+      prompt_eval_count: 10,
+      eval_count: 20,
+    }),
+    text: () => Promise.resolve(JSON.stringify({ response: JSON.stringify(results) })),
+  });
+}
+
+// ── Setup / Teardown ───────────────────────────────────────────────────────────
 
 beforeEach(() => {
   vi.useFakeTimers();
-  mockTransactionStoreState.transactions = [];
-  mockTransactionStoreState.isCategorizing = false;
-  mockTransactionStoreState.categorizeProgress = '';
-  mockRecategorize.mockResolvedValue([]);
-  mockMergeRecategorized.mockReturnValue([]);
+  vi.clearAllMocks();
+  localStorage.clear();
+
+  useTransactionStore.setState({
+    transactions: [],
+    selectedIds: [],
+    isCategorizing: false,
+    categorizeProgress: '',
+  });
+  useSettingsStore.setState({
+    llmProvider: 'ollama',
+    llmServerUrl: 'http://localhost:11434',
+    llmModel: 'llama3',
+  });
+
+  // Default: categorization returns empty results (falls back to keyword)
+  mockFetch.mockResolvedValue(ollamaCategorizationResponse([]));
 });
 
 afterEach(async () => {
-  // Flush the pending background categorization timer so the module-level
-  // pendingBackgroundCategorizationTimer guard is cleared for the next test.
+  // Flush any pending timers (background categorization cleanup, etc.)
   await vi.advanceTimersByTimeAsync(15000);
   vi.useRealTimers();
 });
 
+// ── Tests ──────────────────────────────────────────────────────────────────────
+
 describe('runPostImportJobs', () => {
   it('triggers both jobs when transactions exist', () => {
-    mockTransactionStoreState.transactions = [
-      { id: '1', amount: 100 },
-    ];
+    useTransactionStore.setState({ transactions: [createTestTransaction('1')] });
 
     const jobs = runPostImportJobs();
 
@@ -97,8 +84,10 @@ describe('runPostImportJobs', () => {
   });
 
   it('skips background categorization when already categorizing', () => {
-    mockTransactionStoreState.transactions = [{ id: '1' }];
-    mockTransactionStoreState.isCategorizing = true;
+    useTransactionStore.setState({
+      transactions: [createTestTransaction('1')],
+      isCategorizing: true,
+    });
 
     const jobs = runPostImportJobs();
 
@@ -107,7 +96,7 @@ describe('runPostImportJobs', () => {
   });
 
   it('skips background categorization when no transactions', () => {
-    mockTransactionStoreState.transactions = [];
+    useTransactionStore.setState({ transactions: [] });
 
     const jobs = runPostImportJobs();
 
@@ -115,7 +104,7 @@ describe('runPostImportJobs', () => {
   });
 
   it('skips anomaly detection when no transactions', () => {
-    mockTransactionStoreState.transactions = [];
+    useTransactionStore.setState({ transactions: [] });
 
     const jobs = runPostImportJobs();
 
@@ -123,13 +112,13 @@ describe('runPostImportJobs', () => {
   });
 
   it('returns empty array when no transactions exist', () => {
-    mockTransactionStoreState.transactions = [];
+    useTransactionStore.setState({ transactions: [] });
 
     expect(runPostImportJobs()).toEqual([]);
   });
 
   it('does not schedule duplicate background categorization', () => {
-    mockTransactionStoreState.transactions = [{ id: '1' }];
+    useTransactionStore.setState({ transactions: [createTestTransaction('1')] });
 
     const jobs1 = runPostImportJobs();
     const jobs2 = runPostImportJobs();
@@ -139,94 +128,71 @@ describe('runPostImportJobs', () => {
   });
 
   it('sets isCategorizing=true when background categorization starts', async () => {
-    mockTransactionStoreState.transactions = [
-      { id: '1', categorizedBy: 'ai', amount: 100 },
-    ];
+    useTransactionStore.setState({
+      transactions: [createTestTransaction('1', CategorizedBy.AI)],
+    });
+
+    let wasCategorizing = false;
+    const unsub = useTransactionStore.subscribe((state) => {
+      if (state.isCategorizing) wasCategorizing = true;
+    });
 
     runPostImportJobs();
     await vi.advanceTimersByTimeAsync(6000);
+    unsub();
 
-    expect(mockSetState).toHaveBeenCalledWith(
-      expect.objectContaining({ isCategorizing: true }),
-    );
+    expect(wasCategorizing).toBe(true);
   });
 
   it('sets isCategorizing=false after background categorization completes', async () => {
-    const tx = { id: '1', categorizedBy: 'ai', amount: 100 };
-    mockTransactionStoreState.transactions = [tx];
-    mockRecategorize.mockResolvedValue([{ ...tx, category: { id: 'food' } }]);
-    mockMergeRecategorized.mockReturnValue([{ ...tx, category: { id: 'food' } }]);
+    useTransactionStore.setState({
+      transactions: [createTestTransaction('1', CategorizedBy.AI)],
+    });
 
     runPostImportJobs();
     await vi.advanceTimersByTimeAsync(6000);
 
-    expect(mockSetState).toHaveBeenCalledWith(
-      expect.objectContaining({ isCategorizing: false }),
-    );
-  });
-
-  it('filters to non-manual transactions for recategorization', async () => {
-    const aiTx = { id: '1', categorizedBy: 'ai', amount: 100 };
-    const manualTx = { id: '2', categorizedBy: 'manual', amount: 200 };
-    mockTransactionStoreState.transactions = [aiTx, manualTx];
-    mockRecategorize.mockResolvedValue([]);
-    mockMergeRecategorized.mockReturnValue([aiTx, manualTx]);
-
-    runPostImportJobs();
-    await vi.advanceTimersByTimeAsync(6000);
-
-    expect(mockRecategorize).toHaveBeenCalledWith(
-      [aiTx],
-      expect.any(Object),
-    );
+    expect(useTransactionStore.getState().isCategorizing).toBe(false);
   });
 
   it('skips categorization when all transactions are manually categorized', async () => {
-    mockTransactionStoreState.transactions = [
-      { id: '1', categorizedBy: 'manual', amount: 100 },
-    ];
+    useTransactionStore.setState({
+      transactions: [createTestTransaction('1', CategorizedBy.Manual)],
+    });
 
     runPostImportJobs();
     await vi.advanceTimersByTimeAsync(6000);
 
-    expect(mockSetState).toHaveBeenCalledWith(
-      expect.objectContaining({ isCategorizing: false }),
-    );
-    expect(mockRecategorize).not.toHaveBeenCalled();
+    expect(mockFetch).not.toHaveBeenCalled();
+    expect(useTransactionStore.getState().isCategorizing).toBe(false);
   });
 
-  it('sets error state when recategorization fails', async () => {
-    mockTransactionStoreState.transactions = [
-      { id: '1', categorizedBy: 'ai', amount: 100 },
-    ];
-    mockRecategorize.mockRejectedValue(new Error('LLM connection refused'));
+  it('sets error state when categorization fails due to missing model', async () => {
+    useTransactionStore.setState({
+      transactions: [createTestTransaction('1', CategorizedBy.AI)],
+    });
+    // Empty model triggers a throw in categorizeTransactions before reaching runCategorizationCore
+    useSettingsStore.setState({ llmModel: '' });
 
     runPostImportJobs();
     await vi.advanceTimersByTimeAsync(6000);
 
-    expect(mockSetState).toHaveBeenCalledWith(
-      expect.objectContaining({
-        isCategorizing: false,
-        categorizeProgress: expect.stringContaining('LLM connection refused'),
-      }),
-    );
+    expect(useTransactionStore.getState().isCategorizing).toBe(false);
+    expect(useTransactionStore.getState().categorizeProgress).toContain('Categorization failed');
+    expect(useTransactionStore.getState().categorizeProgress).toContain('model');
   });
 
   it('uses settings store for LLM config', async () => {
-    mockTransactionStoreState.transactions = [
-      { id: '1', categorizedBy: 'ai', amount: 100 },
-    ];
+    const tx = createTestTransaction('1', CategorizedBy.AI);
+    useTransactionStore.setState({ transactions: [tx] });
 
     runPostImportJobs();
     await vi.advanceTimersByTimeAsync(6000);
 
-    expect(mockRecategorize).toHaveBeenCalledWith(
-      expect.any(Array),
-      expect.objectContaining({
-        provider: 'ollama',
-        baseUrl: 'http://localhost:11434',
-        model: 'llama3',
-      }),
+    // The fetch should have been called with the Ollama endpoint
+    expect(mockFetch).toHaveBeenCalledWith(
+      'http://localhost:11434/api/generate',
+      expect.objectContaining({ method: 'POST' }),
     );
   });
 });

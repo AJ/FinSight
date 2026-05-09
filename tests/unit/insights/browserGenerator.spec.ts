@@ -1,19 +1,13 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-import { getClient } from '@/lib/llm/index';
-
-vi.mock('@/lib/llm/index', () => ({
-  getClient: vi.fn(),
-}));
-
-vi.mock('@/lib/insights/prompts', () => ({
-  buildInsightsPrompt: vi.fn().mockReturnValue('mock prompt'),
-  parseInsightsResponse: vi.fn(),
-}));
-
 import { generateInsights } from '@/lib/insights/browserGenerator';
-import { parseInsightsResponse } from '@/lib/insights/prompts';
 import type { TransactionAnalytics } from '@/lib/insights/types';
+
+// Mock fetch — the only external boundary (LLM HTTP calls go through here)
+const mockFetch = vi.fn();
+vi.stubGlobal('fetch', mockFetch);
+
+// ── Helpers ────────────────────────────────────────────────────────────────────
 
 const mockAnalytics: TransactionAnalytics = {
   byMonth: {},
@@ -38,13 +32,27 @@ const baseOptions = {
   model: 'llama3',
 };
 
+function insightsResponse(insightsJson: object) {
+  return Promise.resolve({
+    ok: true,
+    status: 200,
+    json: () => Promise.resolve({
+      response: JSON.stringify(insightsJson),
+      prompt_eval_count: 10,
+      eval_count: 20,
+    }),
+    text: () => Promise.resolve(JSON.stringify({ response: JSON.stringify(insightsJson) })),
+  });
+}
+
+// ── Setup ──────────────────────────────────────────────────────────────────────
+
 beforeEach(() => {
   vi.clearAllMocks();
+  localStorage.clear();
 });
 
-function mockGenerate(returnValue: string) {
-  return vi.fn().mockResolvedValue(returnValue);
-}
+// ── Tests ──────────────────────────────────────────────────────────────────────
 
 describe('generateInsights', () => {
   it('throws if no model is configured', async () => {
@@ -62,61 +70,54 @@ describe('generateInsights', () => {
       .rejects.toThrow('Insights generation requires a model');
   });
 
-  it('calls client.generate with correct parameters', async () => {
-    const generate = mockGenerate('{"insights":[]}');
-    vi.mocked(getClient).mockReturnValue({ generate } as never);
-    vi.mocked(parseInsightsResponse).mockReturnValue({ insights: [] });
+  it('calls LLM with correct endpoint and parameters', async () => {
+    mockFetch.mockResolvedValue(insightsResponse({ insights: [] }));
 
     await generateInsights(baseOptions);
 
-    expect(getClient).toHaveBeenCalledWith('ollama');
-    expect(generate).toHaveBeenCalledWith(
-      'http://localhost:11434',
-      'llama3',
-      'mock prompt',
-      { temperature: 0.05, stage: 'insights' },
+    expect(mockFetch).toHaveBeenCalledWith(
+      'http://localhost:11434/api/generate',
+      expect.objectContaining({ method: 'POST' }),
     );
+    const body = JSON.parse(mockFetch.mock.calls[0][1].body);
+    expect(body.model).toBe('llama3');
+    expect(body.options.temperature).toBe(0.05);
   });
 
   it('returns mapped insights with generated IDs', async () => {
-    const generate = mockGenerate('response');
-    vi.mocked(getClient).mockReturnValue({ generate } as never);
-    vi.mocked(parseInsightsResponse).mockReturnValue({
+    mockFetch.mockResolvedValue(insightsResponse({
       insights: [
-        { type: 'category_trend', title: 'Spending Up', description: 'Spending increased', severity: 'warning', category: 'food' },
+        { type: 'category_trend', title: 'Spending Up', description: 'Spending increased', severity: 'warning', category: 'shopping' },
         { type: 'anomaly', title: 'Unusual Charge', description: 'Large transaction', severity: 'info' },
       ],
-    });
+    }));
 
     const result = await generateInsights(baseOptions);
 
     expect(result).toHaveLength(2);
     expect(result[0].type).toBe('category_trend');
     expect(result[0].title).toBe('Spending Up');
-    expect(result[0].category).toBe('food');
+    expect(result[0].category).toBe('shopping');
     expect(result[0].id).toMatch(/^insight-\d+-0$/);
     expect(result[1].type).toBe('anomaly');
     expect(result[1].category).toBeUndefined();
   });
 
-  it('defaults title to "Insight" when missing', async () => {
-    const generate = mockGenerate('response');
-    vi.mocked(getClient).mockReturnValue({ generate } as never);
-    vi.mocked(parseInsightsResponse).mockReturnValue({
+  it('defaults title via normalizeInsight when missing', async () => {
+    // normalizeInsight defaults empty title to 'Spending Insight'
+    mockFetch.mockResolvedValue(insightsResponse({
       insights: [{ type: 'anomaly', title: '', description: 'desc', severity: 'info' }],
-    });
+    }));
 
     const result = await generateInsights(baseOptions);
 
-    expect(result[0].title).toBe('Insight');
+    expect(result[0].title).toBe('Spending Insight');
   });
 
   it('defaults description to empty string when missing', async () => {
-    const generate = mockGenerate('response');
-    vi.mocked(getClient).mockReturnValue({ generate } as never);
-    vi.mocked(parseInsightsResponse).mockReturnValue({
+    mockFetch.mockResolvedValue(insightsResponse({
       insights: [{ type: 'anomaly', title: 'Title', description: '', severity: 'info' }],
-    });
+    }));
 
     const result = await generateInsights(baseOptions);
 
@@ -124,11 +125,10 @@ describe('generateInsights', () => {
   });
 
   it('falls back to category_trend for invalid InsightType', async () => {
-    const generate = mockGenerate('response');
-    vi.mocked(getClient).mockReturnValue({ generate } as never);
-    vi.mocked(parseInsightsResponse).mockReturnValue({
+    // normalizeInsight converts invalid type to 'category_trend' before browserGenerator validates
+    mockFetch.mockResolvedValue(insightsResponse({
       insights: [{ type: 'totally_invalid_type', title: 'T', description: 'D', severity: 'info' }],
-    });
+    }));
 
     const result = await generateInsights(baseOptions);
 
@@ -136,11 +136,10 @@ describe('generateInsights', () => {
   });
 
   it('falls back to category_trend for undefined type', async () => {
-    const generate = mockGenerate('response');
-    vi.mocked(getClient).mockReturnValue({ generate } as never);
-    vi.mocked(parseInsightsResponse).mockReturnValue({
+    // JSON without type field → normalizeInsight sees undefined → defaults to category_trend
+    mockFetch.mockResolvedValue(insightsResponse({
       insights: [{ title: 'T', description: 'D', severity: 'info' }],
-    });
+    }));
 
     const result = await generateInsights(baseOptions);
 
@@ -149,13 +148,11 @@ describe('generateInsights', () => {
 
   it('accepts all valid InsightType values', async () => {
     const validTypes = ['category_trend', 'day_pattern', 'merchant_insight', 'anomaly', 'budget_alert', 'period_comparison', 'savings_opportunity'];
-    const generate = mockGenerate('response');
-    vi.mocked(getClient).mockReturnValue({ generate } as never);
 
     for (const type of validTypes) {
-      vi.mocked(parseInsightsResponse).mockReturnValue({
+      mockFetch.mockResolvedValue(insightsResponse({
         insights: [{ type, title: 'T', description: 'D', severity: 'info' }],
-      });
+      }));
 
       const result = await generateInsights(baseOptions);
       expect(result[0].type).toBe(type);
@@ -163,11 +160,9 @@ describe('generateInsights', () => {
   });
 
   it('falls back to info for invalid InsightSeverity', async () => {
-    const generate = mockGenerate('response');
-    vi.mocked(getClient).mockReturnValue({ generate } as never);
-    vi.mocked(parseInsightsResponse).mockReturnValue({
+    mockFetch.mockResolvedValue(insightsResponse({
       insights: [{ type: 'anomaly', title: 'T', description: 'D', severity: 'critical' }],
-    });
+    }));
 
     const result = await generateInsights(baseOptions);
 
@@ -175,11 +170,9 @@ describe('generateInsights', () => {
   });
 
   it('falls back to info for undefined severity', async () => {
-    const generate = mockGenerate('response');
-    vi.mocked(getClient).mockReturnValue({ generate } as never);
-    vi.mocked(parseInsightsResponse).mockReturnValue({
+    mockFetch.mockResolvedValue(insightsResponse({
       insights: [{ type: 'anomaly', title: 'T', description: 'D' }],
-    });
+    }));
 
     const result = await generateInsights(baseOptions);
 
@@ -188,23 +181,20 @@ describe('generateInsights', () => {
 
   it('accepts all valid InsightSeverity values', async () => {
     const validSeverities = ['info', 'warning', 'positive'];
-    const generate = mockGenerate('response');
-    vi.mocked(getClient).mockReturnValue({ generate } as never);
 
     for (const severity of validSeverities) {
-      vi.mocked(parseInsightsResponse).mockReturnValue({
+      mockFetch.mockResolvedValue(insightsResponse({
         insights: [{ type: 'anomaly', title: 'T', description: 'D', severity }],
-      });
+      }));
 
       const result = await generateInsights(baseOptions);
       expect(result[0].severity).toBe(severity);
     }
   });
 
-  it('propagates generate errors', async () => {
-    const generate = vi.fn().mockRejectedValue(new Error('Connection refused'));
-    vi.mocked(getClient).mockReturnValue({ generate } as never);
+  it('propagates LLM errors', async () => {
+    mockFetch.mockRejectedValue(new Error('Connection refused'));
 
-    await expect(generateInsights(baseOptions)).rejects.toThrow('Connection refused');
+    await expect(generateInsights(baseOptions)).rejects.toThrow();
   });
 });

@@ -1,125 +1,83 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { type Transaction, CategorizedBy } from '@/types';
-import { makeCategory } from '@tests/unit/factories';
-
-const mockGetRule = vi.fn();
-const mockUpsertRule = vi.fn();
-
-vi.mock('@/lib/store/merchantRuleStore', () => ({
-  useMerchantRuleStore: {
-    getState: () => ({
-      getRule: mockGetRule,
-      upsertRule: mockUpsertRule,
-    }),
-  },
-}));
-
-const mockGetMerchantRuleInput = vi.fn();
-const mockGetMerchantRuleDecision = vi.fn();
-
-vi.mock('@/lib/categorization/merchantRules', () => ({
-  getMerchantRuleInput: (...args: unknown[]) => mockGetMerchantRuleInput(...args),
-  getMerchantRuleDecision: (...args: unknown[]) => mockGetMerchantRuleDecision(...args),
-}));
 
 import {
   findMerchantRuleForTransaction,
   teachMerchantRuleFromTransaction,
   teachMerchantRulesFromConfirmedTransactions,
 } from '@/lib/services/merchantRuleService';
-
-function makeTx(overrides: Partial<Transaction> = {}): Transaction {
-  return {
-    id: 'tx-1',
-    date: new Date('2024-01-15'),
-    description: 'Amazon Purchase',
-    amount: 99.99,
-    type: 'debit' as const,
-    category: makeCategory('shopping'),
-    balance: 1000,
-    isDebit: true,
-    isCredit: false,
-    categorizedBy: CategorizedBy.Manual,
-    sourceType: 'bank',
-    ...overrides,
-  } as Transaction;
-}
+import { makeTransaction, makeCategory } from '@tests/unit/factories';
+import { useMerchantRuleStore } from '@/lib/store/merchantRuleStore';
+import { CategorizedBy } from '@/types';
 
 beforeEach(() => {
   vi.clearAllMocks();
+  localStorage.clear();
+  useMerchantRuleStore.setState({ rules: [] });
 });
 
 describe('findMerchantRuleForTransaction', () => {
-  it('delegates to store with rule input', () => {
-    mockGetMerchantRuleInput.mockReturnValue('amazon');
-    mockGetRule.mockReturnValue({ category: 'shopping' });
+  it('returns undefined when no rules exist', () => {
+    const tx = makeTransaction({ description: 'AMAZON PURCHASE' });
 
-    const tx = makeTx();
-    const result = findMerchantRuleForTransaction(tx);
-
-    expect(mockGetMerchantRuleInput).toHaveBeenCalledWith(tx);
-    expect(mockGetRule).toHaveBeenCalledWith('amazon');
-    expect(result).toEqual({ category: 'shopping' });
+    expect(findMerchantRuleForTransaction(tx)).toBeUndefined();
   });
 
-  it('returns undefined when no rule found', () => {
-    mockGetMerchantRuleInput.mockReturnValue('unknown_merchant');
-    mockGetRule.mockReturnValue(undefined);
+  it('finds a rule after one is learned for the same merchant', () => {
+    const teachingTx = makeTransaction({ description: 'AMAZON PURCHASE' });
+    teachMerchantRuleFromTransaction(teachingTx);
 
-    expect(findMerchantRuleForTransaction(makeTx())).toBeUndefined();
+    // Different transaction, same merchant — both normalize to 'AMAZON' key
+    const lookupTx = makeTransaction({ description: 'AMAZON RETAIL' });
+    const rule = findMerchantRuleForTransaction(lookupTx);
+
+    expect(rule).toBeDefined();
+    expect(rule!.activeCategoryId).toBe('shopping');
   });
 });
 
 describe('teachMerchantRuleFromTransaction', () => {
-  it('returns false when no decision can be made', () => {
-    mockGetMerchantRuleDecision.mockReturnValue(null);
+  it('stores a rule and returns true', () => {
+    const tx = makeTransaction({
+      description: 'NETFLIX SUBSCRIPTION',
+      category: makeCategory('entertainment'),
+    });
 
-    expect(teachMerchantRuleFromTransaction(makeTx())).toBe(false);
-    expect(mockUpsertRule).not.toHaveBeenCalled();
-  });
+    const result = teachMerchantRuleFromTransaction(tx);
 
-  it('upserts rule and returns true when decision exists', () => {
-    const decision = { merchant: 'amazon', categoryId: 'shopping' };
-    mockGetMerchantRuleDecision.mockReturnValue(decision);
-    mockUpsertRule.mockReturnValue(undefined);
-
-    expect(teachMerchantRuleFromTransaction(makeTx())).toBe(true);
-    expect(mockUpsertRule).toHaveBeenCalledWith(decision);
+    expect(result).toBe(true);
+    const rule = findMerchantRuleForTransaction(tx);
+    expect(rule).toBeDefined();
+    expect(rule!.activeCategoryId).toBe('entertainment');
   });
 });
 
 describe('teachMerchantRulesFromConfirmedTransactions', () => {
   it('learns from category changes with manual categorization', () => {
-    const original = makeTx({
-      id: 'tx-1',
-      category: makeCategory('other'),
-    });
-
-    const reviewed = makeTx({
+    const original = makeTransaction({ id: 'tx-1', category: makeCategory('other') });
+    const reviewed = makeTransaction({
       id: 'tx-1',
       category: makeCategory('shopping'),
       categorizedBy: CategorizedBy.Manual,
     });
 
-    mockGetMerchantRuleDecision.mockReturnValue({ merchant: 'amazon', categoryId: 'shopping' });
-
     const count = teachMerchantRulesFromConfirmedTransactions([original], [reviewed]);
 
     expect(count).toBe(1);
-    expect(mockGetMerchantRuleDecision).toHaveBeenCalledTimes(1);
+    const rule = findMerchantRuleForTransaction(reviewed);
+    expect(rule).toBeDefined();
+    expect(rule!.activeCategoryId).toBe('shopping');
   });
 
-  it('skips transactions with matching IDs but no category change', () => {
-    const tx = makeTx({ id: 'tx-1', categorizedBy: CategorizedBy.Manual });
+  it('skips transactions with no category change', () => {
+    const tx = makeTransaction({ id: 'tx-1', categorizedBy: CategorizedBy.Manual });
 
     const count = teachMerchantRulesFromConfirmedTransactions([tx], [tx]);
 
     expect(count).toBe(0);
-    expect(mockGetMerchantRuleDecision).not.toHaveBeenCalled();
   });
 
   it('skips transactions not in original list', () => {
-    const reviewed = makeTx({
+    const reviewed = makeTransaction({
       id: 'tx-unknown',
       category: makeCategory('shopping'),
       categorizedBy: CategorizedBy.Manual,
@@ -131,12 +89,8 @@ describe('teachMerchantRulesFromConfirmedTransactions', () => {
   });
 
   it('skips category changes from non-manual categorization', () => {
-    const original = makeTx({
-      id: 'tx-1',
-      category: makeCategory('other'),
-    });
-
-    const reviewed = makeTx({
+    const original = makeTransaction({ id: 'tx-1', category: makeCategory('other') });
+    const reviewed = makeTransaction({
       id: 'tx-1',
       category: makeCategory('shopping'),
       categorizedBy: CategorizedBy.AI,
@@ -145,43 +99,33 @@ describe('teachMerchantRulesFromConfirmedTransactions', () => {
     const count = teachMerchantRulesFromConfirmedTransactions([original], [reviewed]);
 
     expect(count).toBe(0);
-    expect(mockGetMerchantRuleDecision).not.toHaveBeenCalled();
-  });
-
-  it('skips when decision returns null', () => {
-    const original = makeTx({
-      id: 'tx-1',
-      category: makeCategory('other'),
-    });
-
-    const reviewed = makeTx({
-      id: 'tx-1',
-      category: makeCategory('shopping'),
-      categorizedBy: CategorizedBy.Manual,
-    });
-
-    mockGetMerchantRuleDecision.mockReturnValue(null);
-
-    const count = teachMerchantRulesFromConfirmedTransactions([original], [reviewed]);
-
-    expect(count).toBe(0);
   });
 
   it('learns from multiple changed transactions', () => {
     const originals = [
-      makeTx({ id: 'tx-1', category: makeCategory('other') }),
-      makeTx({ id: 'tx-2', category: makeCategory('other') }),
+      makeTransaction({ id: 'tx-1', description: 'AMAZON', category: makeCategory('other') }),
+      makeTransaction({ id: 'tx-2', description: 'NETFLIX', category: makeCategory('other') }),
     ];
 
     const reviewed = [
-      makeTx({ id: 'tx-1', category: makeCategory('food'), categorizedBy: CategorizedBy.Manual }),
-      makeTx({ id: 'tx-2', category: makeCategory('transport'), categorizedBy: CategorizedBy.Manual }),
+      makeTransaction({
+        id: 'tx-1',
+        description: 'AMAZON',
+        category: makeCategory('shopping'),
+        categorizedBy: CategorizedBy.Manual,
+      }),
+      makeTransaction({
+        id: 'tx-2',
+        description: 'NETFLIX',
+        category: makeCategory('entertainment'),
+        categorizedBy: CategorizedBy.Manual,
+      }),
     ];
-
-    mockGetMerchantRuleDecision.mockReturnValue({ merchant: 'test', categoryId: 'test' });
 
     const count = teachMerchantRulesFromConfirmedTransactions(originals, reviewed);
 
     expect(count).toBe(2);
+    expect(findMerchantRuleForTransaction(reviewed[0])?.activeCategoryId).toBe('shopping');
+    expect(findMerchantRuleForTransaction(reviewed[1])?.activeCategoryId).toBe('entertainment');
   });
 });

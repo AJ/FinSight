@@ -1,25 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
-
-// Mock date-fns to avoid timezone issues
-vi.mock('date-fns', () => ({
-  format: vi.fn((date: Date, fmt: string) => {
-    if (fmt === 'yyyy-MM') {
-      const m = String(date.getMonth() + 1).padStart(2, '0');
-      return `${date.getFullYear()}-${m}`;
-    }
-    if (fmt === 'yyyy-MM-dd') {
-      const m = String(date.getMonth() + 1).padStart(2, '0');
-      const d = String(date.getDate()).padStart(2, '0');
-      return `${date.getFullYear()}-${m}-${d}`;
-    }
-    return date.toISOString();
-  }),
-  subMonths: vi.fn((date: Date, n: number) => {
-    const d = new Date(date);
-    d.setMonth(d.getMonth() - n);
-    return d;
-  }),
-}));
+import { describe, it, expect } from 'vitest';
 
 import {
   groupByMonth,

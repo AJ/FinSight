@@ -1,16 +1,26 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-const mockGenerate = vi.fn();
+// Mock fetch — the only external boundary (LLM HTTP calls go through here)
+const mockFetch = vi.fn();
+vi.stubGlobal('fetch', mockFetch);
 
-vi.mock('@/lib/llm/index', () => ({
-  getClient: () => ({ generate: mockGenerate }),
-}));
-
-vi.mock('@/lib/utils/debug', () => ({
-  debugLog: vi.fn(),
-}));
 
 import { runWithRetry, type ValidationResult } from '@/lib/parsers/retryEngine';
+
+function lmStudioResponse(content: string) {
+  return Promise.resolve({
+    ok: true,
+    status: 200,
+    json: () => Promise.resolve({
+      choices: [{ message: { content } }],
+      usage: { prompt_tokens: 10, completion_tokens: 20 },
+    }),
+    text: () => Promise.resolve(JSON.stringify({
+      choices: [{ message: { content } }],
+      usage: { prompt_tokens: 10, completion_tokens: 20 },
+    })),
+  });
+}
 
 describe('runWithRetry', () => {
   beforeEach(() => {
@@ -18,7 +28,7 @@ describe('runWithRetry', () => {
   });
 
   it('succeeds on first attempt', async () => {
-    mockGenerate.mockResolvedValueOnce('{"key": "value"}');
+    mockFetch.mockResolvedValue(lmStudioResponse('{"key": "value"}'));
     const validateFn = vi.fn().mockReturnValue({
       valid: true, errors: [], warnings: [], data: { key: 'value' },
     } as ValidationResult<{ key: string }>);
@@ -36,9 +46,9 @@ describe('runWithRetry', () => {
   });
 
   it('succeeds on retry after JSON parse failure', async () => {
-    mockGenerate
-      .mockResolvedValueOnce('not json')
-      .mockResolvedValueOnce('{"key": "value"}');
+    mockFetch
+      .mockResolvedValueOnce(lmStudioResponse('not json'))
+      .mockResolvedValueOnce(lmStudioResponse('{"key": "value"}'));
 
     const validateFn = vi.fn().mockReturnValue({
       valid: true, errors: [], warnings: [], data: { key: 'value' },
@@ -56,9 +66,9 @@ describe('runWithRetry', () => {
   });
 
   it('includes validation errors in retry prompt', async () => {
-    mockGenerate
-      .mockResolvedValueOnce('{"amount": "string"}')
-      .mockResolvedValueOnce('{"amount": 123}');
+    mockFetch
+      .mockResolvedValueOnce(lmStudioResponse('{"amount": "string"}'))
+      .mockResolvedValueOnce(lmStudioResponse('{"amount": 123}'));
 
     const validateFn = vi.fn()
       .mockReturnValueOnce({
@@ -81,8 +91,9 @@ describe('runWithRetry', () => {
       { maxRetries: 3, stage: 'test', llmConfig: { provider: 'lmstudio', baseUrl: 'http://localhost:1234', model: 'test' } },
     );
 
-    // Second generate call should receive a prompt containing the validation error
-    const secondCallPrompt = mockGenerate.mock.calls[1][2];
+    // Second fetch call's body should contain validation errors in the prompt
+    const secondCallBody = JSON.parse(mockFetch.mock.calls[1][1].body);
+    const secondCallPrompt = secondCallBody.messages[0].content;
     expect(secondCallPrompt).toContain('VALIDATION ERRORS TO FIX');
     expect(secondCallPrompt).toContain('amount is not a valid number');
     expect(result.success).toBe(true);
@@ -90,7 +101,7 @@ describe('runWithRetry', () => {
   });
 
   it('returns failure after all retries exhausted', async () => {
-    mockGenerate.mockResolvedValue('not json');
+    mockFetch.mockResolvedValue(lmStudioResponse('not json'));
 
     const validateFn = vi.fn().mockReturnValue({
       valid: true, errors: [], warnings: [], data: { key: 'value' },
@@ -109,7 +120,7 @@ describe('runWithRetry', () => {
   });
 
   it('returns failure with validation errors after max retries', async () => {
-    mockGenerate.mockResolvedValue('{"amount": "string"}');
+    mockFetch.mockResolvedValue(lmStudioResponse('{"amount": "string"}'));
 
     const validateFn = vi.fn().mockReturnValue({
       valid: false,

@@ -1,20 +1,17 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-import { teachMerchantRuleFromTransaction } from '@/lib/services/merchantRuleService';
-
-vi.mock('@/lib/services/merchantRuleService', () => ({
-  teachMerchantRuleFromTransaction: vi.fn(),
-}));
-
 import {
   buildStoredTransactionCategoryUpdate,
   handleStoredTransactionManualCategoryEdit,
 } from '@/lib/services/storedTransactionEditService';
 import { makeTransaction, makeCategory } from '@tests/unit/factories';
 import { CategorizedBy } from '@/models';
+import { useMerchantRuleStore } from '@/lib/store/merchantRuleStore';
 
 beforeEach(() => {
   vi.clearAllMocks();
+  localStorage.clear();
+  useMerchantRuleStore.setState({ rules: [] });
 });
 
 describe('buildStoredTransactionCategoryUpdate', () => {
@@ -44,31 +41,26 @@ describe('buildStoredTransactionCategoryUpdate', () => {
     const originalCategory = txn.category.id;
     const result = buildStoredTransactionCategoryUpdate(txn, 'nonexistent_category_xyz', CategorizedBy.Manual);
 
-    // Category.fromId returns null for unknown IDs, so falls back to transaction.category
     expect(result.category.id).toBe(originalCategory);
   });
 });
 
 describe('handleStoredTransactionManualCategoryEdit', () => {
-  it('calls teachMerchantRuleFromTransaction once', () => {
-    const txn = makeTransaction();
-    handleStoredTransactionManualCategoryEdit(txn, 'groceries');
-
-    expect(teachMerchantRuleFromTransaction).toHaveBeenCalledOnce();
-  });
-
-  it('uses CategorizedBy.Manual', () => {
-    const txn = makeTransaction();
-    const result = handleStoredTransactionManualCategoryEdit(txn, 'groceries');
-
-    expect(result.categorizedBy).toBe(CategorizedBy.Manual);
-  });
-
-  it('returns updated transaction with correct category', () => {
+  it('returns updated transaction with correct category and manual flag', () => {
     const txn = makeTransaction();
     const result = handleStoredTransactionManualCategoryEdit(txn, 'groceries');
 
     expect(result.category.id).toBe('groceries');
+    expect(result.categorizedBy).toBe(CategorizedBy.Manual);
     expect(result.needsReview).toBe(false);
+  });
+
+  it('stores a merchant rule from the manual edit', () => {
+    const txn = makeTransaction({ description: 'AMAZON PURCHASE' });
+    handleStoredTransactionManualCategoryEdit(txn, 'groceries');
+
+    const rules = useMerchantRuleStore.getState().rules;
+    expect(rules.length).toBe(1);
+    expect(rules[0].activeCategoryId).toBe('groceries');
   });
 });
