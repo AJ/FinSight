@@ -51,6 +51,7 @@ interface MakeTransactionInput {
   currency?: Currency;
   // Post-construction overrides (readonly fields via Object.defineProperty)
   merchant?: string;
+  sourceFileHash?: string;
 }
 
 /**
@@ -107,6 +108,7 @@ export function makeTransaction(input: MakeTransactionInput = {}): Transaction {
   if (input.anomalyDetails !== undefined) txn.anomalyDetails = input.anomalyDetails as any;
   if (input.anomalyDismissed !== undefined) txn.anomalyDismissed = input.anomalyDismissed;
   if (input.merchant !== undefined) Object.defineProperty(txn, 'merchant', { value: input.merchant, writable: true });
+  if (input.sourceFileHash !== undefined) Object.defineProperty(txn, 'sourceFileHash', { value: input.sourceFileHash, writable: true });
 
   return txn;
 }

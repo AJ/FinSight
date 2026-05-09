@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-import { useLLMConnectionStore, checkLLMConnection, getLLMConnectionStatus } from '@/lib/store/llmConnectionStore';
+import { useLLMConnectionStore, checkLLMConnection, getLLMConnectionStatus, subscribeToLLMConnection } from '@/lib/store/llmConnectionStore';
 import { useSettingsStore } from '@/lib/store/settingsStore';
 
 // Mock fetch — the only external boundary (LLM HTTP calls go through here)
@@ -106,5 +106,45 @@ describe('checkLLMConnection convenience function', () => {
     const status = await checkLLMConnection();
 
     expect(status.connected).toBe(true);
+  });
+});
+
+describe('invalidateCache', () => {
+  it('clears cache metadata but keeps status', async () => {
+    await useLLMConnectionStore.getState().checkConnection();
+    expect(getLLMConnectionStatus()).not.toBeNull();
+
+    useLLMConnectionStore.getState().invalidateCache();
+
+    const state = useLLMConnectionStore.getState();
+    expect(state.lastChecked).toBeNull();
+    expect(state.cachedUrl).toBeNull();
+    expect(state.status).not.toBeNull();
+  });
+});
+
+describe('auto-invalidation on settings change', () => {
+  it('re-checks when URL changes', async () => {
+    await useLLMConnectionStore.getState().checkConnection();
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+
+    // Change URL → cache invalid → next check hits fetch again
+    useSettingsStore.setState({ llmServerUrl: 'http://localhost:9999' });
+    ollamaConnectedSequence();
+    await useLLMConnectionStore.getState().checkConnection();
+
+    expect(mockFetch).toHaveBeenCalledTimes(4);
+  });
+});
+
+describe('subscribeToLLMConnection', () => {
+  it('calls callback on state changes', async () => {
+    const callback = vi.fn();
+    const unsubscribe = subscribeToLLMConnection(callback);
+
+    await useLLMConnectionStore.getState().checkConnection();
+
+    expect(callback).toHaveBeenCalled();
+    unsubscribe();
   });
 });

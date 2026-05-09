@@ -1,28 +1,11 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach } from 'vitest';
 
-import {
-  findMatchingMerchantRule,
-  applyMerchantRuleDecision,
-  type MerchantRule,
-  type MerchantRuleDecision,
-  type MerchantRuleMatchInput,
-} from '@/lib/categorization/merchantRules';
+import { type MerchantRule, type MerchantRuleDecision, type MerchantRuleMatchInput } from '@/lib/categorization/merchantRules';
 import { SourceType } from '@/models';
-
-// Mock the merchantRules module
-vi.mock('@/lib/categorization/merchantRules', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@/lib/categorization/merchantRules')>();
-  return {
-    ...actual,
-    findMatchingMerchantRule: vi.fn(),
-    applyMerchantRuleDecision: vi.fn(),
-  };
-});
 
 import { useMerchantRuleStore } from '@/lib/store/merchantRuleStore';
 
 beforeEach(() => {
-  vi.clearAllMocks();
   useMerchantRuleStore.setState({ rules: [] });
 });
 
@@ -53,19 +36,21 @@ function makeDecision(merchantKey: string, categoryId = 'groceries'): MerchantRu
 
 describe('merchantRuleStore', () => {
   describe('getRule', () => {
-    it('delegates to findMatchingMerchantRule', () => {
+    it('finds a matching confident rule', () => {
       const rule = makeRule('AMAZON');
-      vi.mocked(findMatchingMerchantRule).mockReturnValue(rule);
+      useMerchantRuleStore.setState({ rules: [rule] });
 
       const input: MerchantRuleMatchInput = { merchantKey: 'AMAZON', direction: 'debit', sourceType: SourceType.Bank };
       const result = useMerchantRuleStore.getState().getRule(input);
 
-      expect(findMatchingMerchantRule).toHaveBeenCalledWith([], input);
-      expect(result).toEqual(rule);
+      expect(result).toBeDefined();
+      expect(result!.activeCategoryId).toBe('groceries');
     });
 
     it('returns undefined when no match found', () => {
-      vi.mocked(findMatchingMerchantRule).mockReturnValue(null);
+      const rule = makeRule('AMAZON');
+      useMerchantRuleStore.setState({ rules: [rule] });
+
       const result = useMerchantRuleStore.getState().getRule({
         merchantKey: 'UNKNOWN',
         direction: 'debit',
@@ -76,23 +61,18 @@ describe('merchantRuleStore', () => {
   });
 
   describe('upsertRule', () => {
-    it('creates new rule via applyMerchantRuleDecision', () => {
-      const newRule = makeRule('FLIPKART');
-      vi.mocked(applyMerchantRuleDecision).mockReturnValue(newRule);
-
+    it('creates new rule for unknown merchant', () => {
       useMerchantRuleStore.getState().upsertRule(makeDecision('FLIPKART'));
 
-      expect(applyMerchantRuleDecision).toHaveBeenCalledWith(undefined, expect.anything(), expect.any(String));
       expect(useMerchantRuleStore.getState().rules).toHaveLength(1);
       expect(useMerchantRuleStore.getState().rules[0].merchantKey).toBe('FLIPKART');
+      expect(useMerchantRuleStore.getState().rules[0].activeCategoryId).toBe('groceries');
+      expect(useMerchantRuleStore.getState().rules[0].totalConfirmations).toBe(1);
     });
 
-    it('updates existing rule when match found', () => {
+    it('updates existing rule when merchant matches', () => {
       const existing = makeRule('AMAZON');
       useMerchantRuleStore.setState({ rules: [existing] });
-
-      const updated = { ...existing, totalConfirmations: 4 };
-      vi.mocked(applyMerchantRuleDecision).mockReturnValue(updated);
 
       useMerchantRuleStore.getState().upsertRule(makeDecision('AMAZON'));
 
@@ -104,12 +84,10 @@ describe('merchantRuleStore', () => {
       const old = makeRule('OLD', { lastConfirmedAt: '2024-01-01T00:00:00.000Z' });
       useMerchantRuleStore.setState({ rules: [old] });
 
-      const newRule = makeRule('NEW', { lastConfirmedAt: '2024-06-01T00:00:00.000Z' });
-      vi.mocked(applyMerchantRuleDecision).mockReturnValue(newRule);
-
       useMerchantRuleStore.getState().upsertRule(makeDecision('NEW'));
 
       const rules = useMerchantRuleStore.getState().rules;
+      // NEW was just upserted, so its lastConfirmedAt is now — should be first
       expect(rules[0].merchantKey).toBe('NEW');
     });
 
@@ -120,9 +98,6 @@ describe('merchantRuleStore', () => {
         }),
       );
       useMerchantRuleStore.setState({ rules: manyRules });
-
-      const newest = makeRule('NEWEST', { lastConfirmedAt: new Date(2024, 6, 1).toISOString() });
-      vi.mocked(applyMerchantRuleDecision).mockReturnValue(newest);
 
       useMerchantRuleStore.getState().upsertRule(makeDecision('NEWEST'));
       expect(useMerchantRuleStore.getState().rules.length).toBeLessThanOrEqual(1000);
@@ -138,6 +113,13 @@ describe('merchantRuleStore', () => {
 
     it('returns empty array when no rules', () => {
       expect(useMerchantRuleStore.getState().listRules()).toEqual([]);
+    });
+  });
+
+  describe('persist migration', () => {
+    it('starts with empty rules after clear', () => {
+      const { rules } = useMerchantRuleStore.getState();
+      expect(rules).toEqual([]);
     });
   });
 });

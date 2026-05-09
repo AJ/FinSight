@@ -1,31 +1,23 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
 import { useRecurringStore } from '@/lib/store/recurringStore';
 import { type RecurringPayment } from '@/lib/recurring/types';
-
-vi.mock('@/lib/recurring', () => ({
-  detectRecurringPayments: vi.fn(),
-  DEFAULT_DETECTION_CONFIG: {
-    minOccurrences: 2,
-    minOccurrencesYearly: 1,
-    amountVariance: 0.10,
-    intervalTolerance: 7,
-    inactiveAfterMissed: 2,
-    confidenceThreshold: 0.7,
-    excludeVariableAmounts: true,
-  },
-}));
-
-import { detectRecurringPayments } from '@/lib/recurring';
+import { makeTransaction } from '@tests/unit/factories';
+import * as recurringModule from '@/lib/recurring';
 
 beforeEach(() => {
-  vi.clearAllMocks();
+  vi.useFakeTimers({ now: new Date('2024-06-01') });
   useRecurringStore.setState({
     recurringPayments: [],
     excludedMerchants: [],
     lastScanned: null,
     isScanning: false,
   });
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.useRealTimers();
 });
 
 function makeRecurringPayment(overrides: Partial<RecurringPayment> = {}): RecurringPayment {
@@ -39,56 +31,69 @@ function makeRecurringPayment(overrides: Partial<RecurringPayment> = {}): Recurr
     frequency: 'monthly',
     confidence: 0.95,
     firstSeen: new Date('2024-01-01'),
-    lastSeen: new Date('2024-06-01'),
-    occurrenceCount: 6,
-    transactionIds: ['t1', 't2', 't3'],
+    lastSeen: new Date('2024-05-01'),
+    occurrenceCount: 5,
+    transactionIds: ['t1', 't2', 't3', 't4', 't5'],
     isActive: true,
-    nextExpectedDate: new Date('2024-07-01'),
+    nextExpectedDate: new Date('2024-06-01'),
     status: 'active',
     ...overrides,
   };
 }
 
+/** 3 Netflix transactions ~30 days apart, same amount → real detector identifies as monthly recurring */
+function makeNetflixTxns() {
+  return [
+    makeTransaction({ id: 'nf-1', description: 'NETFLIX.COM SUBSCRIPTION', merchant: 'NETFLIX.COM', amount: 499, date: new Date('2024-01-15') }),
+    makeTransaction({ id: 'nf-2', description: 'NETFLIX.COM SUBSCRIPTION', merchant: 'NETFLIX.COM', amount: 499, date: new Date('2024-02-14') }),
+    makeTransaction({ id: 'nf-3', description: 'NETFLIX.COM SUBSCRIPTION', merchant: 'NETFLIX.COM', amount: 499, date: new Date('2024-03-15') }),
+  ];
+}
+
+/** 3 Spotify transactions ~30 days apart, same amount → real detector identifies as monthly recurring */
+function makeSpotifyTxns() {
+  return [
+    makeTransaction({ id: 'sp-1', description: 'SPOTIFY PREMIUM', merchant: 'SPOTIFY', amount: 119, date: new Date('2024-01-10') }),
+    makeTransaction({ id: 'sp-2', description: 'SPOTIFY PREMIUM', merchant: 'SPOTIFY', amount: 119, date: new Date('2024-02-09') }),
+    makeTransaction({ id: 'sp-3', description: 'SPOTIFY PREMIUM', merchant: 'SPOTIFY', amount: 119, date: new Date('2024-03-10') }),
+  ];
+}
+
 describe('recurringStore', () => {
   describe('scanTransactions', () => {
     it('detects recurring payments from transactions', () => {
-      const payment = makeRecurringPayment();
-      vi.mocked(detectRecurringPayments).mockReturnValue([payment]);
-
-      useRecurringStore.getState().scanTransactions([]);
+      useRecurringStore.getState().scanTransactions(makeNetflixTxns());
 
       const state = useRecurringStore.getState();
-      expect(state.recurringPayments).toHaveLength(1);
-      expect(state.recurringPayments[0].merchantName).toBe('Netflix');
+      expect(state.recurringPayments.length).toBeGreaterThanOrEqual(1);
+      expect(state.recurringPayments[0].merchantName.toLowerCase()).toContain('netflix');
+      expect(state.recurringPayments[0].frequency).toBe('monthly');
       expect(state.isScanning).toBe(false);
       expect(state.lastScanned).toBeInstanceOf(Date);
     });
 
     it('is a no-op if already scanning', () => {
       useRecurringStore.setState({ isScanning: true });
-      useRecurringStore.getState().scanTransactions([]);
+      useRecurringStore.getState().scanTransactions(makeNetflixTxns());
 
-      expect(detectRecurringPayments).not.toHaveBeenCalled();
       expect(useRecurringStore.getState().isScanning).toBe(true);
+      expect(useRecurringStore.getState().recurringPayments).toHaveLength(0);
+      expect(useRecurringStore.getState().lastScanned).toBeNull();
     });
 
     it('filters excluded merchants', () => {
-      const netflix = makeRecurringPayment({ merchantName: 'Netflix' });
-      const spotify = makeRecurringPayment({ id: 'rp-2', merchantName: 'Spotify' });
-      vi.mocked(detectRecurringPayments).mockReturnValue([netflix, spotify]);
-
       useRecurringStore.setState({
         excludedMerchants: [{ normalizedName: 'netflix', excludedAt: new Date() }],
       });
-      useRecurringStore.getState().scanTransactions([]);
+      useRecurringStore.getState().scanTransactions([...makeNetflixTxns(), ...makeSpotifyTxns()]);
 
       const payments = useRecurringStore.getState().recurringPayments;
       expect(payments).toHaveLength(1);
-      expect(payments[0].merchantName).toBe('Spotify');
+      expect(payments[0].merchantName.toLowerCase()).toContain('spotify');
     });
 
     it('catches errors and resets isScanning', () => {
-      vi.mocked(detectRecurringPayments).mockImplementation(() => {
+      vi.spyOn(recurringModule, 'detectRecurringPayments').mockImplementation(() => {
         throw new Error('Scan exploded');
       });
 
@@ -99,7 +104,6 @@ describe('recurringStore', () => {
     });
 
     it('sets lastScanned timestamp', () => {
-      vi.mocked(detectRecurringPayments).mockReturnValue([]);
       useRecurringStore.getState().scanTransactions([]);
 
       expect(useRecurringStore.getState().lastScanned).toBeInstanceOf(Date);
@@ -110,6 +114,7 @@ describe('recurringStore', () => {
     it('updates matching payment', () => {
       const payment = makeRecurringPayment();
       useRecurringStore.setState({ recurringPayments: [payment] });
+
       useRecurringStore.getState().updatePayment('rp-1', { amount: 599 });
 
       expect(useRecurringStore.getState().recurringPayments[0].amount).toBe(599);
@@ -118,6 +123,7 @@ describe('recurringStore', () => {
     it('preserves non-updated fields', () => {
       const payment = makeRecurringPayment();
       useRecurringStore.setState({ recurringPayments: [payment] });
+
       useRecurringStore.getState().updatePayment('rp-1', { amount: 599 });
 
       const updated = useRecurringStore.getState().recurringPayments[0];
@@ -128,6 +134,7 @@ describe('recurringStore', () => {
     it('is a no-op for nonexistent id', () => {
       const payment = makeRecurringPayment();
       useRecurringStore.setState({ recurringPayments: [payment] });
+
       useRecurringStore.getState().updatePayment('nonexistent', { amount: 999 });
 
       expect(useRecurringStore.getState().recurringPayments[0].amount).toBe(499);
@@ -138,6 +145,7 @@ describe('recurringStore', () => {
     it('removes payment and adds to excluded merchants', () => {
       const payment = makeRecurringPayment();
       useRecurringStore.setState({ recurringPayments: [payment] });
+
       useRecurringStore.getState().markAsNotRecurring('rp-1', 'Netflix');
 
       const state = useRecurringStore.getState();
@@ -150,6 +158,7 @@ describe('recurringStore', () => {
       const netflix = makeRecurringPayment({ merchantName: 'Netflix' });
       const spotify = makeRecurringPayment({ id: 'rp-2', merchantName: 'Spotify' });
       useRecurringStore.setState({ recurringPayments: [netflix, spotify] });
+
       useRecurringStore.getState().markAsNotRecurring('rp-1', 'Netflix');
 
       expect(useRecurringStore.getState().recurringPayments).toHaveLength(1);
@@ -165,6 +174,7 @@ describe('recurringStore', () => {
           { normalizedName: 'spotify', excludedAt: new Date() },
         ],
       });
+
       useRecurringStore.getState().clearExcludedMerchants();
 
       expect(useRecurringStore.getState().excludedMerchants).toHaveLength(0);

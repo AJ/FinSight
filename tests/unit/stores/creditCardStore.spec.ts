@@ -1,32 +1,9 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach } from 'vitest';
 
 import { useCreditCardStore } from '@/lib/store/creditCardStore';
 import type { CreditCardStatement } from '@/types/creditCard';
 
-vi.mock('@/lib/creditCard/interestCalculator', () => ({
-  generateProjection: vi.fn(),
-}));
-
-vi.mock('@/lib/creditCard/paymentStrategy', () => ({
-  calculateAvalanche: vi.fn(),
-  calculateSnowball: vi.fn(),
-}));
-
-vi.mock('@/lib/creditCard/revolvingDetector', () => ({
-  calculateDebtTrapAnalysis: vi.fn(),
-}));
-
-vi.mock('@/lib/creditCard/constants', () => ({
-  getAPRForIssuer: vi.fn(() => 0.408),
-}));
-
-import { generateProjection } from '@/lib/creditCard/interestCalculator';
-import { calculateAvalanche, calculateSnowball } from '@/lib/creditCard/paymentStrategy';
-import { calculateDebtTrapAnalysis } from '@/lib/creditCard/revolvingDetector';
-import type { InterestProjection, DebtTrapAnalysis } from '@/types/creditCard';
-
 beforeEach(() => {
-  vi.clearAllMocks();
   useCreditCardStore.setState({ statements: [], isParsing: false });
 });
 
@@ -391,24 +368,18 @@ describe('creditCardStore', () => {
   });
 
   describe('getInterestProjections', () => {
-    it('delegates to generateProjection for each card with debt', () => {
-      const mockProjection: InterestProjection = {
-        cardIssuer: 'HDFC',
-        cardLastFour: '1234',
-        currentBalance: 50000,
-        apr: 0.408,
-        minimumDue: 2500,
-        minimumPayoff: { monthsToPayoff: 24, totalInterest: 15000, totalPaid: 65000 },
-        fixedPaymentScenarios: [],
-        fullPaySavings: 15000,
-      };
-      vi.mocked(generateProjection).mockReturnValue(mockProjection);
+    it('generates real projections for cards with debt', () => {
+      useCreditCardStore.getState().addStatement(makeStatement({ totalDue: 50000 }));
 
-      useCreditCardStore.getState().addStatement(makeStatement());
       const result = useCreditCardStore.getState().getInterestProjections();
 
-      expect(generateProjection).toHaveBeenCalledOnce();
       expect(result).toHaveLength(1);
+      expect(result[0].cardIssuer).toBe('HDFC');
+      expect(result[0].cardLastFour).toBe('1234');
+      expect(result[0].currentBalance).toBe(50000);
+      expect(result[0].apr).toBeGreaterThan(0);
+      expect(result[0].minimumPayoff.monthsToPayoff).toBeGreaterThan(0);
+      expect(result[0].fullPaySavings).toBeGreaterThan(0);
     });
 
     it('skips cards with zero balance', () => {
@@ -418,53 +389,42 @@ describe('creditCardStore', () => {
   });
 
   describe('getPaymentRecommendations', () => {
-    it('delegates to avalanche strategy', () => {
-      vi.mocked(calculateAvalanche).mockReturnValue({
-        strategy: 'avalanche',
-        totalDebt: 50000,
-        availableForPayment: 10000,
-        cardPayments: [],
-        projectedSavings: 5000,
-        debtFreeDate: new Date(),
-      });
+    it('allocates full payment to single card via avalanche', () => {
+      useCreditCardStore.getState().addStatement(makeStatement({ totalDue: 50000 }));
 
-      useCreditCardStore.getState().addStatement(makeStatement());
-      useCreditCardStore.getState().getPaymentRecommendations(10000, 'avalanche');
+      const result = useCreditCardStore.getState().getPaymentRecommendations(10000, 'avalanche');
 
-      expect(calculateAvalanche).toHaveBeenCalled();
+      expect(result.strategy).toBe('avalanche');
+      expect(result.totalDebt).toBe(50000);
+      expect(result.availableForPayment).toBe(10000);
+      expect(result.cardPayments).toHaveLength(1);
+      expect(result.cardPayments[0].recommendedPayment).toBe(10000);
     });
 
-    it('delegates to snowball strategy', () => {
-      vi.mocked(calculateSnowball).mockReturnValue({
-        strategy: 'snowball',
-        totalDebt: 50000,
-        availableForPayment: 10000,
-        cardPayments: [],
-        projectedSavings: 3000,
-        debtFreeDate: new Date(),
-      });
+    it('allocates full payment to single card via snowball', () => {
+      useCreditCardStore.getState().addStatement(makeStatement({ totalDue: 50000 }));
 
-      useCreditCardStore.getState().addStatement(makeStatement());
-      useCreditCardStore.getState().getPaymentRecommendations(10000, 'snowball');
+      const result = useCreditCardStore.getState().getPaymentRecommendations(10000, 'snowball');
 
-      expect(calculateSnowball).toHaveBeenCalled();
+      expect(result.strategy).toBe('snowball');
+      expect(result.cardPayments).toHaveLength(1);
+      expect(result.cardPayments[0].recommendedPayment).toBe(10000);
     });
   });
 
   describe('getDebtTrapAnalysis', () => {
-    it('delegates to calculateDebtTrapAnalysis', () => {
-      const mockAnalysis: DebtTrapAnalysis = {
-        cards: [],
-        totalRevolvingDebt: 0,
-        overallRiskLevel: 'low',
-        recommendations: [],
-      };
-      vi.mocked(calculateDebtTrapAnalysis).mockReturnValue(mockAnalysis);
+    it('returns none risk for fully-paid cards', () => {
+      useCreditCardStore.getState().addStatements([
+        makeStatement({ id: 's1', statementDate: new Date('2024-01-15'), totalDue: 50000, paymentsReceived: 50000 }),
+        makeStatement({ id: 's2', statementDate: new Date('2024-02-15'), totalDue: 50000, paymentsReceived: 50000 }),
+      ]);
 
-      useCreditCardStore.getState().addStatement(makeStatement());
-      useCreditCardStore.getState().getDebtTrapAnalysis();
+      const result = useCreditCardStore.getState().getDebtTrapAnalysis();
 
-      expect(calculateDebtTrapAnalysis).toHaveBeenCalledWith(useCreditCardStore.getState().statements);
+      expect(result.cards).toHaveLength(1);
+      expect(result.cards[0].riskLevel).toBe('none');
+      expect(result.overallRiskLevel).toBe('none');
+      expect(result.totalRevolvingDebt).toBe(0);
     });
   });
 
