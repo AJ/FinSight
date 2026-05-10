@@ -89,4 +89,44 @@ describe('debug', () => {
     mod.debugSensitive('prompt', 'sensitive data');
     expect(console.log).not.toHaveBeenCalled();
   });
+
+  it('debugLog formats with [stage] prefix', async () => {
+    vi.stubEnv('NODE_ENV', 'development');
+    vi.resetModules();
+    const mod = await import('@/lib/utils/debug');
+    mod.debugLog('pipeline', 'step completed', { count: 5 });
+    expect(console.log).toHaveBeenCalledWith('[pipeline]', 'step completed', { count: 5 });
+  });
+
+  it('debugLog passes non-string first arg through without prefix', async () => {
+    vi.stubEnv('NODE_ENV', 'development');
+    vi.resetModules();
+    const mod = await import('@/lib/utils/debug');
+    const err = new Error('raw error');
+    mod.debugLog(err, 'context');
+    expect(console.log).toHaveBeenCalledWith(err, 'context');
+  });
+
+  it('debugError formats with [stage] prefix', async () => {
+    const mod = await import('@/lib/utils/debug');
+    mod.debugError('parser', 'parse failed', { row: 10 });
+    expect(console.error).toHaveBeenCalledWith('[parser]', 'parse failed', { row: 10 });
+  });
+
+  it('debugError passes non-string first arg through without prefix', async () => {
+    const mod = await import('@/lib/utils/debug');
+    const err = new Error('raw error');
+    mod.debugError(err);
+    expect(console.error).toHaveBeenCalledWith(err);
+  });
+
+  it('debugWarn passes non-string first arg through without prefix', async () => {
+    vi.stubEnv('NODE_ENV', 'development');
+    vi.resetModules();
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const mod = await import('@/lib/utils/debug');
+    const err = new Error('raw warning');
+    mod.debugWarn(err, 'extra');
+    expect(console.warn).toHaveBeenCalledWith(err, 'extra');
+  });
 });

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { Transaction, TransactionType, Category, CategoryType, SourceType } from '@/types';
+import { Transaction, TransactionType, Category, CategoryType, SourceType, CategorizedBy } from '@/types';
 import { formatSubType, TRANSACTION_SUB_TYPES } from '@/models/Transaction';
 import '@/lib/categorization/categories';
 
@@ -96,6 +96,46 @@ describe('Transaction.fromExtracted', () => {
       balance: null, localCurrency: 'USD', confidence: 0.9,
     }, inrCurrency, SourceType.Bank);
     expect(txn.localCurrency.code).toBe('USD');
+  });
+
+  it('falls back to settingsCurrency for unrecognized currency code', () => {
+    const txn = Transaction.fromExtracted({
+      date: '2024-01-15', description: 'Test', amount: 100, type: 'debit',
+      balance: null, localCurrency: 'ZZZ', confidence: 0.9,
+    }, inrCurrency, SourceType.Bank);
+    expect(txn.localCurrency).toEqual(inrCurrency);
+  });
+
+  it('stores originalAmount for international transactions', () => {
+    const txn = Transaction.fromExtracted({
+      date: '2024-01-15', description: 'Test', amount: 100, type: 'debit',
+      balance: null, localCurrency: 'INR', originalAmount: 1.20, confidence: 0.9,
+    }, inrCurrency, SourceType.Bank);
+    expect(txn.originalAmount).toBe(1.20);
+  });
+
+  it('sets isInternational from extracted flag', () => {
+    const txn = Transaction.fromExtracted({
+      date: '2024-01-15', description: 'Test', amount: 100, type: 'debit',
+      balance: null, localCurrency: 'INR', isInternationalTransaction: true, confidence: 0.9,
+    }, inrCurrency, SourceType.Bank);
+    expect(txn.isInternational).toBe(true);
+  });
+
+  it('maps confidence to llmConfidence', () => {
+    const txn = Transaction.fromExtracted({
+      date: '2024-01-15', description: 'Test', amount: 100, type: 'debit',
+      balance: null, localCurrency: 'INR', confidence: 0.95,
+    }, inrCurrency, SourceType.Bank);
+    expect(txn.llmConfidence).toBe(0.95);
+  });
+
+  it('stores extracted description as originalText', () => {
+    const txn = Transaction.fromExtracted({
+      date: '2024-01-15', description: 'AMAZON INDIA PVT LTD', amount: 500, type: 'debit',
+      balance: null, localCurrency: 'INR', confidence: 0.9,
+    }, inrCurrency, SourceType.Bank);
+    expect(txn.originalText).toBe('AMAZON INDIA PVT LTD');
   });
 });
 
@@ -283,6 +323,77 @@ describe('Transaction.fromJSON edge cases', () => {
   });
 });
 
+// ── toJSON/fromJSON roundtrip ────────────────────────────────────────────────
+
+describe('Transaction toJSON/fromJSON roundtrip', () => {
+  it('preserves all fields through serialization cycle', () => {
+    const original = new Transaction(
+      'test-id',
+      new Date('2024-06-15'),
+      'Amazon Purchase',
+      2499.99,
+      TransactionType.Debit,
+      makeCategory('shopping'),
+      50000,          // balance
+      'Amazon India', // merchant
+      'AMAZON INDIA', // originalText
+      '2024-06',      // budgetMonth
+      0.92,           // categoryConfidence
+      true,           // needsReview
+      CategorizedBy.AI, // categorizedBy
+      SourceType.CreditCard, // sourceType
+      'stmt-001',     // statementId
+      'Visa',         // cardIssuer
+      '4242',         // cardLastFour
+      'John Doe',     // cardHolder
+      { code: 'INR', symbol: '₹', name: 'Indian Rupee' },
+      { code: 'USD', symbol: '$', name: 'US Dollar' }, // originalCurrency
+      30.00,          // originalAmount
+      true,           // isInternational
+      false,          // isAnomaly
+      undefined,      // anomalyTypes
+      undefined,      // anomalyDetails
+      undefined,      // anomalyDismissed
+      'purchase',     // transactionSubType
+      'shopping',     // suggestedCategory
+      0.95,           // llmConfidence
+      0.88,           // verificationConfidence
+      'sha256hash',   // sourceFileHash
+    );
+
+    const json = original.toJSON();
+    const restored = Transaction.fromJSON(json);
+
+    expect(restored.id).toBe('test-id');
+    expect(restored.date).toEqual(new Date('2024-06-15'));
+    expect(restored.description).toBe('Amazon Purchase');
+    expect(restored.amount).toBe(2499.99);
+    expect(restored.type).toBe(TransactionType.Debit);
+    expect(restored.category.id).toBe('shopping');
+    expect(restored.balance).toBe(50000);
+    expect(restored.merchant).toBe('Amazon India');
+    expect(restored.originalText).toBe('AMAZON INDIA');
+    expect(restored.budgetMonth).toBe('2024-06');
+    expect(restored.categoryConfidence).toBe(0.92);
+    expect(restored.needsReview).toBe(true);
+    expect(restored.categorizedBy).toBe('ai');
+    expect(restored.sourceType).toBe(SourceType.CreditCard);
+    expect(restored.statementId).toBe('stmt-001');
+    expect(restored.cardIssuer).toBe('Visa');
+    expect(restored.cardLastFour).toBe('4242');
+    expect(restored.cardHolder).toBe('John Doe');
+    expect(restored.localCurrency.code).toBe('INR');
+    expect(restored.originalCurrency!.code).toBe('USD');
+    expect(restored.originalAmount).toBe(30.00);
+    expect(restored.isInternational).toBe(true);
+    expect(restored.transactionSubType).toBe('purchase');
+    expect(restored.suggestedCategory).toBe('shopping');
+    expect(restored.llmConfidence).toBe(0.95);
+    expect(restored.verificationConfidence).toBe(0.88);
+    expect(restored.sourceFileHash).toBe('sha256hash');
+  });
+});
+
 // ── formatSubType ──────────────────────────────────────────────────────────
 
 describe('formatSubType', () => {
@@ -296,6 +407,10 @@ describe('formatSubType', () => {
 
   it('handles multi-underscore types', () => {
     expect(formatSubType('transfer_in')).toBe('Transfer in');
+  });
+
+  it('returns empty string for empty input', () => {
+    expect(formatSubType('')).toBe('');
   });
 });
 
