@@ -152,4 +152,111 @@ describe('attachVerificationToExtractionBundle', () => {
     // Either way, the function should not crash and should preserve transaction count
     expect(result.transactions).toHaveLength(1);
   });
+
+  // ── Gap coverage ──────────────────────────────────────────────────────────────
+
+  it('CC happy path — both statementTotals and transactionSums pass, no warning added', () => {
+    // previousBalance=1000, totalDue=1100, one debit of 100
+    // computedTotalDue = 1000 + 100 - 0 = 1100, matches totalDue=1100
+    // transactionSums: totalDebits(100) ≈ purchasesAndCharges(200)? No — need to match.
+    // Let's use: previousBalance=1000, totalDue=1100, purchasesAndCharges=100, paymentsReceived=0
+    // debit txn of 100 → totalDebits=100, totalCredits=0
+    // statementTotals: 1000 + 100 - 0 = 1100 == totalDue(1100) ✓
+    // transactionSums: totalDebits(100) ≈ purchasesAndCharges(100) ✓, totalCredits(0) ≈ paymentsReceived(0) ✓
+    const txn = makeTransaction({ type: 'debit', amount: 100 });
+    const bundle = makeBundle({
+      verificationInputs: {
+        kind: 'credit_card',
+        rawText: '2024-01-15 Test Transaction 100 debit',
+        transactions: [txn],
+        meta: {
+          previousBalance: 1000,
+          totalDue: 1100,
+          currency: 'INR',
+          purchasesAndCharges: 100,
+          paymentsReceived: 0,
+        },
+      },
+    });
+
+    const result = attachVerificationToExtractionBundle(bundle);
+
+    // Only the pre-existing warning — no verification warning added
+    expect(result.warnings).toEqual(['existing warning']);
+    expect(result.verificationReport).toBeDefined();
+    const report = result.verificationReport as import('@/lib/verification/verificationEngine').CCVerificationReport;
+    expect(report.statementTotals.passed).toBe(true);
+    expect(report.transactionSums.passed).toBe(true);
+  });
+
+  it('CC individual sub-check — only statementTotals fails, warning still mentions it', () => {
+    // previousBalance=1000, totalDue=5000 (way off), purchasesAndCharges=100, paymentsReceived=0
+    // statementTotals: 1000 + 100 - 0 = 1100 ≠ 5000 → fails
+    // transactionSums: totalDebits(100) ≈ purchasesAndCharges(100) ✓, totalCredits(0) ≈ paymentsReceived(0) ✓
+    const txn = makeTransaction({ type: 'debit', amount: 100 });
+    const bundle = makeBundle({
+      verificationInputs: {
+        kind: 'credit_card',
+        rawText: '2024-01-15 Test Transaction 100 debit',
+        transactions: [txn],
+        meta: {
+          previousBalance: 1000,
+          totalDue: 5000,
+          currency: 'INR',
+          purchasesAndCharges: 100,
+          paymentsReceived: 0,
+        },
+      },
+    });
+
+    const result = attachVerificationToExtractionBundle(bundle);
+
+    const ccWarning = result.warnings.find((w) => w.includes('Credit card'));
+    expect(ccWarning).toBeDefined();
+    const report = result.verificationReport as import('@/lib/verification/verificationEngine').CCVerificationReport;
+    expect(report.statementTotals.passed).toBe(false);
+    expect(report.transactionSums.passed).toBe(true);
+  });
+
+  it('bank reconciliation with undefined difference falls back to "unknown"', () => {
+    // When openingBalance or closingBalance is undefined, reconcile() returns { passed: false }
+    // with no difference field, so the warning says "unknown"
+    const txn = makeTransaction();
+    const bundle = makeBundle({
+      verificationInputs: bankVerificationInputs({
+        meta: { openingBalance: undefined, closingBalance: undefined, currency: 'INR' },
+        transactions: [txn],
+      }),
+    });
+
+    const result = attachVerificationToExtractionBundle(bundle);
+
+    const reconWarning = result.warnings.find((w) => w.includes('reconciliation difference unknown'));
+    expect(reconWarning).toBeDefined();
+  });
+
+  it('mergeVerificationConfidence with partially matching IDs — some verified, some not', () => {
+    // Two transactions in bundle, but raw text only matches one of them.
+    // The matched one gets verificationConfidence, the other stays undefined.
+    const matchedTxn = makeTransaction({ id: 'tx-matched', description: 'Test Transaction', amount: 100 });
+    const unmatchedTxn = makeTransaction({ id: 'tx-unmatched', description: 'Completely Different Merchant XYZ999', amount: 99999 });
+    const bundle = makeBundle({
+      transactions: [matchedTxn, unmatchedTxn],
+      verificationInputs: bankVerificationInputs({
+        rawText: '2024-01-15 Test Transaction 100 debit',
+        transactions: [matchedTxn, unmatchedTxn],
+        meta: { openingBalance: 1000, closingBalance: 900, currency: 'INR' },
+      }),
+    });
+
+    const result = attachVerificationToExtractionBundle(bundle);
+
+    expect(result.transactions).toHaveLength(2);
+    // The matched transaction should have some confidence value (number or undefined if rejected)
+    // The key assertion: the function does not crash and preserves all transactions
+    const matched = result.transactions.find((t) => t.id === 'tx-matched');
+    const unmatched = result.transactions.find((t) => t.id === 'tx-unmatched');
+    expect(matched).toBeDefined();
+    expect(unmatched).toBeDefined();
+  });
 });

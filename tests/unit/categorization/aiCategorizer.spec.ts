@@ -1,8 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 import { applyCategorizationResults, categorizeByKeywords, categorizeTransactions, batchTransactions } from '@/lib/categorization/aiCategorizer';
-import { CategorizedBy } from '@/types';
-import { makeTransaction } from '@tests/unit/factories';
+import { CategorizedBy, CategoryType } from '@/types';
+import { makeTransaction, makeCategory } from '@tests/unit/factories';
+import { useMerchantRuleStore } from '@/lib/store/merchantRuleStore';
 import '@/lib/categorization/categories';
 
 const mockFetch = vi.fn();
@@ -61,6 +62,34 @@ describe('applyCategorizationResults', () => {
     const results = [{ id: '1', category: 'dining', confidence: 0.9, source: 'ai' as const }];
     const updated = applyCategorizationResults(txns, results);
     expect(updated[0].categorizedBy).toBe(CategorizedBy.AI);
+  });
+
+  it('sets needsReview to true when confidence < 0.85', () => {
+    const txns = [makeTransaction({ id: '1' })];
+    const results = [{ id: '1', category: 'dining', confidence: 0.7, source: 'ai' as const }];
+    const updated = applyCategorizationResults(txns, results);
+    expect(updated[0].needsReview).toBe(true);
+  });
+
+  it('sets needsReview to false when confidence >= 0.85', () => {
+    const txns = [makeTransaction({ id: '1' })];
+    const results = [{ id: '1', category: 'dining', confidence: 0.85, source: 'ai' as const }];
+    const updated = applyCategorizationResults(txns, results);
+    expect(updated[0].needsReview).toBe(false);
+  });
+
+  it('maps source "rule" to CategorizedBy.Rule', () => {
+    const txns = [makeTransaction({ id: '1' })];
+    const results = [{ id: '1', category: 'shopping', confidence: 0.98, source: 'rule' as const }];
+    const updated = applyCategorizationResults(txns, results);
+    expect(updated[0].categorizedBy).toBe(CategorizedBy.Rule);
+  });
+
+  it('maps source "keyword" to CategorizedBy.Keyword', () => {
+    const txns = [makeTransaction({ id: '1' })];
+    const results = [{ id: '1', category: 'shopping', confidence: 0.3, source: 'keyword' as const }];
+    const updated = applyCategorizationResults(txns, results);
+    expect(updated[0].categorizedBy).toBe(CategorizedBy.Keyword);
   });
 });
 
@@ -131,5 +160,185 @@ describe('categorizeTransactions', () => {
 
     expect(results.length).toBeGreaterThan(0);
     expect(mockFetch).toHaveBeenCalled();
+  });
+
+  it('returns empty when all transactions have transfer/investment category', async () => {
+    const txns = [
+      makeTransaction({ id: '1', category: makeCategory('transfer', CategoryType.Excluded) }),
+      makeTransaction({ id: '2', category: makeCategory('investment', CategoryType.Excluded) }),
+    ];
+
+    const results = await categorizeTransactions(txns, {
+      provider: 'ollama',
+      baseUrl: 'http://localhost:11434',
+      model: 'llama3',
+    });
+
+    expect(results).toEqual([]);
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it('matches merchant rule and returns rule result', async () => {
+    // Seed a confident rule for "AMAZON" → shopping
+    useMerchantRuleStore.setState({
+      rules: [{
+        merchantKey: 'AMAZON',
+        direction: 'any',
+        sourceType: 'any',
+        categoryVotes: { shopping: 5 },
+        activeCategoryId: 'shopping',
+        status: 'confident',
+        lastConfirmedCategoryId: 'shopping',
+        lastConfirmedAt: '2024-01-15T10:00:00.000Z',
+        sampleDescription: 'AMAZON PURCHASE',
+        totalConfirmations: 5,
+        runnerUpCategoryId: undefined,
+        statusReason: 'single-category',
+      }],
+    });
+
+    const txns = [makeTransaction({ id: '1', description: 'AMAZON PURCHASE' })];
+    const results = await categorizeTransactions(txns, {
+      provider: 'ollama',
+      baseUrl: 'http://localhost:11434',
+      model: 'llama3',
+    });
+
+    expect(results).toHaveLength(1);
+    expect(results[0]).toEqual({
+      id: '1',
+      category: 'shopping',
+      confidence: 0.98,
+      source: 'rule',
+    });
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it('skips AI when all eligible transactions match merchant rules', async () => {
+    useMerchantRuleStore.setState({
+      rules: [{
+        merchantKey: 'AMAZON',
+        direction: 'any',
+        sourceType: 'any',
+        categoryVotes: { shopping: 5 },
+        activeCategoryId: 'shopping',
+        status: 'confident',
+        lastConfirmedCategoryId: 'shopping',
+        lastConfirmedAt: '2024-01-15T10:00:00.000Z',
+        sampleDescription: 'AMAZON PURCHASE',
+        totalConfirmations: 5,
+        runnerUpCategoryId: undefined,
+        statusReason: 'single-category',
+      }],
+    });
+
+    const txns = [makeTransaction({ id: '1', description: 'AMAZON PURCHASE' })];
+    const onProgress = vi.fn();
+    const results = await categorizeTransactions(txns, {
+      provider: 'ollama',
+      baseUrl: 'http://localhost:11434',
+      model: 'llama3',
+      onProgress,
+    });
+
+    expect(results).toHaveLength(1);
+    expect(results[0].source).toBe('rule');
+    expect(mockFetch).not.toHaveBeenCalled();
+    // onProgress fires even when AI is skipped (all handled by rules)
+    expect(onProgress).toHaveBeenCalledWith({
+      total: 1,
+      processed: 1,
+      current: 0,
+    });
+  });
+
+  it('invokes onProgress callback with correct progress numbers', async () => {
+    const onProgress = vi.fn();
+
+    mockFetch.mockResolvedValue(ollamaResponse(JSON.stringify([{
+      id: '1',
+      category: 'groceries',
+      confidence: 0.9,
+      source: 'ai',
+    }])));
+
+    const txns = [makeTransaction({ id: '1', description: 'WHOLEFOODS MARKET' })];
+    await categorizeTransactions(txns, {
+      provider: 'ollama',
+      baseUrl: 'http://localhost:11434',
+      model: 'llama3',
+      onProgress,
+    });
+
+    expect(onProgress).toHaveBeenCalled();
+    // Final call should show all processed
+    const lastCall = onProgress.mock.calls[onProgress.mock.calls.length - 1][0];
+    expect(lastCall.total).toBe(1);
+    expect(lastCall.processed).toBe(1);
+  });
+
+  it('returns mix of rule-matched and AI-categorized results', async () => {
+    // Seed a rule for "AMAZON"
+    useMerchantRuleStore.setState({
+      rules: [{
+        merchantKey: 'AMAZON',
+        direction: 'any',
+        sourceType: 'any',
+        categoryVotes: { shopping: 5 },
+        activeCategoryId: 'shopping',
+        status: 'confident',
+        lastConfirmedCategoryId: 'shopping',
+        lastConfirmedAt: '2024-01-15T10:00:00.000Z',
+        sampleDescription: 'AMAZON PURCHASE',
+        totalConfirmations: 5,
+        runnerUpCategoryId: undefined,
+        statusReason: 'single-category',
+      }],
+    });
+
+    mockFetch.mockResolvedValue(ollamaResponse(JSON.stringify([{
+      id: '2',
+      category: 'groceries',
+      confidence: 0.9,
+      source: 'ai',
+    }])));
+
+    const txns = [
+      makeTransaction({ id: '1', description: 'AMAZON PURCHASE' }),
+      makeTransaction({ id: '2', description: 'WHOLEFOODS MARKET' }),
+    ];
+    const results = await categorizeTransactions(txns, {
+      provider: 'ollama',
+      baseUrl: 'http://localhost:11434',
+      model: 'llama3',
+    });
+
+    expect(results).toHaveLength(2);
+    const ruleResult = results.find(r => r.id === '1');
+    const aiResult = results.find(r => r.id === '2');
+    expect(ruleResult?.source).toBe('rule');
+    expect(aiResult?.source).toBe('ai');
+  });
+
+  it('forwards statementType to the fetch call body', async () => {
+    mockFetch.mockResolvedValue(ollamaResponse(JSON.stringify([{
+      id: '1',
+      category: 'dining',
+      confidence: 0.9,
+      source: 'ai',
+    }])));
+
+    const txns = [makeTransaction({ id: '1', description: 'RESTAURANT BILL' })];
+    await categorizeTransactions(txns, {
+      provider: 'ollama',
+      baseUrl: 'http://localhost:11434',
+      model: 'llama3',
+      statementType: 'credit_card',
+    });
+
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+    const fetchBody = JSON.parse(mockFetch.mock.calls[0][1].body);
+    // statementType "credit_card" is rendered as "Credit Card" in the prompt
+    expect(fetchBody.prompt).toContain('Credit Card');
   });
 });

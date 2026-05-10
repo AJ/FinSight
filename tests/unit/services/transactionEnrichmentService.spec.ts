@@ -5,7 +5,7 @@ import {
   recategorizeStoredTransactions,
   mergeRecategorizedTransactions,
 } from '@/lib/services/transactionEnrichmentService';
-import { makeTransaction } from '@tests/unit/factories';
+import { makeTransaction, makeCategory } from '@tests/unit/factories';
 
 // Mock fetch — the only external boundary (LLM HTTP calls go through here)
 const mockFetch = vi.fn();
@@ -121,5 +121,71 @@ describe('mergeRecategorizedTransactions', () => {
 
     expect(result).toHaveLength(1);
     expect(result[0].id).toBe('t1');
+  });
+
+  // ── Gap coverage ──────────────────────────────────────────────────────────────
+
+  it('falls back to description for merchant normalization when merchant is not set', async () => {
+    // Transaction with no merchant set — description used for normalization
+    const tx = makeTransaction({ description: 'AMAZON RETAIL' });
+    // merchant is undefined by default from makeTransaction
+    mockFetch.mockResolvedValue(categorizationResponse([
+      { id: tx.id, category: 'shopping', confidence: 0.9 },
+    ]));
+
+    const result = await enrichImportedTransactions([tx], {
+      provider: 'ollama', baseUrl: 'http://localhost:11434', model: 'llama3',
+    });
+
+    expect(result).toHaveLength(1);
+    // Merchant was set by normalizing "AMAZON RETAIL" (from description) → "Amazon"
+    expect(result[0].merchant).toBe('Amazon');
+  });
+
+  it('propagates error when model is missing', async () => {
+    const tx = makeTransaction({ description: 'SOME PURCHASE' });
+
+    await expect(
+      enrichImportedTransactions([tx], {
+        provider: 'ollama', baseUrl: 'http://localhost:11434',
+      }),
+    ).rejects.toThrow('AI categorization requires a model');
+  });
+
+  it('returns normalized transactions unchanged when categorizeTransactions returns empty', async () => {
+    // Transfer category is in the NON_CATEGORIZABLE set, so categorizeTransactions
+    // returns empty results — transactions are returned with merchant normalized
+    // but category unchanged.
+    const tx = makeTransaction({
+      description: 'AMAZON RETAIL',
+      category: makeCategory('transfer'),
+    });
+
+    const result = await enrichImportedTransactions([tx], {
+      provider: 'ollama', baseUrl: 'http://localhost:11434', model: 'llama3',
+    });
+
+    expect(result).toHaveLength(1);
+    expect(result[0].merchant).toBe('Amazon');
+    // Category stays as transfer (unchanged by AI)
+    expect(result[0].category.id).toBe('transfer');
+  });
+
+  it('mergeRecategorizedTransactions handles multiple matching originals', () => {
+    const original1 = makeTransaction({ id: 't1', description: 'old1' });
+    const original2 = makeTransaction({ id: 't2', description: 'old2' });
+    const original3 = makeTransaction({ id: 't3', description: 'old3' });
+    const updated1 = makeTransaction({ id: 't1', description: 'new1' });
+    const updated2 = makeTransaction({ id: 't2', description: 'new2' });
+
+    const result = mergeRecategorizedTransactions(
+      [original1, original2, original3],
+      [updated1, updated2],
+    );
+
+    expect(result).toHaveLength(3);
+    expect(result.find((t) => t.id === 't1')!.description).toBe('new1');
+    expect(result.find((t) => t.id === 't2')!.description).toBe('new2');
+    expect(result.find((t) => t.id === 't3')!.description).toBe('old3');
   });
 });

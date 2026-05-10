@@ -84,4 +84,27 @@ describe('checkLLMStatus', () => {
     expect(result.connected).toBe(true);
     expect(result.models.some((m) => m.id === 'qwen2.5')).toBe(true);
   });
+
+  it('returns disconnected status when server is unreachable', async () => {
+    mockFetch.mockReset();
+    mockFetch.mockResolvedValue({ ok: false, status: 503 });
+
+    const result = await checkLLMStatus('http://localhost:11434', 'ollama');
+
+    expect(result.connected).toBe(false);
+    expect(result.models).toEqual([]);
+    expect(result.selectedModel).toBeNull();
+  });
+
+  it('returns disconnected status on network error (fetch rejects)', async () => {
+    // The adapter catches fetch rejections and returns { connected: false }
+    mockFetch.mockReset();
+    mockFetch.mockRejectedValue(new TypeError('Failed to fetch'));
+
+    const result = await checkLLMStatus('http://localhost:11434', 'ollama');
+
+    expect(result.connected).toBe(false);
+    expect(result.models).toEqual([]);
+    expect(result.selectedModel).toBeNull();
+  });
 });

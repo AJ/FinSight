@@ -128,4 +128,85 @@ describe('teachMerchantRulesFromConfirmedTransactions', () => {
     expect(findMerchantRuleForTransaction(reviewed[0])?.activeCategoryId).toBe('shopping');
     expect(findMerchantRuleForTransaction(reviewed[1])?.activeCategoryId).toBe('entertainment');
   });
+
+  // ── Gap coverage ──────────────────────────────────────────────────────────────
+
+  it('teachMerchantRuleFromTransaction returns false when decision is null', () => {
+    // Description is just digits — buildMerchantKey strips long digit sequences,
+    // leaving an empty key, so getMerchantRuleDecision returns null.
+    const tx = makeTransaction({ description: '123456789', category: makeCategory('shopping') });
+
+    const result = teachMerchantRuleFromTransaction(tx);
+
+    expect(result).toBe(false);
+  });
+
+  it('counter does not increment when teachMerchantRuleFromTransaction returns false', () => {
+    // One transaction that produces a null decision (digit-only description),
+    // paired with a valid one that produces a real decision.
+    const originals = [
+      makeTransaction({ id: 'tx-digits', description: '123456789', category: makeCategory('other') }),
+      makeTransaction({ id: 'tx-valid', description: 'NETFLIX', category: makeCategory('other') }),
+    ];
+
+    const reviewed = [
+      makeTransaction({
+        id: 'tx-digits',
+        description: '123456789',
+        category: makeCategory('shopping'),
+        categorizedBy: CategorizedBy.Manual,
+      }),
+      makeTransaction({
+        id: 'tx-valid',
+        description: 'NETFLIX',
+        category: makeCategory('entertainment'),
+        categorizedBy: CategorizedBy.Manual,
+      }),
+    ];
+
+    const count = teachMerchantRulesFromConfirmedTransactions(originals, reviewed);
+
+    // Only the NETFLIX transaction should increment the counter
+    expect(count).toBe(1);
+    expect(findMerchantRuleForTransaction(reviewed[1])?.activeCategoryId).toBe('entertainment');
+  });
+
+  it('returns 0 for empty original and reviewed arrays', () => {
+    const count = teachMerchantRulesFromConfirmedTransactions([], []);
+
+    expect(count).toBe(0);
+  });
+
+  it('handles multiple competing rules for different merchants', () => {
+    // Teach two different merchant rules
+    const amazonOriginal = makeTransaction({ id: 'tx-1', description: 'AMAZON', category: makeCategory('other') });
+    const netflixOriginal = makeTransaction({ id: 'tx-2', description: 'NETFLIX', category: makeCategory('other') });
+
+    const amazonReviewed = makeTransaction({
+      id: 'tx-1',
+      description: 'AMAZON',
+      category: makeCategory('shopping'),
+      categorizedBy: CategorizedBy.Manual,
+    });
+    const netflixReviewed = makeTransaction({
+      id: 'tx-2',
+      description: 'NETFLIX',
+      category: makeCategory('entertainment'),
+      categorizedBy: CategorizedBy.Manual,
+    });
+
+    const count = teachMerchantRulesFromConfirmedTransactions(
+      [amazonOriginal, netflixOriginal],
+      [amazonReviewed, netflixReviewed],
+    );
+
+    expect(count).toBe(2);
+
+    // Verify each rule matches only its own merchant
+    const amazonLookup = makeTransaction({ description: 'AMAZON RETAIL' });
+    const netflixLookup = makeTransaction({ description: 'NETFLIX SUBSCRIPTION' });
+
+    expect(findMerchantRuleForTransaction(amazonLookup)?.activeCategoryId).toBe('shopping');
+    expect(findMerchantRuleForTransaction(netflixLookup)?.activeCategoryId).toBe('entertainment');
+  });
 });

@@ -148,3 +148,115 @@ describe('subscribeToLLMConnection', () => {
     unsubscribe();
   });
 });
+
+// NOTE: The catch block in checkConnection (llmConnectionStore.ts:103) is unreachable
+// through real behavior. Both adapters (ollama/openai) wrap checkStatus in try/catch
+// that returns { connected: false } on any error. The LLMClient further wraps in
+// try/finally. So checkLLMStatus never throws — the store's catch block is defensive
+// coding against programming errors. No test is needed for this path.
+
+describe('model context-length refresh', () => {
+  it('calls setModelContextLength when connected and model has contextLength', async () => {
+    useSettingsStore.setState({ llmModel: 'llama3' });
+
+    // Ollama checkStatus: 1) root URL, 2) /api/tags, 3) /api/show for enrichment
+    mockFetch.mockReset();
+    mockFetch
+      .mockResolvedValueOnce({ ok: true, status: 200 }) // root
+      .mockResolvedValueOnce({ // /api/tags
+        ok: true,
+        status: 200,
+        json: () => Promise.resolve({ models: [{ name: 'llama3' }] }),
+      })
+      .mockResolvedValueOnce({ // /api/show for context length enrichment
+        ok: true,
+        status: 200,
+        json: () => Promise.resolve({
+          parameters: 'num_ctx 4096',
+          model_info: {},
+        }),
+      });
+
+    await useLLMConnectionStore.getState().checkConnection();
+
+    // setModelContextLength should have been called with 4096
+    const settings = useSettingsStore.getState();
+    expect(settings.llmModelContextLength).toBe(4096);
+  });
+});
+
+describe('provider change auto-invalidation', () => {
+  it('re-checks when provider changes', async () => {
+    // Use a fresh mock to avoid cross-test interference
+    mockFetch.mockReset();
+    ollamaConnectedSequence();
+
+    await useLLMConnectionStore.getState().checkConnection();
+    const callsAfterFirst = mockFetch.mock.calls.length;
+
+    // Switch to LM Studio — should invalidate cache
+    useSettingsStore.setState({ llmProvider: 'lmstudio', llmServerUrl: 'http://localhost:1234' });
+
+    // Set up LM Studio response sequence
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({ data: [] }),
+    });
+
+    await useLLMConnectionStore.getState().checkConnection();
+
+    // Second check should have made additional fetch calls (LM Studio = 1 call to /v1/models)
+    const callsAfterSecond = mockFetch.mock.calls.length;
+    expect(callsAfterSecond).toBeGreaterThan(callsAfterFirst);
+  });
+});
+
+describe('model change auto-invalidation', () => {
+  it('re-checks when model changes', async () => {
+    await useLLMConnectionStore.getState().checkConnection();
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+
+    // Change model → cache invalid → next check hits fetch again
+    useSettingsStore.setState({ llmModel: 'qwen2.5' });
+    ollamaConnectedSequence();
+    await useLLMConnectionStore.getState().checkConnection();
+
+    expect(mockFetch).toHaveBeenCalledTimes(4);
+  });
+});
+
+describe('isLoading state', () => {
+  it('is true during check and false after completion', async () => {
+    // Use a promise we can control to observe isLoading mid-flight
+    let resolveCheck: () => void;
+    const pendingCheck = new Promise<void>((resolve) => { resolveCheck = resolve; });
+
+    mockFetch.mockReset();
+    mockFetch.mockImplementation(() => pendingCheck.then(() => ({ ok: true, status: 200 })));
+
+    const checkPromise = useLLMConnectionStore.getState().checkConnection();
+
+    // isLoading should be true right after initiating
+    expect(useLLMConnectionStore.getState().isLoading).toBe(true);
+
+    // Resolve the fetch
+    resolveCheck!();
+    await checkPromise;
+
+    expect(useLLMConnectionStore.getState().isLoading).toBe(false);
+  });
+});
+
+describe('error state for disconnected but successful response', () => {
+  it('sets error when adapter returns connected: false', async () => {
+    mockFetch.mockReset();
+    // First call: root check returns non-ok
+    mockFetch.mockResolvedValueOnce({ ok: false, status: 503 });
+
+    const status = await useLLMConnectionStore.getState().checkConnection();
+
+    expect(status.connected).toBe(false);
+    expect(useLLMConnectionStore.getState().error).toBe('LLM server not reachable');
+  });
+});

@@ -162,4 +162,68 @@ describe('detectStatementType', () => {
     const fetchOptions = mockFetch.mock.calls[0][1];
     expect(fetchOptions.signal).toBeInstanceOf(AbortSignal);
   });
+
+  // ── Gap coverage ──────────────────────────────────────────────────────────────
+
+  it('normalizes "credit card" (space) to credit_card', async () => {
+    mockFetch.mockResolvedValue(ollamaResponse(JSON.stringify({
+      type: 'credit card',
+      confidence: 0.85,
+    })));
+
+    const result = await detectStatementType('text', baseConfig);
+
+    expect(result.statementType).toBe('credit_card');
+  });
+
+  it('normalizes "credit-card" (hyphen) to credit_card', async () => {
+    mockFetch.mockResolvedValue(ollamaResponse(JSON.stringify({
+      type: 'credit-card',
+      confidence: 0.85,
+    })));
+
+    const result = await detectStatementType('text', baseConfig);
+
+    expect(result.statementType).toBe('credit_card');
+  });
+
+  it('throws for null type from LLM response', async () => {
+    mockFetch.mockResolvedValue(ollamaResponse(JSON.stringify({
+      type: null,
+      confidence: 0.3,
+    })));
+
+    await expect(detectStatementType('text', baseConfig)).rejects.toThrow('Unknown statement type');
+  });
+
+  it('throws for undefined type from LLM response', async () => {
+    mockFetch.mockResolvedValue(ollamaResponse(JSON.stringify({
+      type: undefined,
+      confidence: 0.3,
+    })));
+
+    await expect(detectStatementType('text', baseConfig)).rejects.toThrow('Unknown statement type');
+  });
+
+  it('normalizes bankName "Unknown" (capitalized) to null', async () => {
+    mockFetch.mockResolvedValue(ollamaResponse(JSON.stringify({
+      type: 'bank',
+      confidence: 0.9,
+      bankName: 'Unknown',
+    })));
+
+    const result = await detectStatementType('text', baseConfig);
+
+    expect(result.bankName).toBeNull();
+  });
+
+  it('preserves undefined confidence when LLM omits it', async () => {
+    mockFetch.mockResolvedValue(ollamaResponse(JSON.stringify({
+      type: 'bank',
+    })));
+
+    const result = await detectStatementType('text', baseConfig);
+
+    expect(result.confidence).toBeUndefined();
+  });
 });
