@@ -9,7 +9,6 @@ import { useInsightsStore } from '@/lib/store/insightsStore';
 import { getTransactionAnalytics } from '@/lib/insights';
 import { InsightCard } from './InsightCard';
 import { Sparkles, RefreshCw, AlertCircle, Loader2 } from 'lucide-react';
-import { Insight } from '@/lib/insights/types';
 import { generateInsights } from '@/lib/insights/browserGenerator';
 import { debugLog } from '@/lib/utils/debug';
 
