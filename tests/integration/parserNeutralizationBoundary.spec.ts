@@ -95,4 +95,44 @@ describe('parser neutralization boundary', () => {
       }),
     ).rejects.toThrow('LLM runtime configuration is required for PDF statement parsing.');
   });
+
+  it('extractStatementBundleFromFile routes .xlsx files to parseXLS', async () => {
+    const file = createXlsxFile([
+      { Date: '2024-01-20', Description: 'Salary', Credit: 5000, Balance: 10000 },
+    ]);
+
+    const bundle = await extractStatementBundleFromFile({
+      file,
+      defaultCurrency: { code: 'INR', symbol: 'Rs.', name: 'Indian Rupee' },
+    });
+
+    expect(bundle.format).toBe('xlsx');
+    expect(bundle.transactions).toHaveLength(1);
+    expect(bundle.transactions[0].description).toBe('Salary');
+  });
+
+  it('extractStatementBundleFromFile routes .xls files to parseXLS', async () => {
+    const file = createXlsxFile([
+      { Date: '2024-01-20', Description: 'Coffee', Debit: 250, Balance: 9750 },
+    ], 'statement.xls');
+
+    const bundle = await extractStatementBundleFromFile({
+      file,
+      defaultCurrency: { code: 'INR', symbol: 'Rs.', name: 'Indian Rupee' },
+    });
+
+    expect(bundle.format).toBe('xlsx');
+    expect(bundle.transactions).toHaveLength(1);
+  });
+
+  it('extractStatementBundleFromFile throws on unsupported format', async () => {
+    const file = new File(['some text'], 'data.txt', { type: 'text/plain' });
+
+    await expect(
+      extractStatementBundleFromFile({
+        file,
+        defaultCurrency: { code: 'INR', symbol: 'Rs.', name: 'Indian Rupee' },
+      }),
+    ).rejects.toThrow('Unsupported file format');
+  });
 });

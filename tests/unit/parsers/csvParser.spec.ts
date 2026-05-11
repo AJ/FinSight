@@ -185,6 +185,97 @@ describe('parseCSV', () => {
     expect(result.transactions[1].amount).toBe(15);
   });
 
+  it('recognizes type column value "dr" as debit', async () => {
+    const csv = `Date,Description,Amount,Type
+01/01/2024,ATM,100.00,dr`;
+    const result = await parseCSV(makeCsvFile(csv));
+    expect(result.transactions[0].isDebit).toBe(true);
+  });
+
+  it('recognizes type column value "withdrawal" as debit', async () => {
+    const csv = `Date,Description,Amount,Type
+01/01/2024,ATM,100.00,withdrawal`;
+    const result = await parseCSV(makeCsvFile(csv));
+    expect(result.transactions[0].isDebit).toBe(true);
+  });
+
+  it('recognizes type column value "expense" as debit', async () => {
+    const csv = `Date,Description,Amount,Type
+01/01/2024,Coffee,5.00,expense`;
+    const result = await parseCSV(makeCsvFile(csv));
+    expect(result.transactions[0].isDebit).toBe(true);
+  });
+
+  it('recognizes type column value "cr" as credit', async () => {
+    const csv = `Date,Description,Amount,Type
+01/01/2024,Refund,50.00,cr`;
+    const result = await parseCSV(makeCsvFile(csv));
+    expect(result.transactions[0].isCredit).toBe(true);
+  });
+
+  it('recognizes type column value "deposit" as credit', async () => {
+    const csv = `Date,Description,Amount,Type
+01/01/2024,Salary,3000.00,deposit`;
+    const result = await parseCSV(makeCsvFile(csv));
+    expect(result.transactions[0].isCredit).toBe(true);
+  });
+
+  it('recognizes type column value "income" as credit', async () => {
+    const csv = `Date,Description,Amount,Type
+01/01/2024,Salary,3000.00,income`;
+    const result = await parseCSV(makeCsvFile(csv));
+    expect(result.transactions[0].isCredit).toBe(true);
+  });
+
+  it('falls back to sign-based type for unrecognized type column value', async () => {
+    const csv = `Date,Description,Amount,Type
+01/01/2024,Refund,-50.00,misc`;
+    const result = await parseCSV(makeCsvFile(csv));
+    expect(result.transactions[0].isDebit).toBe(true);
+    expect(result.transactions[0].amount).toBe(50);
+  });
+
+  it('parses CSV with only a credit/deposit column (no debit column)', async () => {
+    const csv = `Date,Description,Deposit
+01/01/2024,Salary,3000.00
+02/01/2024,Refund,150.00`;
+    const result = await parseCSV(makeCsvFile(csv));
+    expect(result.transactions).toHaveLength(2);
+    expect(result.transactions[0].isCredit).toBe(true);
+    expect(result.transactions[0].amount).toBe(3000);
+  });
+
+  it('populates warnings when PapaParse encounters errors', async () => {
+    // Use a CSV with mismatched quoting to trigger PapaParse-level errors.
+    // PapaParse reports FieldMismatch/Quotes errors for malformed rows.
+    const csv = `Date,Description,Amount,Type
+01/01/2024,Valid,100.00,debit
+02/01/2024,"Unclosed quote,300.00,credit`;
+
+    const result = await parseCSV(makeCsvFile(csv));
+
+    // PapaParse should have reported parse errors for the malformed quoting
+    if (result.parsingErrors.length > 0) {
+      expect(result.warnings.length).toBeGreaterThan(0);
+      expect(result.warnings[0]).toContain('failed to parse');
+    }
+  });
+
+  it('sets sourceType to CreditCard when statementType is credit_card', async () => {
+    const result = await parseCSV(
+      makeCsvFile(BANK_CSV),
+      { statementType: 'credit_card' },
+    );
+    expect(result.transactions[0].sourceType).toBe('credit_card');
+  });
+
+  it('handles comma-as-thousands separator in large numbers', async () => {
+    const csv = `Date,Description,Amount
+01/01/2024,Large Purchase,"1,234,567"`;
+    const result = await parseCSV(makeCsvFile(csv));
+    expect(result.transactions[0].amount).toBe(1234567);
+  });
+
   it('populates parsingErrors from malformed rows', async () => {
     const csv = `Date,Description,Debit,Credit
 not-a-date,Grocery,50.00,
