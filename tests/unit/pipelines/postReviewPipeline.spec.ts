@@ -210,4 +210,117 @@ describe('finalizeReviewImport', () => {
     expect(result).toHaveProperty('warnings');
     expect(result).toHaveProperty('errors');
   });
+
+  it('stamps transactions with sourceFileHash when present', async () => {
+    const reviewed = makeTransaction({ id: 'txn-1', description: 'Coffee', amount: 100 });
+
+    reviewSessionRepository.save({
+      transactions: [reviewed],
+      currency: INR,
+      format: 'csv',
+      statementType: 'bank',
+      fileName: 'test.csv',
+      parseDate: new Date(),
+      statementSummary: null,
+      sourceMetadata: { sourceFileHash: 'sha256abc' },
+      warnings: [],
+    });
+
+    await finalizeReviewImport([reviewed], defaultDependencies);
+
+    expect(defaultDependencies.addTransactions).toHaveBeenCalledWith(
+      expect.arrayContaining([
+        expect.objectContaining({ sourceFileHash: 'sha256abc' }),
+      ]),
+    );
+  });
+
+  it('maps credit card statement with full fields including rewardPoints', async () => {
+    const reviewed = makeTransaction({ id: 'txn-1', description: 'Amazon', amount: 5000 });
+
+    reviewSessionRepository.save({
+      transactions: [reviewed],
+      currency: INR,
+      format: 'pdf',
+      statementType: 'credit_card',
+      fileName: 'cc-full.pdf',
+      parseDate: new Date(),
+      statementSummary: {
+        statementDate: '2025-10-31',
+        paymentDueDate: '2025-11-25',
+        statementPeriodStart: '2025-10-01',
+        statementPeriodEnd: '2025-10-31',
+        totalDue: 5000,
+        minimumDue: 500,
+        previousBalance: 2000,
+        creditLimit: 100000,
+        availableCredit: 95000,
+        cardLastFour: '5678',
+        cardIssuer: 'HDFC',
+        cardHolder: 'John Doe',
+        purchasesAndCharges: 5000,
+        paymentsReceived: 2000,
+        interestCharged: 150,
+        lateFee: 0,
+        otherCharges: 50,
+        cashbackEarned: 75,
+        rewardPoints: {
+          opening: 1000,
+          earned: 200,
+          redeemed: 50,
+          closing: 1150,
+        },
+      } as Summary,
+      warnings: [],
+    });
+
+    await finalizeReviewImport([reviewed], defaultDependencies);
+
+    expect(defaultDependencies.addCreditCardStatement).toHaveBeenCalledWith(
+      expect.objectContaining({
+        fileName: 'cc-full.pdf',
+        cardLastFour: '5678',
+        cardIssuer: 'HDFC',
+        cardHolder: 'John Doe',
+        totalDue: 5000,
+        minimumDue: 500,
+        interestCharged: 150,
+        otherCharges: 50,
+        cashbackEarned: 75,
+        rewardPoints: {
+          openingBalance: 1000,
+          earned: 200,
+          redeemed: 50,
+          expired: 0,
+          closingBalance: 1150,
+          expiringNext: undefined,
+          expiringNextDate: undefined,
+        },
+        statementPeriod: {
+          start: expect.any(Date),
+          end: expect.any(Date),
+        },
+        statementDate: expect.any(Date),
+        paymentDueDate: expect.any(Date),
+      }),
+    );
+  });
+
+  it('defaults warnings to empty array when null', async () => {
+    const reviewed = makeTransaction({ id: 'txn-1', description: 'Coffee', amount: 100 });
+
+    reviewSessionRepository.save({
+      transactions: [reviewed],
+      currency: INR,
+      format: 'csv',
+      statementType: 'bank',
+      fileName: 'test.csv',
+      parseDate: new Date(),
+      statementSummary: null,
+      warnings: undefined as unknown as [],
+    });
+
+    const result = await finalizeReviewImport([reviewed], defaultDependencies);
+    expect(result.warnings).toEqual([]);
+  });
 });

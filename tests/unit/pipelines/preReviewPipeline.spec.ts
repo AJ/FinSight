@@ -156,4 +156,71 @@ Some purchase,100`;
     expect(saved!.fileName).toBe('second.csv');
     expect(saved!.transactions).toHaveLength(1);
   });
+
+  it('passes sourceFileHash into saved session', async () => {
+    const csv = `Date,Description,Amount,Type
+20/10/2025,Salary,5000,credit`;
+
+    await runPreReviewPipeline({
+      file: createCSVFile(csv),
+      provider: 'ollama',
+      baseUrl: 'http://localhost:11434',
+      model: 'test-model',
+      defaultCurrency: INR,
+      sourceFileHash: 'abc123',
+    });
+
+    const saved = reviewSessionRepository.load();
+    expect(saved!.sourceMetadata?.sourceFileHash).toBe('abc123');
+  });
+
+  it('invokes onProgress callback', async () => {
+    const csv = `Date,Description,Amount,Type
+20/10/2025,Salary,5000,credit`;
+
+    const progress: string[] = [];
+    await runPreReviewPipeline({
+      file: createCSVFile(csv),
+      provider: 'ollama',
+      baseUrl: 'http://localhost:11434',
+      model: 'test-model',
+      defaultCurrency: INR,
+      onProgress: (msg) => progress.push(msg),
+    });
+
+    expect(progress).toContain('Categorizing transactions...');
+    // CSV also triggers "Parsing CSV..." from extractStatementBundleFromFile
+    expect(progress.length).toBeGreaterThan(1);
+  });
+
+  it('throws when no model provided (model falls back to empty string)', async () => {
+    const csv = `Date,Description,Amount,Type
+20/10/2025,Salary,5000,credit`;
+
+    await expect(
+      runPreReviewPipeline({
+        file: createCSVFile(csv),
+        provider: 'ollama',
+        baseUrl: 'http://localhost:11434',
+        defaultCurrency: INR,
+      }),
+    ).rejects.toThrow('model');
+  });
+
+  it('passes statementType through to extraction', async () => {
+    const csv = `Date,Description,Amount,Type
+20/10/2025,Salary,5000,credit`;
+
+    const result = await runPreReviewPipeline({
+      file: createCSVFile(csv),
+      provider: 'ollama',
+      baseUrl: 'http://localhost:11434',
+      model: 'test-model',
+      defaultCurrency: INR,
+      statementType: 'credit_card',
+    });
+
+    // statementType is passed through — CSV parser preserves it
+    expect(result.statementType).toBe('credit_card');
+  });
 });
