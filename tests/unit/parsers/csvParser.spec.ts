@@ -246,19 +246,16 @@ describe('parseCSV', () => {
   });
 
   it('populates warnings when PapaParse encounters errors', async () => {
-    // Use a CSV with mismatched quoting to trigger PapaParse-level errors.
-    // PapaParse reports FieldMismatch/Quotes errors for malformed rows.
+    // Unclosed quote triggers PapaParse Quotes/MissingQuotes + FieldMismatch errors
     const csv = `Date,Description,Amount,Type
 01/01/2024,Valid,100.00,debit
 02/01/2024,"Unclosed quote,300.00,credit`;
 
     const result = await parseCSV(makeCsvFile(csv));
 
-    // PapaParse should have reported parse errors for the malformed quoting
-    if (result.parsingErrors.length > 0) {
-      expect(result.warnings.length).toBeGreaterThan(0);
-      expect(result.warnings[0]).toContain('failed to parse');
-    }
+    expect(result.parsingErrors.length).toBeGreaterThan(0);
+    expect(result.warnings.length).toBeGreaterThan(0);
+    expect(result.warnings[0]).toContain('failed to parse');
   });
 
   it('sets sourceType to CreditCard when statementType is credit_card', async () => {

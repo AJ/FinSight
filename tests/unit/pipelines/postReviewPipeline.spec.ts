@@ -306,7 +306,7 @@ describe('finalizeReviewImport', () => {
     );
   });
 
-  it('defaults warnings to empty array when null', async () => {
+  it('defaults warnings to empty array when undefined', async () => {
     const reviewed = makeTransaction({ id: 'txn-1', description: 'Coffee', amount: 100 });
 
     reviewSessionRepository.save({
@@ -318,6 +318,24 @@ describe('finalizeReviewImport', () => {
       parseDate: new Date(),
       statementSummary: null,
       warnings: undefined as unknown as [],
+    });
+
+    const result = await finalizeReviewImport([reviewed], defaultDependencies);
+    expect(result.warnings).toEqual([]);
+  });
+
+  it('defaults warnings to empty array when null', async () => {
+    const reviewed = makeTransaction({ id: 'txn-1', description: 'Coffee', amount: 100 });
+
+    reviewSessionRepository.save({
+      transactions: [reviewed],
+      currency: INR,
+      format: 'csv',
+      statementType: 'bank',
+      fileName: 'test.csv',
+      parseDate: new Date(),
+      statementSummary: null,
+      warnings: null as unknown as [],
     });
 
     const result = await finalizeReviewImport([reviewed], defaultDependencies);
