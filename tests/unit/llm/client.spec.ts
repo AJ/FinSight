@@ -551,4 +551,81 @@ describe('createClient edge cases', () => {
     const fetchOptions = mockFetch.mock.calls[0][1];
     expect(fetchOptions.signal).toBeInstanceOf(AbortSignal);
   });
+
+  it('chatStream passes custom maxTokens to adapter', async () => {
+    const lmClient = createClient('lmstudio');
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream({
+      start(controller) {
+        controller.enqueue(encoder.encode('data: {"choices":[{"delta":{"content":""}}]}\n\n'));
+        controller.enqueue(encoder.encode('data: [DONE]\n\n'));
+        controller.close();
+      },
+    });
+
+    mockFetch.mockResolvedValue({
+      ok: true,
+      status: 200,
+      body: stream,
+    });
+
+    for await (const chunk of lmClient.chatStream('http://localhost:1234', 'mistral', [], { maxTokens: 8192 })) { void chunk; }
+
+    const body = JSON.parse(mockFetch.mock.calls[0][1].body);
+    expect(body.max_tokens).toBe(8192);
+  });
+
+  it('classifyError says "cancelled" when external signal is aborted', async () => {
+    const controller = new AbortController();
+
+    // Simulate browser AbortError: Error subclass with name 'AbortError'.
+    // Node.js DOMException doesn't extend Error, so classifyError's
+    // instanceof Error check would fail. Use plain Error with name override.
+    const abortError = Object.assign(new Error('The user aborted a request.'), { name: 'AbortError' });
+
+    mockFetch.mockImplementation(() => {
+      controller.abort();
+      return Promise.reject(abortError);
+    });
+
+    await expect(
+      client.generate('http://localhost:11434', 'llama3', 'prompt', { signal: controller.signal }),
+    ).rejects.toThrow('cancelled');
+  });
+
+  it('classifyError says "timed out" when no external signal is aborted', async () => {
+    const abortError = Object.assign(new Error('The user aborted a request.'), { name: 'AbortError' });
+    mockFetch.mockRejectedValueOnce(abortError);
+
+    // No external signal passed — classifyError should report "timed out"
+    await expect(
+      client.generate('http://localhost:11434', 'llama3', 'prompt'),
+    ).rejects.toThrow('timed out');
+  });
+
+  it('retry backoff delays by 1000 * attempt ms', async () => {
+    vi.useFakeTimers();
+
+    mockFetch
+      .mockRejectedValueOnce(new TypeError('connection refused'))
+      .mockResolvedValueOnce(ollamaGenerateResponse('recovered'));
+
+    const generatePromise = client.generate('http://localhost:11434', 'llama3', 'prompt');
+
+    // The retry delay is 1000 * attempt (attempt=1) = 1000ms
+    // After the first failure, the client awaits a 1000ms timer before retrying.
+    // fetch should have been called only once at this point.
+    await vi.advanceTimersByTimeAsync(500);
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+
+    // Advance past the full backoff delay
+    await vi.advanceTimersByTimeAsync(600);
+    // Now the retry should have fired
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+
+    const result = await generatePromise;
+    expect(result).toBe('recovered');
+
+    vi.useRealTimers();
+  });
 });

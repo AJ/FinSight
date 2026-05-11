@@ -3,10 +3,11 @@ import { runPreReviewPipeline } from '@/lib/pipelines/preReviewPipeline';
 import { reviewSessionRepository } from '@/lib/review/reviewSessionRepository';
 import '@/lib/categorization/categories';
 
-// Mock only the categorization (LLM-dependent) — pass transactions through unchanged
-vi.mock('@/lib/services/transactionEnrichmentService', () => ({
-  enrichImportedTransactions: vi.fn((transactions) => Promise.resolve(transactions)),
-}));
+// Mock fetch at the network boundary so the real enrichment pipeline runs.
+// When the LLM adapter calls fetch, it gets a network error, causing
+// runCategorizationCore to fall back to keyword-based categorization.
+const mockFetch = vi.fn(() => Promise.reject(new TypeError('Network error')));
+vi.stubGlobal('fetch', mockFetch);
 
 function createCSVFile(content: string, name = 'test.csv'): File {
   return new File([content], name, { type: 'text/csv' });
@@ -17,6 +18,7 @@ const INR = { code: 'INR', symbol: '₹', name: 'Indian Rupee' };
 describe('runPreReviewPipeline', () => {
   beforeEach(() => {
     sessionStorage.clear();
+    mockFetch.mockClear();
   });
 
   it('processes a CSV bank statement end-to-end', async () => {
@@ -28,6 +30,7 @@ describe('runPreReviewPipeline', () => {
       file: createCSVFile(csv),
       provider: 'ollama',
       baseUrl: 'http://localhost:11434',
+      model: 'test-model',
       defaultCurrency: INR,
     });
 
@@ -65,6 +68,7 @@ not-a-date,Bad Row,abc,debit
       file: createCSVFile(csv),
       provider: 'ollama',
       baseUrl: 'http://localhost:11434',
+      model: 'test-model',
       defaultCurrency: INR,
     });
 
@@ -94,6 +98,7 @@ Some purchase,100`;
       file: createCSVFile(csv),
       provider: 'ollama',
       baseUrl: 'http://localhost:11434',
+      model: 'test-model',
       defaultCurrency: INR,
     });
 
@@ -109,6 +114,7 @@ Some purchase,100`;
       file: createCSVFile(csv),
       provider: 'ollama',
       baseUrl: 'http://localhost:11434',
+      model: 'test-model',
       defaultCurrency: INR,
     });
 
@@ -131,6 +137,7 @@ Some purchase,100`;
       file: createCSVFile(csv1, 'first.csv'),
       provider: 'ollama',
       baseUrl: 'http://localhost:11434',
+      model: 'test-model',
       defaultCurrency: INR,
     });
 
@@ -141,6 +148,7 @@ Some purchase,100`;
       file: createCSVFile(csv2, 'second.csv'),
       provider: 'ollama',
       baseUrl: 'http://localhost:11434',
+      model: 'test-model',
       defaultCurrency: INR,
     });
 

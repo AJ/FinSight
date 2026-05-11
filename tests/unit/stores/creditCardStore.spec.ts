@@ -1,7 +1,9 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 
-import { useCreditCardStore } from '@/lib/store/creditCardStore';
+import { useCreditCardStore, createCreditCardStatement } from '@/lib/store/creditCardStore';
 import type { CreditCardStatement } from '@/types/creditCard';
+import { makeTransaction } from '@tests/unit/factories';
+import { SourceType, Category, CategoryType } from '@/types';
 
 beforeEach(() => {
   useCreditCardStore.setState({ statements: [], isParsing: false });
@@ -505,6 +507,198 @@ describe('creditCardStore', () => {
       const result = useCreditCardStore.getState().getRewardPointsAnalysis();
       expect(result.totalPointsAllCards).toBe(0);
       expect(result.byCard).toHaveLength(0);
+    });
+  });
+
+  describe('createCreditCardStatement', () => {
+    it('generates a UUID id and merges provided data', () => {
+      const data = {
+        fileName: 'stmt.pdf',
+        parseDate: new Date('2024-06-01'),
+        cardLastFour: '5678',
+        cardIssuer: 'SBI',
+        statementPeriod: { start: new Date('2024-05-01'), end: new Date('2024-05-31') },
+        statementDate: new Date('2024-06-01'),
+        paymentDueDate: new Date('2024-06-20'),
+        totalDue: 30000,
+        minimumDue: 1500,
+        creditLimit: 100000,
+        availableCredit: 70000,
+        previousBalance: 25000,
+        paymentsReceived: 25000,
+        purchasesAndCharges: 30000,
+        interestCharged: 0,
+        lateFee: 0,
+        isPaid: false,
+      };
+
+      const stmt = createCreditCardStatement(data);
+
+      // Must have a generated id that is a valid UUID format
+      expect(stmt.id).toBeDefined();
+      expect(typeof stmt.id).toBe('string');
+      expect(stmt.id.length).toBeGreaterThan(0);
+      // UUID v4 format: 8-4-4-4-12 hex chars
+      expect(stmt.id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+
+      // All provided fields are preserved
+      expect(stmt.cardIssuer).toBe('SBI');
+      expect(stmt.cardLastFour).toBe('5678');
+      expect(stmt.totalDue).toBe(30000);
+      expect(stmt.minimumDue).toBe(1500);
+      expect(stmt.creditLimit).toBe(100000);
+      expect(stmt.parseDate).toEqual(new Date('2024-06-01'));
+    });
+
+    it('generates unique ids for each call', () => {
+      const base = {
+        fileName: 'stmt.pdf',
+        parseDate: new Date('2024-06-01'),
+        cardLastFour: '1234',
+        cardIssuer: 'HDFC',
+        statementPeriod: { start: new Date('2024-05-01'), end: new Date('2024-05-31') },
+        statementDate: new Date('2024-06-01'),
+        paymentDueDate: new Date('2024-06-20'),
+        totalDue: 50000,
+        minimumDue: 2500,
+        creditLimit: 200000,
+        availableCredit: 150000,
+        previousBalance: 45000,
+        paymentsReceived: 45000,
+        purchasesAndCharges: 50000,
+        interestCharged: 0,
+        lateFee: 0,
+        isPaid: false,
+      };
+
+      const s1 = createCreditCardStatement(base);
+      const s2 = createCreditCardStatement(base);
+      expect(s1.id).not.toBe(s2.id);
+    });
+  });
+
+  describe('getCardComparison', () => {
+    it('filters transactions by period and groups by card with category breakdown', () => {
+      useCreditCardStore.getState().addStatement(
+        makeStatement({ cardIssuer: 'HDFC', cardLastFour: '1234', totalDue: 10000, creditLimit: 200000 }),
+      );
+
+      // Create credit card transactions within the period
+      const periodStart = new Date('2024-05-01');
+      const periodEnd = new Date('2024-05-31');
+
+      const txnIn1 = makeTransaction({ id: 'cc-1', amount: 5000, date: new Date('2024-05-10') });
+      Object.defineProperty(txnIn1, 'sourceType', { value: SourceType.CreditCard, writable: true });
+      Object.defineProperty(txnIn1, 'cardIssuer', { value: 'HDFC', writable: true });
+      Object.defineProperty(txnIn1, 'cardLastFour', { value: '1234', writable: true });
+      txnIn1.category = new Category('dining', 'dining', CategoryType.Expense);
+
+      const txnIn2 = makeTransaction({ id: 'cc-2', amount: 3000, date: new Date('2024-05-20') });
+      Object.defineProperty(txnIn2, 'sourceType', { value: SourceType.CreditCard, writable: true });
+      Object.defineProperty(txnIn2, 'cardIssuer', { value: 'HDFC', writable: true });
+      Object.defineProperty(txnIn2, 'cardLastFour', { value: '1234', writable: true });
+      txnIn2.category = new Category('groceries', 'groceries', CategoryType.Expense);
+
+      // Transaction outside period — should be excluded
+      const txnOut = makeTransaction({ id: 'cc-3', amount: 9999, date: new Date('2024-04-15') });
+      Object.defineProperty(txnOut, 'sourceType', { value: SourceType.CreditCard, writable: true });
+      Object.defineProperty(txnOut, 'cardIssuer', { value: 'HDFC', writable: true });
+      Object.defineProperty(txnOut, 'cardLastFour', { value: '1234', writable: true });
+
+      // Bank transaction in period — should be excluded (sourceType !== credit_card)
+      const txnBank = makeTransaction({ id: 'cc-4', amount: 7777, date: new Date('2024-05-15') });
+
+      const result = useCreditCardStore.getState().getCardComparison(
+        [txnIn1, txnIn2, txnOut, txnBank],
+        periodStart,
+        periodEnd,
+      );
+
+      expect(result).toHaveLength(1);
+      expect(result[0].cardIssuer).toBe('HDFC');
+      expect(result[0].cardLastFour).toBe('1234');
+      expect(result[0].totalSpend).toBe(8000); // 5000 + 3000
+      expect(result[0].transactionCount).toBe(2);
+      expect(result[0].categoryBreakdown).toEqual({
+        dining: 5000,
+        groceries: 3000,
+      });
+    });
+
+    it('returns empty array when no cards exist', () => {
+      const result = useCreditCardStore.getState().getCardComparison([], new Date(), new Date());
+      expect(result).toHaveLength(0);
+    });
+  });
+
+  describe('getUnpaidStatements', () => {
+    it('filters unpaid statements and sorts by paymentDueDate ascending', () => {
+      useCreditCardStore.getState().addStatements([
+        makeStatement({ id: 's1', isPaid: true, paidDate: new Date(), paymentDueDate: new Date('2024-07-01') }),
+        makeStatement({ id: 's2', isPaid: false, paymentDueDate: new Date('2029-08-01') }),
+        makeStatement({ id: 's3', isPaid: false, paymentDueDate: new Date('2029-06-01') }),
+      ]);
+
+      const result = useCreditCardStore.getState().getUnpaidStatements();
+      expect(result).toHaveLength(2);
+      expect(result[0].id).toBe('s3'); // earliest due date first
+      expect(result[1].id).toBe('s2');
+    });
+
+    it('returns empty array when all are paid', () => {
+      useCreditCardStore.getState().addStatement(
+        makeStatement({ isPaid: true, paidDate: new Date() }),
+      );
+      expect(useCreditCardStore.getState().getUnpaidStatements()).toHaveLength(0);
+    });
+  });
+
+  describe('persist rehydration', () => {
+    it('Date fields survive JSON serialization/deserialization through merge', async () => {
+      const stmt = makeStatement({
+        id: 'rehydrate-1',
+        parseDate: new Date('2024-06-01T10:00:00.000Z'),
+        statementDate: new Date('2024-06-01T10:00:00.000Z'),
+        paymentDueDate: new Date('2024-06-20T10:00:00.000Z'),
+        statementPeriod: {
+          start: new Date('2024-05-01T00:00:00.000Z'),
+          end: new Date('2024-05-31T00:00:00.000Z'),
+        },
+        paidDate: new Date('2024-06-15T10:00:00.000Z'),
+        rewardPoints: {
+          openingBalance: 1000,
+          earned: 100,
+          redeemed: 0,
+          expired: 0,
+          closingBalance: 1100,
+          expiringNext: 50,
+          expiringNextDate: new Date('2024-12-01T00:00:00.000Z'),
+        },
+      });
+
+      // Simulate what zustand persist does: serialize to JSON string in localStorage
+      const serialized = JSON.stringify({
+        state: { statements: [stmt] },
+        version: 0,
+      });
+      localStorage.setItem('credit-card-storage', serialized);
+
+      // Re-import the store module to trigger rehydration from localStorage
+      // vitest modules are cached; use dynamic import with date query to bust cache
+      const { useCreditCardStore: freshStore } = await import('@/lib/store/creditCardStore?' + Date.now());
+
+      const hydrated = freshStore.getState().statements[0];
+      expect(hydrated.parseDate).toBeInstanceOf(Date);
+      expect(hydrated.parseDate.toISOString()).toBe('2024-06-01T10:00:00.000Z');
+      expect(hydrated.statementDate).toBeInstanceOf(Date);
+      expect(hydrated.paymentDueDate).toBeInstanceOf(Date);
+      expect(hydrated.statementPeriod.start).toBeInstanceOf(Date);
+      expect(hydrated.statementPeriod.end).toBeInstanceOf(Date);
+      expect(hydrated.paidDate).toBeInstanceOf(Date);
+      expect(hydrated.rewardPoints?.expiringNextDate).toBeInstanceOf(Date);
+
+      // Clean up
+      localStorage.removeItem('credit-card-storage');
     });
   });
 });

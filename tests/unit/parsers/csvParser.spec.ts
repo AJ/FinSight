@@ -1,10 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
-
-vi.mock('@/lib/utils/debug', () => ({
-  debugLog: vi.fn(),
-  debugWarn: vi.fn(),
-  debugError: vi.fn(),
-}));
+import { describe, it, expect } from 'vitest';
 
 import { parseCSV } from '@/lib/parsers/csvParser';
 import { makeCsvFile } from '../factories';

@@ -87,4 +87,11 @@ describe('getCategoriesByType', () => {
     expect(cats.length).toBeGreaterThan(0);
     expect(cats.every(c => c.isIncome)).toBe(true);
   });
+
+  it('returns only excluded categories', () => {
+    const cats = getCategoriesByType(CategoryType.Excluded);
+    const excludedIds = cats.map(c => c.id);
+    expect(excludedIds.sort()).toEqual(['investment', 'other', 'transfer']);
+    expect(cats.every(c => c.isExcluded)).toBe(true);
+  });
 });

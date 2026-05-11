@@ -3,6 +3,7 @@ import { persist } from "zustand/middleware";
 import { Currency, Settings } from "@/types";
 import { LLMProvider, DEFAULT_URLS } from "@/lib/llm/types";
 import { debugWarn } from '@/lib/utils/debug';
+import validator from 'validator';
 
 /* ============================================================
    URL Validation for LLM Server Connections (Ollama, LM Studio)
@@ -22,12 +23,27 @@ export interface URLValidationResult {
 
 export function validateLlmServerUrl(inputUrl: string): URLValidationResult {
   try {
-    // Normalize: ensure protocol, remove trailing slash
-    let url = inputUrl.trim();
-    if (!url.startsWith('http://') && !url.startsWith('https://')) {
+    let url = inputUrl.trim().replace(/\/+$/, '');
+
+    // If input has an explicit scheme, it must be http or https
+    if (validator.isURL(url, { require_protocol: true, protocols: ['http', 'https'], require_tld: false, allow_underscores: true })) {
+      // Valid http/https URL — proceed with parsing
+    } else if (/^https?:\/\//i.test(url)) {
+      // Starts with http(s):// but failed validator — malformed URL
+      return { valid: false, sanitized: '', error: 'Invalid URL format', isRemote: false };
+    } else {
+      // No http/https scheme — reject explicit non-http schemes before prepending.
+      // URI schemes have :// (ftp://) or non-digit content after : (javascript:).
+      // host:port has digits after : (localhost:11434) — not a scheme.
+      const colonIdx = url.indexOf(':');
+      if (colonIdx > 0 && /^[a-zA-Z]/.test(url)) {
+        const afterColon = url.slice(colonIdx + 1);
+        if (afterColon.startsWith('//') || (afterColon.length > 0 && !/^\d/.test(afterColon))) {
+          return { valid: false, sanitized: '', error: 'Only HTTP and HTTPS protocols are allowed', isRemote: false };
+        }
+      }
       url = 'http://' + url;
     }
-    url = url.replace(/\/+$/, '');
 
     const parsed = new URL(url);
 

@@ -248,4 +248,54 @@ describe('recurringStore', () => {
       expect(useRecurringStore.getState().getTotalMonthlyRecurring()).toBe(0);
     });
   });
+
+  describe('persist rehydration', () => {
+    it('Date fields and excludedMerchants survive JSON serialization/deserialization', async () => {
+      const payment = makeRecurringPayment({
+        id: 'rp-rehydrate',
+        firstSeen: new Date('2024-01-15T10:00:00.000Z'),
+        lastSeen: new Date('2024-05-10T10:00:00.000Z'),
+        nextExpectedDate: new Date('2024-06-10T10:00:00.000Z'),
+      });
+
+      const excludedMerchant = {
+        normalizedName: 'netflix',
+        excludedAt: new Date('2024-03-01T12:00:00.000Z'),
+      };
+
+      const serialized = JSON.stringify({
+        state: {
+          recurringPayments: [payment],
+          excludedMerchants: [excludedMerchant],
+          lastScanned: new Date('2024-06-01T08:00:00.000Z').toISOString(),
+          isScanning: false,
+        },
+        version: 0,
+      });
+
+      localStorage.setItem('recurring-storage', serialized);
+
+      const { useRecurringStore: freshStore } = await import('@/lib/store/recurringStore?' + Date.now());
+
+      // Recurring payment dates should be rehydrated to Date instances
+      const rp = freshStore.getState().recurringPayments[0];
+      expect(rp.firstSeen).toBeInstanceOf(Date);
+      expect(rp.firstSeen.toISOString()).toBe('2024-01-15T10:00:00.000Z');
+      expect(rp.lastSeen).toBeInstanceOf(Date);
+      expect(rp.lastSeen.toISOString()).toBe('2024-05-10T10:00:00.000Z');
+      expect(rp.nextExpectedDate).toBeInstanceOf(Date);
+      expect(rp.nextExpectedDate?.toISOString()).toBe('2024-06-10T10:00:00.000Z');
+
+      // Excluded merchant date should be rehydrated
+      const em = freshStore.getState().excludedMerchants[0];
+      expect(em.normalizedName).toBe('netflix');
+      expect(em.excludedAt).toBeInstanceOf(Date);
+      expect(em.excludedAt.toISOString()).toBe('2024-03-01T12:00:00.000Z');
+
+      // lastScanned should be rehydrated
+      expect(freshStore.getState().lastScanned).toBeInstanceOf(Date);
+
+      localStorage.removeItem('recurring-storage');
+    });
+  });
 });

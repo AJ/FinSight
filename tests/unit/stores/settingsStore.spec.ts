@@ -148,6 +148,33 @@ describe('validateLlmServerUrl', () => {
     expect(result.valid).toBe(false);
     expect(result.error).toBeDefined();
   });
+
+  it('rejects non-http protocol (ftp://)', () => {
+    const result = validateLlmServerUrl('ftp://example.com:21');
+    expect(result.valid).toBe(false);
+    expect(result.error).toBe('Only HTTP and HTTPS protocols are allowed');
+    expect(result.isRemote).toBe(false);
+  });
+
+  it('rejects non-http protocol (javascript:)', () => {
+    const result = validateLlmServerUrl('javascript:alert(1)');
+    expect(result.valid).toBe(false);
+    expect(result.error).toBe('Only HTTP and HTTPS protocols are allowed');
+  });
+
+  it('recognizes IPv6 loopback [::1] as local', () => {
+    const result = validateLlmServerUrl('http://[::1]:11434');
+    expect(result.valid).toBe(true);
+    expect(result.isRemote).toBe(false);
+    expect(result.warning).toBeUndefined();
+  });
+
+  it('recognizes hostname starting with 127. as local', () => {
+    const result = validateLlmServerUrl('http://127.0.0.5:11434');
+    expect(result.valid).toBe(true);
+    expect(result.isRemote).toBe(false);
+    expect(result.warning).toBeUndefined();
+  });
 });
 
 describe('remote URL confirmation', () => {
@@ -167,5 +194,55 @@ describe('remote URL confirmation', () => {
 
   it('isRemoteUrlConfirmed returns false for unconfirmed URL', () => {
     expect(isRemoteUrlConfirmed('http://example.com')).toBe(false);
+  });
+
+  it('getConfirmedRemoteUrls returns empty Set for corrupted JSON in localStorage', () => {
+    localStorage.setItem('confirmedRemoteLlmUrls', '{not valid json}');
+    const urls = getConfirmedRemoteUrls();
+    expect(urls).toBeInstanceOf(Set);
+    expect(urls.size).toBe(0);
+  });
+
+  it('confirmRemoteUrl catches localStorage failure gracefully', () => {
+    // Temporarily make localStorage.setItem throw
+    const originalSetItem = localStorage.setItem.bind(localStorage);
+    localStorage.setItem = () => { throw new Error('QuotaExceededError'); };
+
+    // Should not throw
+    expect(() => confirmRemoteUrl('http://example.com')).not.toThrow();
+
+    // Restore
+    localStorage.setItem = originalSetItem;
+  });
+});
+
+describe('settingsStore persist migrate', () => {
+  beforeEach(() => {
+    localStorage.clear();
+  });
+
+  it('fills missing fields from old persisted state', async () => {
+    // Simulate a v0 state missing llmProvider and llmModelContextLength
+    const oldState = {
+      state: {
+        currency: { code: 'INR', symbol: '₹', name: 'Indian Rupee' },
+        dateFormat: 'auto',
+        theme: 'light',
+        llmServerUrl: 'http://localhost:11434',
+        llmModel: null,
+        // llmProvider and llmModelContextLength are missing
+      },
+      version: 0,
+    };
+
+    localStorage.setItem('settings-storage', JSON.stringify(oldState));
+
+    const { useSettingsStore: freshStore } = await import('@/lib/store/settingsStore?' + Date.now());
+
+    // Migrate should have added the missing fields with defaults
+    expect(freshStore.getState().llmProvider).toBe('ollama');
+    expect(freshStore.getState().llmModelContextLength).toBeNull();
+
+    localStorage.removeItem('settings-storage');
   });
 });
