@@ -68,7 +68,7 @@ async function fetchModelContextLength(
 export const ollamaAdapter: LLMAdapter = {
   async generate(baseUrl, model, prompt, options) {
     const numPredict = options.maxTokens ?? 4096;
-    const { num_ctx: numCtx = 8192, keep_alive: keepAlive = '10m' } = extractOllamaExtra(options.extra);
+    const { num_ctx: numCtx = 8192, keep_alive: keepAlive = '10m', top_p: topP } = extractOllamaExtra(options.extra);
 
     const res = await fetch(`${baseUrl}/api/generate`, {
       method: 'POST',
@@ -84,6 +84,7 @@ export const ollamaAdapter: LLMAdapter = {
           num_ctx: numCtx,
           num_predict: numPredict,
           temperature: options.temperature,
+          ...(topP != null ? { top_p: topP } : {}),
         },
       }),
     });
@@ -106,7 +107,7 @@ export const ollamaAdapter: LLMAdapter = {
   },
 
   async *chatStream(baseUrl, model, messages, options) {
-    const { num_ctx: numCtx = 8192, keep_alive: keepAlive = '10m' } = extractOllamaExtra(options.extra);
+    const { num_ctx: numCtx = 8192, keep_alive: keepAlive = '10m', top_p: topP } = extractOllamaExtra(options.extra);
 
     const res = await fetch(`${baseUrl}/api/chat`, {
       method: 'POST',
@@ -117,7 +118,11 @@ export const ollamaAdapter: LLMAdapter = {
         messages,
         stream: true,
         keep_alive: keepAlive,
-        options: { num_ctx: numCtx, temperature: options.temperature },
+        options: {
+          num_ctx: numCtx,
+          temperature: options.temperature,
+          ...(topP != null ? { top_p: topP } : {}),
+        },
       }),
     });
 

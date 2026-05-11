@@ -520,6 +520,22 @@ describe('createClient edge cases', () => {
     }
   });
 
+  it('classifyError passes LLMError through on first attempt without retrying', async () => {
+    // Empty response on first attempt produces a non-retryable LLMError.
+    // classifyError should return it unchanged (line 47: if (e instanceof LLMError) return e).
+    // No retry should occur since the error is non-retryable.
+    mockFetch.mockResolvedValueOnce(ollamaGenerateResponse(''));
+
+    try {
+      await client.generate('http://localhost:11434', 'llama3', 'prompt');
+      expect.fail('should have thrown');
+    } catch (e) {
+      expect(e).toBeInstanceOf(LLMError);
+      expect((e as LLMError).retryable).toBe(false);
+    }
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+  });
+
   it('second retry failure throws the last error', async () => {
     mockFetch
       .mockRejectedValueOnce(new TypeError('connection refused'))

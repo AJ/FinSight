@@ -223,6 +223,18 @@ describe('ollamaAdapter.generate', () => {
       expect(isAdapterError(err) && err.status).toBe(404);
     }
   });
+
+  it('passes top_p from options.extra to generate body', async () => {
+    mockFetch.mockResolvedValueOnce(okResponse({ response: 'ok' }));
+
+    await ollamaAdapter.generate(baseUrl, model, 'prompt', {
+      ...defaultOptions(),
+      extra: { top_p: 0.9 },
+    });
+
+    const body = JSON.parse(mockFetch.mock.calls[0][1].body);
+    expect(body.options.top_p).toBe(0.9);
+  });
 });
 
 // ── chatStream ───────────────────────────────────────────────────────────────
@@ -354,6 +366,38 @@ describe('ollamaAdapter.chatStream', () => {
 
     expect(yielded).toEqual([false, true]);
   });
+
+  it('passes keep_alive from options.extra to chatStream body', async () => {
+    mockFetch.mockResolvedValueOnce(okResponse({}, ndjsonStream([
+      JSON.stringify({ message: { content: '' }, done: true }),
+    ])));
+
+    for await (const chunk of ollamaAdapter.chatStream(baseUrl, model, messages, {
+      ...defaultOptions(),
+      extra: { keep_alive: '5m' },
+    })) {
+      void chunk;
+    }
+
+    const body = JSON.parse(mockFetch.mock.calls[0][1].body);
+    expect(body.keep_alive).toBe('5m');
+  });
+
+  it('passes top_p from options.extra to chatStream body', async () => {
+    mockFetch.mockResolvedValueOnce(okResponse({}, ndjsonStream([
+      JSON.stringify({ message: { content: '' }, done: true }),
+    ])));
+
+    for await (const chunk of ollamaAdapter.chatStream(baseUrl, model, messages, {
+      ...defaultOptions(),
+      extra: { top_p: 0.95 },
+    })) {
+      void chunk;
+    }
+
+    const body = JSON.parse(mockFetch.mock.calls[0][1].body);
+    expect(body.options.top_p).toBe(0.95);
+  });
 });
 
 // ── listModels ───────────────────────────────────────────────────────────────
@@ -442,6 +486,18 @@ describe('ollamaAdapter.listModels', () => {
     mockFetch.mockResolvedValueOnce(
       okResponse({ totally_wrong: 'data' }),
     );
+
+    const result = await ollamaAdapter.listModels(baseUrl, new AbortController().signal);
+
+    expect(result).toEqual([{ id: 'model1', contextLength: undefined }]);
+  });
+
+  it('handles /api/show returning non-OK status gracefully', async () => {
+    mockFetch.mockResolvedValueOnce(
+      okResponse({ models: [{ name: 'model1' }] }),
+    );
+    // /api/show returns 404 — fetchModelContextLength should return undefined
+    mockFetch.mockResolvedValueOnce(errorResponse(404, 'model not found'));
 
     const result = await ollamaAdapter.listModels(baseUrl, new AbortController().signal);
 

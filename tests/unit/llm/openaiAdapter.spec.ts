@@ -224,6 +224,38 @@ describe('createOpenAIAdapter', () => {
       }
     });
 
+    it('handles error object without .message field', async () => {
+      mockFetch.mockResolvedValue(errorResponse(400,
+        JSON.stringify({ error: { code: 'rate_limit_exceeded' } }),
+      ));
+
+      try {
+        await adapter.generate(BASE, 'llama3', 'prompt', defaultOptions());
+        expect.unreachable('should have thrown');
+      } catch (e) {
+        // Falls through to generic message since .message is undefined
+        expect(e).toBeInstanceOf(Error);
+        expect((e as Error).message).toContain('LM Studio');
+      }
+    });
+
+    it('uses statusText fallback when res.text() rejects in generate', async () => {
+      const response = new Response(null, { status: 500, statusText: 'Internal Server Error' });
+      // Override text() to reject, simulating body already consumed
+      Object.defineProperty(response, 'text', { value: () => Promise.reject(new Error('body locked')) });
+      mockFetch.mockResolvedValue(response);
+
+      try {
+        await adapter.generate(BASE, 'llama3', 'prompt', defaultOptions());
+        expect.unreachable('should have thrown');
+      } catch (e) {
+        expect(e).toBeInstanceOf(Error);
+        expect(isAdapterError(e) && e.status).toBe(500);
+        // parseProviderError receives the statusText as non-JSON, falls to generic message
+        expect((e as Error).message).toContain('LM Studio request failed');
+      }
+    });
+
     it('passes signal through to fetch', async () => {
       const controller = new AbortController();
       controller.abort();
@@ -293,6 +325,21 @@ describe('createOpenAIAdapter', () => {
         expect.fail('should have thrown');
       } catch (err) {
         expect(isAdapterError(err) && err.status).toBe(503);
+      }
+    });
+
+    it('uses statusText fallback when res.text() rejects in chatStream', async () => {
+      const response = new Response(null, { status: 502, statusText: 'Bad Gateway' });
+      Object.defineProperty(response, 'text', { value: () => Promise.reject(new Error('body locked')) });
+      mockFetch.mockResolvedValue(response);
+
+      try {
+        const stream = adapter.chatStream(BASE, 'llama3', [], defaultOptions());
+        await stream[Symbol.asyncIterator]().next();
+        expect.fail('should have thrown');
+      } catch (e) {
+        expect(e).toBeInstanceOf(Error);
+        expect(isAdapterError(e) && e.status).toBe(502);
       }
     });
 
