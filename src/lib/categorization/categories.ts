@@ -81,7 +81,7 @@ Category.register(new Category("cashback", "Cashback", CategoryType.Income,
     "reward credit", "loyalty cashback", "points redemption",
     "cash reward", "moneyback", "rebate", "gift card",
     "giftcard", "gift-card", "gv", "gift voucher"],
-  "Percent", "#22c55e"));
+  "Percent", "#fbbf24"));
 
 Category.register(new Category("transfer", "Transfer", CategoryType.Excluded,
   ["transfer", "zelle", "venmo", "paypal", "cash app",
