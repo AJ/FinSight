@@ -9,6 +9,7 @@ import { useSettingsStore } from '@/lib/store/settingsStore';
 import { formatCurrency } from '@/lib/currencyFormatter';
 import { DEFAULT_CATEGORIES } from '@/lib/categorization/categories';
 import { debugLog } from '@/lib/utils/debug';
+import { aggregateSpendByCategory, buildPieChartData } from './categoryPieChartData';
 
 ChartJS.register(ArcElement, Tooltip, Legend);
 
@@ -42,52 +43,25 @@ export function CategoryPieChart({ transactions, categories }: CategoryPieChartP
   const currency = useSettingsStore((state) => state.currency);
 
   const chartData = useMemo(() => {
-    const byCategory: Record<string, number> = {};
-
-    // Sum ALL transactions by category (both income and expenses)
-    // This gives a complete picture of where money flows
-    transactions.forEach((t) => {
-      const amount = Math.abs(t.amount);
-      const categoryId = t.category?.id || 'uncategorized';
-      byCategory[categoryId] = (byCategory[categoryId] || 0) + amount;
-    });
+    const byCategory = aggregateSpendByCategory(transactions);
 
     debugLog('categoryChart', 'By category:', byCategory);
 
-    // Sort by amount and get top categories
-    const sortedCategories = Object.entries(byCategory)
-      .sort(([, a], [, b]) => b - a)
-      .slice(0, 8); // Top 8 categories
-
-    debugLog('categoryChart', 'Sorted:', sortedCategories);
-
-    // Calculate total for percentage
-    const total = sortedCategories.reduce((sum, [, amount]) => sum + amount, 0);
-
-    // Build labels, data, and colors with proper category info
-    const labels: string[] = [];
-    const data: number[] = [];
-    const backgroundColors: string[] = [];
-
-    for (const [categoryId, amount] of sortedCategories) {
-      const catInfo = getCategoryInfo(categoryId, categories);
-      const percentage = ((amount / total) * 100).toFixed(1);
-
-      labels.push(`${catInfo.name} (${percentage}%)`);
-      data.push(amount);
-      backgroundColors.push(catInfo.color || '#6b7280');
-    }
+    const { labels, data, colors } = buildPieChartData(
+      byCategory,
+      (id) => getCategoryInfo(id, categories),
+    );
 
     debugLog('categoryChart', 'Labels:', labels);
-    debugLog('categoryChart', 'Colors:', backgroundColors);
+    debugLog('categoryChart', 'Colors:', colors);
 
     return {
       labels,
       datasets: [
         {
           data,
-          backgroundColor: backgroundColors,
-          borderWidth: 2,
+          backgroundColor: colors,
+          borderWidth: 1,
           borderColor: 'rgba(255, 255, 255, 0.8)',
         },
       ],

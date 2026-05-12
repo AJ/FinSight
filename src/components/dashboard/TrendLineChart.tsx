@@ -16,10 +16,10 @@ import {
 } from "chart.js";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Transaction } from "@/types";
-import { format, startOfMonth, startOfWeek, endOfWeek, differenceInWeeks, addWeeks } from "date-fns";
 import { useSettingsStore } from "@/lib/store/settingsStore";
 import { formatCurrency } from "@/lib/currencyFormatter";
 import { debugLog } from "@/lib/utils/debug";
+import { buildTrendData } from "./trendLineChartData";
 
 ChartJS.register(
   CategoryScale,
@@ -40,115 +40,7 @@ export function TrendLineChart({ transactions }: TrendLineChartProps) {
   const currency = useSettingsStore((state) => state.currency);
 
   const chartData = useMemo(() => {
-    if (transactions.length === 0) {
-      debugLog("[TrendLineChart] No transactions");
-      return { labels: [], datasets: [], isWeekly: false };
-    }
-
-    // Ensure dates are proper Date objects
-    const transactionsWithDates = transactions.map((t) => ({
-      ...t,
-      dateObj: t.date instanceof Date ? t.date : new Date(t.date),
-    })).filter((t) => !isNaN(t.dateObj.getTime()));
-
-    if (transactionsWithDates.length === 0) {
-      debugLog("[TrendLineChart] No valid dates");
-      return { labels: [], datasets: [], isWeekly: false };
-    }
-
-    // Sort by date
-    transactionsWithDates.sort((a, b) => a.dateObj.getTime() - b.dateObj.getTime());
-
-    const firstDate = transactionsWithDates[0].dateObj;
-    const lastDate = transactionsWithDates[transactionsWithDates.length - 1].dateObj;
-
-    // Calculate number of weeks in the data range
-    const numWeeks = differenceInWeeks(lastDate, firstDate) + 1;
-    const useWeekly = numWeeks <= 7;
-
-    debugLog('TrendLineChart', 'Date range weeks:', numWeeks, 'Using weekly:', useWeekly);
-
-    let labels: string[] = [];
-    const incomeByPeriod: number[] = [];
-    const expensesByPeriod: number[] = [];
-
-    if (useWeekly) {
-      // Group by week
-      const periods: { start: Date; end: Date; label: string }[] = [];
-      let current = startOfWeek(firstDate, { weekStartsOn: 1 }); // Monday
-      const end = startOfWeek(lastDate, { weekStartsOn: 1 });
-
-      while (current <= end) {
-        const weekEnd = endOfWeek(current, { weekStartsOn: 1 });
-        periods.push({
-          start: current,
-          end: weekEnd,
-          label: format(current, "MMM d"),
-        });
-        current = addWeeks(current, 1);
-      }
-
-      labels = periods.map((p) => p.label);
-
-      periods.forEach((period) => {
-        const periodTransactions = transactionsWithDates.filter((t) => {
-          return t.dateObj >= period.start && t.dateObj <= period.end;
-        });
-
-        const income = periodTransactions
-          .filter((t) => t.category?.isIncome)
-          .reduce((sum, t) => sum + Math.abs(t.amount), 0);
-
-        const expenses = periodTransactions
-          .filter((t) => t.category?.isExpense)
-          .reduce((sum, t) => sum + Math.abs(t.amount), 0);
-
-        incomeByPeriod.push(income);
-        expensesByPeriod.push(expenses);
-      });
-    } else {
-      // Group by month (existing logic)
-      const firstMonth = startOfMonth(firstDate);
-      const lastMonth = startOfMonth(lastDate);
-
-      const months: Date[] = [];
-      let current = firstMonth;
-      while (current <= lastMonth) {
-        months.push(new Date(current));
-        current = new Date(current.getFullYear(), current.getMonth() + 1, 1);
-      }
-
-      // Cap at 12 months for readability
-      const displayMonths = months.length > 12 ? months.slice(-12) : months;
-
-      labels = displayMonths.map((month) => format(month, "MMM yyyy"));
-
-      displayMonths.forEach((month) => {
-        const monthEnd = new Date(
-          month.getFullYear(),
-          month.getMonth() + 1,
-          0,
-          23,
-          59,
-          59,
-        );
-
-        const monthTransactions = transactionsWithDates.filter((t) => {
-          return t.dateObj >= month && t.dateObj <= monthEnd;
-        });
-
-        const income = monthTransactions
-          .filter((t) => t.category?.isIncome)
-          .reduce((sum, t) => sum + Math.abs(t.amount), 0);
-
-        const expenses = monthTransactions
-          .filter((t) => t.category?.isExpense)
-          .reduce((sum, t) => sum + Math.abs(t.amount), 0);
-
-        incomeByPeriod.push(income);
-        expensesByPeriod.push(expenses);
-      });
-    }
+    const { labels, incomeByPeriod, expensesByPeriod, isWeekly } = buildTrendData(transactions);
 
     debugLog('TrendLineChart', 'Labels:', labels);
     debugLog('TrendLineChart', 'Income:', incomeByPeriod);
@@ -186,7 +78,7 @@ export function TrendLineChart({ transactions }: TrendLineChartProps) {
           borderWidth: 2,
         },
       ],
-      isWeekly: useWeekly,
+      isWeekly,
     };
   }, [transactions]);
 
