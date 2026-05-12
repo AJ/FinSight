@@ -125,9 +125,29 @@ export function DueDatesList({ compact = false }: DueDatesListProps) {
     );
   }
 
-  // Don't show non-compact card if no CC data
+  // Show empty state when no due dates
   if (dueDates.length === 0) {
-    return null;
+    return (
+      <Card>
+        <CardHeader className="pb-2">
+          <CardTitle className="flex items-center gap-2 text-base">
+            <Calendar className="w-4 h-4 text-primary" />
+            Payment Due Dates
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="flex flex-col items-center justify-center py-4 text-center">
+            <CheckCircle2 className="w-6 h-6 text-success mb-2" />
+            <p className="text-sm font-medium text-muted-foreground">
+              No upcoming payments
+            </p>
+            <p className="text-xs text-muted-foreground">
+              All statements are up to date
+            </p>
+          </div>
+        </CardContent>
+      </Card>
+    );
   }
 
   // Get status for a due date

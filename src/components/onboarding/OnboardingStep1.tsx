@@ -204,7 +204,7 @@ export function OnboardingStep1({
             value={serverUrl}
             onChange={handleUrlChange}
             onKeyDown={handleKeyDown}
-            placeholder="http://localhost:11434"
+            placeholder={selectedProvider ? DEFAULT_URLS[selectedProvider] : DEFAULT_URLS.ollama}
             className="flex-1"
             disabled={!selectedProvider}
             title={!selectedProvider ? 'Select a provider first' : undefined}

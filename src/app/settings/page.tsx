@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useTransactionStore } from '@/lib/store/transactionStore';
 import { useSettingsStore, validateLlmServerUrl, isRemoteUrlConfirmed, confirmRemoteUrl } from '@/lib/store/settingsStore';
+import { DEFAULT_URLS } from '@/lib/llm/types';
 import { useChatStore } from '@/lib/store/chatStore';
 import { usePersistHydrated } from '@/lib/store/usePersistHydrated';
 import { checkLLMConnection } from '@/lib/store/llmConnectionStore';
@@ -233,7 +234,7 @@ export default function SettingsPage() {
                 value={llmProvider}
                 onValueChange={(v) => {
                   setLLMProvider(v as 'ollama' | 'lmstudio');
-                  setUrlInput(v === 'lmstudio' ? 'http://localhost:1234' : 'http://localhost:11434');
+                  setUrlInput(v === 'lmstudio' ? DEFAULT_URLS.lmstudio : DEFAULT_URLS.ollama);
                   setConnectionStatus('idle');
                   setModels([]);
                 }}
@@ -271,7 +272,7 @@ export default function SettingsPage() {
               <div className="flex gap-2">
                 <Input
                   id="llm-url"
-                  placeholder={llmProvider === 'lmstudio' ? 'http://localhost:1234' : 'http://localhost:11434'}
+                  placeholder={DEFAULT_URLS[llmProvider]}
                   value={urlInput}
                   onChange={(e) => setUrlInput(e.target.value)}
                   className="font-mono text-sm"
@@ -289,7 +290,7 @@ export default function SettingsPage() {
                 </Button>
               </div>
               <p className="text-xs text-muted-foreground">
-                Default: <code>{llmProvider === 'lmstudio' ? 'http://localhost:1234' : 'http://localhost:11434'}</code>.
+                Default: <code>{DEFAULT_URLS[llmProvider]}</code>.
                 Change if {llmProvider === 'lmstudio' ? 'LM Studio' : 'Ollama'} runs on another port or machine.
               </p>
             </div>

@@ -34,20 +34,20 @@ export const useOnboardingStore = create<OnboardingStore>()(
           try {
             const settingsRaw = localStorage.getItem('settings-storage');
             const transactionsRaw = localStorage.getItem('transaction-storage');
-            
+
             let hasExistingConfig = false;
-            
+
             if (settingsRaw) {
               const settings = JSON.parse(settingsRaw);
               const settingsState = settings.state as Record<string, unknown>;
-              hasExistingConfig = 
+              hasExistingConfig =
                 settingsState.llmProvider !== null &&
                 settingsState.llmProvider !== undefined &&
                 settingsState.llmModel !== null &&
                 settingsState.llmModel !== undefined &&
                 settingsState.llmModel !== '';
             }
-            
+
             // Also check if user has any transactions
             if (!hasExistingConfig && transactionsRaw) {
               const transactionsData = JSON.parse(transactionsRaw);
@@ -55,7 +55,7 @@ export const useOnboardingStore = create<OnboardingStore>()(
               const transactionList = transactionsState.transactions as unknown[];
               hasExistingConfig = Array.isArray(transactionList) && transactionList.length > 0;
             }
-              
+
             state.hasCompletedOnboarding = hasExistingConfig;
             state.currentStep = 1;
           } catch {

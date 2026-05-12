@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { useSettingsStore, validateLlmServerUrl, isRemoteUrlConfirmed, confirmRemoteUrl } from '@/lib/store/settingsStore';
+import { DEFAULT_URLS } from '@/lib/llm/types';
 import { checkLLMConnection } from '@/lib/store/llmConnectionStore';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -231,7 +232,7 @@ export function AIConnectionBar({ onStatusChange, disabled = false }: AIConnecti
           onValueChange={(v) => {
             const newProvider = v as 'ollama' | 'lmstudio';
             setLLMProvider(newProvider);
-            const newUrl = newProvider === 'lmstudio' ? 'http://localhost:1234' : 'http://localhost:11434';
+            const newUrl = DEFAULT_URLS[newProvider];
             setUrlInput(newUrl);
             setStatus('idle');
             setModels([]);
@@ -250,7 +251,7 @@ export function AIConnectionBar({ onStatusChange, disabled = false }: AIConnecti
       {/* URL + Connect */}
       <div className="flex gap-2">
         <Input
-          placeholder={llmProvider === 'lmstudio' ? 'http://localhost:1234' : 'http://localhost:11434'}
+          placeholder={DEFAULT_URLS[llmProvider]}
           value={urlInput}
           onChange={(e) => setUrlInput(e.target.value)}
           className="font-mono text-sm h-9"

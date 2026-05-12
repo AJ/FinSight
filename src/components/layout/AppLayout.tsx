@@ -5,9 +5,11 @@ import { UploadDialog } from './UploadDialog';
 import { UploadProvider, useUpload } from './UploadContext';
 import { OnboardingWizard } from '@/components/onboarding/OnboardingWizard';
 import { useOnboardingStore } from '@/lib/store/onboardingStore';
+import { usePersistHydrated } from '@/lib/store/usePersistHydrated';
 
 function AppLayoutInner({ children }: { children: React.ReactNode }) {
   const { isUploadOpen, closeUpload, isProcessing } = useUpload();
+  const isOnboardingHydrated = usePersistHydrated(useOnboardingStore);
   const hasCompletedOnboarding = useOnboardingStore((state) => state.hasCompletedOnboarding);
 
   return (
@@ -15,7 +17,7 @@ function AppLayoutInner({ children }: { children: React.ReactNode }) {
       <Sidebar />
       {children}
       <UploadDialog open={isUploadOpen} onOpenChange={closeUpload} isProcessing={isProcessing} />
-      <OnboardingWizard open={!hasCompletedOnboarding} onOpenChange={() => {}} />
+      {isOnboardingHydrated && <OnboardingWizard open={!hasCompletedOnboarding} onOpenChange={() => {}} />}
     </div>
   );
 }
