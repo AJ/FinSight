@@ -14,22 +14,13 @@ import { useTransactionStore } from "@/lib/store/transactionStore";
 import { useCreditCardStore } from "@/lib/store/creditCardStore";
 import { useSettingsStore } from "@/lib/store/settingsStore";
 import { formatCurrency } from "@/lib/currencyFormatter";
-import { format, subMonths, startOfMonth, endOfMonth } from "date-fns";
 import { getCategoryDisplay } from "@/components/transactions/CategoryBadge";
+import {
+  computePeriodComparison,
+  computeChangePercent,
+  formatPeriodLabel,
+} from "./periodComparison";
 
-interface PeriodData {
-  total: number;
-  byCategory: Map<string, number>;
-}
-
-/**
- * Period Comparison View
- *
- * Compares spending between two periods:
- * - Current period vs previous period
- * - Category breakdown comparison
- * - Month-over-month changes
- */
 export function PeriodComparisonView() {
   const transactions = useTransactionStore((state) => state.transactions);
   const getAllUniqueCards = useCreditCardStore((state) => state.getAllUniqueCards);
@@ -37,93 +28,16 @@ export function PeriodComparisonView() {
 
   const hasCCData = getAllUniqueCards().length > 0;
 
-  // Period selection: compare last N months
   const [periodMonths, setPeriodMonths] = useState<string>("1");
 
-  const { currentPeriod, previousPeriod, currentData, previousData, change } =
+  const { currentPeriod, previousPeriod, currentData, previousData, change, sortedCategories } =
     useMemo(() => {
-      const months = parseInt(periodMonths);
-
-      // Current period: last N months
-      const now = new Date();
-      const currentEnd = endOfMonth(now);
-      const currentStart = startOfMonth(subMonths(now, months - 1));
-
-      // Previous period: N months before that
-      const previousEnd = endOfMonth(subMonths(now, months));
-      const previousStart = startOfMonth(subMonths(now, months * 2 - 1));
-
-      // Get CC transactions for each period
-      const ccTransactions = transactions.filter(
-        (t) => t.sourceType === "credit_card" && t.isExpense
-      );
-
-      const filterByPeriod = (txns: typeof transactions, start: Date, end: Date) => {
-        return txns.filter((t) => {
-          const date = t.date instanceof Date ? t.date : new Date(t.date);
-          return date >= start && date <= end;
-        });
-      };
-
-      const currentTxns = filterByPeriod(ccTransactions, currentStart, currentEnd);
-      const previousTxns = filterByPeriod(ccTransactions, previousStart, previousEnd);
-
-      // Calculate totals by category
-      const calculateData = (txns: typeof transactions): PeriodData => {
-        const byCategory = new Map<string, number>();
-        let total = 0;
-
-        for (const txn of txns) {
-          const cat = txn.category?.id || "uncategorized";
-          const amount = Math.abs(txn.amount);
-          byCategory.set(cat, (byCategory.get(cat) || 0) + amount);
-          total += amount;
-        }
-
-        return { total, byCategory };
-      };
-
-      const currentData = calculateData(currentTxns);
-      const previousData = calculateData(previousTxns);
-
-      const change =
-        previousData.total > 0
-          ? ((currentData.total - previousData.total) / previousData.total) * 100
-          : 0;
-
-      return {
-        currentPeriod: { start: currentStart, end: currentEnd },
-        previousPeriod: { start: previousStart, end: previousEnd },
-        currentData,
-        previousData,
-        change,
-      };
+      return computePeriodComparison(transactions, parseInt(periodMonths));
     }, [transactions, periodMonths]);
 
-  // Get all categories from both periods
-  const allCategories = useMemo(() => {
-    const cats = new Set([
-      ...currentData.byCategory.keys(),
-      ...previousData.byCategory.keys(),
-    ]);
-    return Array.from(cats).sort((a, b) => {
-      const currentA = currentData.byCategory.get(a) || 0;
-      const currentB = currentData.byCategory.get(b) || 0;
-      return currentB - currentA;
-    });
-  }, [currentData.byCategory, previousData.byCategory]);
-
-  // Don't show if no CC data
   if (!hasCCData) {
     return null;
   }
-
-  const formatPeriod = (start: Date, end: Date) => {
-    if (start.getMonth() === end.getMonth()) {
-      return format(start, "MMM yyyy");
-    }
-    return `${format(start, "MMM yyyy")} - ${format(end, "MMM yyyy")}`;
-  };
 
   return (
     <Card>
@@ -152,7 +66,7 @@ export function PeriodComparisonView() {
           <div className="text-center">
             <p className="text-xs text-muted-foreground mb-1">Previous</p>
             <p className="text-xs text-muted-foreground">
-              {formatPeriod(previousPeriod.start, previousPeriod.end)}
+              {formatPeriodLabel(previousPeriod.start, previousPeriod.end)}
             </p>
             <p className="font-mono font-semibold mt-1">
               {formatCurrency(previousData.total, currency)}
@@ -189,7 +103,7 @@ export function PeriodComparisonView() {
           <div className="text-center">
             <p className="text-xs text-muted-foreground mb-1">Current</p>
             <p className="text-xs text-muted-foreground">
-              {formatPeriod(currentPeriod.start, currentPeriod.end)}
+              {formatPeriodLabel(currentPeriod.start, currentPeriod.end)}
             </p>
             <p className="font-mono font-semibold mt-1">
               {formatCurrency(currentData.total, currency)}
@@ -202,11 +116,10 @@ export function PeriodComparisonView() {
           <p className="text-xs text-muted-foreground font-medium">
             Category Comparison
           </p>
-          {allCategories.map((catId) => {
+          {sortedCategories.map((catId) => {
             const current = currentData.byCategory.get(catId) || 0;
             const previous = previousData.byCategory.get(catId) || 0;
-            const catChange =
-              previous > 0 ? ((current - previous) / previous) * 100 : 0;
+            const catChange = computeChangePercent(current, previous);
             const display = getCategoryDisplay(catId);
             const IconComponent = display.icon;
 
@@ -257,7 +170,7 @@ export function PeriodComparisonView() {
             );
           })}
 
-          {allCategories.length === 0 && (
+          {sortedCategories.length === 0 && (
             <p className="text-center text-sm text-muted-foreground py-4">
               No data for comparison
             </p>

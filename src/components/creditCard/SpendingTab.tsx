@@ -9,6 +9,7 @@ import { useTransactionStore } from "@/lib/store/transactionStore";
 import { useSettingsStore } from "@/lib/store/settingsStore";
 import { formatCurrency } from "@/lib/currencyFormatter";
 import { getCategoryDisplay } from "@/components/transactions/CategoryBadge";
+import { PeriodComparisonView } from "./PeriodComparisonView";
 
 /**
  * Spending Tab
@@ -325,6 +326,9 @@ export function SpendingTab() {
           </BarResponsive>
         </CardContent>
       </Card>
+
+      {/* Row 3: Period Comparison */}
+      <PeriodComparisonView />
     </div>
   );
 }
