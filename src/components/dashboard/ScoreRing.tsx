@@ -1,6 +1,7 @@
 'use client';
 
 import { cn } from '@/lib/utils';
+import { computeRingGeometry, getScoreColorClass, getScoreLabelColorClass } from './scoreRingMath';
 
 interface ScoreRingProps {
   score: number;
@@ -17,23 +18,7 @@ export function ScoreRing({
   size = 110,
   strokeWidth = 8,
 }: ScoreRingProps) {
-  const radius = (size - strokeWidth) / 2;
-  const circumference = 2 * Math.PI * radius;
-  const progress = (score / maxScore) * circumference;
-  const offset = circumference - progress;
-
-  // Determine color based on score
-  const getScoreColor = (score: number) => {
-    if (score >= 70) return 'stroke-success';
-    if (score >= 40) return 'stroke-warning';
-    return 'stroke-destructive';
-  };
-
-  const getLabelColor = (score: number) => {
-    if (score >= 70) return 'text-success';
-    if (score >= 40) return 'text-warning';
-    return 'text-destructive';
-  };
+  const { radius, circumference, offset } = computeRingGeometry(size, strokeWidth, score, maxScore);
 
   return (
     <div className="relative" style={{ width: size, height: size }}>
@@ -53,7 +38,7 @@ export function ScoreRing({
         />
         {/* Progress circle */}
         <circle
-          className={cn('fill-none transition-all duration-700 ease-out', getScoreColor(score))}
+          className={cn('fill-none transition-all duration-700 ease-out', getScoreColorClass(score))}
           cx={size / 2}
           cy={size / 2}
           r={radius}
@@ -67,7 +52,7 @@ export function ScoreRing({
       <div className="absolute inset-0 flex flex-col items-center justify-center">
         <span className="text-2xl font-bold text-foreground">{score}</span>
         <span className="text-xs text-muted-foreground">/{maxScore}</span>
-        <span className={cn('text-xs font-semibold mt-0.5', getLabelColor(score))}>
+        <span className={cn('text-xs font-semibold mt-0.5', getScoreLabelColorClass(score))}>
           {label}
         </span>
       </div>

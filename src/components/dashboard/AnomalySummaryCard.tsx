@@ -7,26 +7,17 @@ import { useTransactionStore } from '@/lib/store/transactionStore';
 import { AlertTriangle, ChevronRight } from 'lucide-react';
 import { AnomalyType } from '@/types';
 import { ANOMALY_LABELS } from '@/lib/anomaly';
+import { filterActiveAnomalies, countAnomaliesByType } from './anomalySummary';
 
 export function AnomalySummaryCard() {
   const router = useRouter();
   const transactions = useTransactionStore((state) => state.transactions);
 
-  // Filter active anomalies (not dismissed)
-  const activeAnomalies = transactions.filter(
-    (t) => t.isAnomaly && !t.anomalyDismissed
-  );
+  const activeAnomalies = filterActiveAnomalies(transactions);
 
-  // Don't render if no anomalies
   if (activeAnomalies.length === 0) return null;
 
-  // Count by type
-  const typeCounts = activeAnomalies.reduce((acc, t) => {
-    t.anomalyTypes?.forEach((type) => {
-      acc[type] = (acc[type] || 0) + 1;
-    });
-    return acc;
-  }, {} as Record<AnomalyType, number>);
+  const typeCounts = countAnomaliesByType(activeAnomalies);
 
   return (
     <Card className="border-amber-500/20 bg-amber-500/5">
