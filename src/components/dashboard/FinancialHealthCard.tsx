@@ -9,14 +9,7 @@ import { useCreditCardStore } from '@/lib/store/creditCardStore';
 import { useSettingsStore } from '@/lib/store/settingsStore';
 import { formatCurrency } from '@/lib/currencyFormatter';
 import { TrendingUp, TrendingDown, Lightbulb, AlertTriangle } from 'lucide-react';
-
-interface HealthMetric {
-  label: string;
-  value: number;
-  max: number;
-  status: string;
-  statusType: 'good' | 'warning' | 'bad';
-}
+import { computeMonthlyFinancials } from './financialHealth';
 
 export function FinancialHealthCard() {
   const transactions = useTransactionStore((state) => state.transactions);
@@ -24,153 +17,10 @@ export function FinancialHealthCard() {
   const getUtilization = useCreditCardStore((state) => state.getUtilization);
   const getAllUniqueCards = useCreditCardStore((state) => state.getAllUniqueCards);
 
-  // Calculate recent month's data
   const monthlyData = useMemo(() => {
-    if (transactions.length === 0) {
-      return { hasData: false };
-    }
-
-    // Get year-month key (e.g., "2025-02")
-    const getYearMonth = (date: Date) => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
-
-    // Group transactions by month
-    const byMonth = new Map<string, typeof transactions>();
-    for (const t of transactions) {
-      const date = t.date instanceof Date ? t.date : new Date(t.date);
-      if (isNaN(date.getTime())) continue;
-      const key = getYearMonth(date);
-      if (!byMonth.has(key)) byMonth.set(key, []);
-      byMonth.get(key)!.push(t);
-    }
-
-    // Get sorted months (most recent first)
-    const sortedMonths = Array.from(byMonth.keys()).sort((a, b) => b.localeCompare(a));
-
-    if (sortedMonths.length === 0) {
-      return { hasData: false };
-    }
-
-    // Get recent month and previous month
-    const recentMonthKey = sortedMonths[0];
-    const prevMonthKey = sortedMonths.length > 1 ? sortedMonths[1] : null;
-
-    const recentTxns = byMonth.get(recentMonthKey) || [];
-    const prevTxns = prevMonthKey ? byMonth.get(prevMonthKey) || [] : [];
-
-    // Calculate income and expenses for recent month
-    const recentIncome = recentTxns
-      .filter((t) => t.isIncome)
-      .reduce((sum, t) => sum + t.amount, 0);
-
-    const recentExpenses = recentTxns
-      .filter((t) => t.isExpense)
-      .reduce((sum, t) => sum + Math.abs(t.amount), 0);
-
-    // Calculate income and expenses for previous month
-    const prevIncome = prevTxns
-      .filter((t) => t.isIncome)
-      .reduce((sum, t) => sum + t.amount, 0);
-
-    const prevExpenses = prevTxns
-      .filter((t) => t.isExpense)
-      .reduce((sum, t) => sum + Math.abs(t.amount), 0);
-
-    const recentSavings = recentIncome - recentExpenses;
-    const prevSavings = prevIncome - prevExpenses;
-    const isNegativeSavings = recentSavings < 0;
-
-    // Calculate trend
-    const savingsTrend = prevSavings !== 0
-      ? ((recentSavings - prevSavings) / Math.abs(prevSavings)) * 100
-      : recentSavings !== 0 ? (recentSavings > 0 ? 100 : -100) : 0;
-
-    // Savings rate (can be negative)
-    const savingsRate = recentIncome > 0
-      ? (recentSavings / recentIncome) * 100
-      : recentSavings < 0 ? -100 : 0;
-
-    // Credit utilization from CC data
     const utilization = getUtilization();
-    const totalUtilization = utilization.aggregate * 100; // Convert to percentage
-
-    // Calculate health score
-    let score = 50; // Base score
-
-    // Savings rate contribution (up to 30 points, down to -20 points)
-    if (savingsRate >= 30) score += 30;
-    else if (savingsRate >= 20) score += 25;
-    else if (savingsRate >= 10) score += 15;
-    else if (savingsRate >= 0) score += 5;
-    else if (savingsRate >= -10) score -= 5;
-    else if (savingsRate >= -25) score -= 15;
-    else score -= 25;
-
-    // Utilization contribution (up to 20 points)
     const hasCCData = getAllUniqueCards().length > 0;
-    if (!hasCCData) score += 10; // No CC data, neutral
-    else if (totalUtilization <= 30) score += 20;
-    else if (totalUtilization <= 50) score += 10;
-    else if (totalUtilization <= 70) score += 0;
-    else score -= 10;
-
-    // Clamp score
-    score = Math.max(0, Math.min(100, score));
-
-    // Get label for score
-    const getScoreLabel = (score: number) => {
-      if (score >= 80) return 'Excellent';
-      if (score >= 60) return 'Good';
-      if (score >= 40) return 'Fair';
-      return 'Needs Work';
-    };
-
-    // Health metrics
-    const metrics: HealthMetric[] = [
-      {
-        label: 'Utilization',
-        value: totalUtilization,
-        max: 100,
-        status: !hasCCData ? 'N/A' : totalUtilization <= 30 ? 'Good' : totalUtilization <= 50 ? 'OK' : 'High',
-        statusType: !hasCCData ? 'good' : totalUtilization <= 30 ? 'good' : totalUtilization <= 50 ? 'warning' : 'bad',
-      },
-      {
-        label: 'Savings',
-        value: Math.max(0, savingsRate), // Progress bar can't show negative
-        max: 100,
-        status: savingsRate >= 20 ? 'Excellent' : savingsRate >= 10 ? 'Good' : savingsRate >= 0 ? 'Low' : 'Overspent',
-        statusType: savingsRate >= 20 ? 'good' : savingsRate >= 10 ? 'warning' : 'bad',
-      },
-      {
-        label: 'Bills',
-        value: 100, // We don't track bill payments yet
-        max: 100,
-        status: 'On-time',
-        statusType: 'good',
-      },
-    ];
-
-    // Projected annual savings (can be negative)
-    const projectedAnnualSavings = recentSavings * 12;
-
-    // Format month for display
-    const [year, month] = recentMonthKey.split('-');
-    const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-    const monthDisplay = `${monthNames[parseInt(month) - 1]} ${year}`;
-
-    return {
-      recentIncome,
-      recentExpenses,
-      recentSavings,
-      savingsRate,
-      savingsTrend,
-      score,
-      scoreLabel: getScoreLabel(score),
-      metrics,
-      projectedAnnualSavings,
-      monthDisplay,
-      isNegativeSavings,
-      hasData: true,
-    };
+    return computeMonthlyFinancials(transactions, utilization.aggregate, hasCCData);
   }, [transactions, getUtilization, getAllUniqueCards]);
 
   if (!monthlyData.hasData || !('recentSavings' in monthlyData)) {
