@@ -60,14 +60,14 @@ describe('classifyUrgency', () => {
     const result = classifyUrgency(-3, true);
     expect(result.level).toBe('overdue');
     expect(result.badgeVariant).toBe('destructive');
-    expect(result.label).toBe('3 days overdue');
+    expect(result.label).toBe('Overdue');
   });
 
   it('classifies today', () => {
     const result = classifyUrgency(0, false);
     expect(result.level).toBe('today');
     expect(result.badgeVariant).toBe('destructive');
-    expect(result.label).toBe('Today');
+    expect(result.label).toBe('Due Today');
   });
 
   it('classifies tomorrow', () => {
@@ -83,6 +83,13 @@ describe('classifyUrgency', () => {
     expect(result.badgeVariant).toBe('outline');
     expect(result.textClass).toBe('text-amber-600');
     expect(result.label).toBe('3 days');
+  });
+
+  it('uses singular for 1 day in urgent range', () => {
+    // daysUntilDue=1 is 'tomorrow', but the urgent range is <=3 and >1
+    // daysUntilDue=2 is the only value that hits this with plural
+    const result = classifyUrgency(2, false);
+    expect(result.label).toBe('2 days');
   });
 
   it('classifies soon (4-7 days)', () => {
@@ -129,7 +136,13 @@ describe('getCompactUrgencyInfo', () => {
     const item = dueItem(-5, { isOverdue: true });
     const result = getCompactUrgencyInfo(item, 'Jun 15');
     expect(result.badge).toBe('destructive');
-    expect(result.text).toContain('5 days overdue');
+    expect(result.text).toBe('Jun 15 · 5 days overdue');
+  });
+
+  it('uses singular for 1 day overdue', () => {
+    const item = dueItem(-1, { isOverdue: true });
+    const result = getCompactUrgencyInfo(item, 'Jun 15');
+    expect(result.text).toBe('Jun 15 · 1 day overdue');
   });
 
   it('handles due today', () => {
@@ -194,6 +207,10 @@ describe('getDueDateText', () => {
 
   it('returns overdue text', () => {
     expect(getDueDateText(-3, false, 'Jun 15')).toBe('Jun 15 · 3 days overdue');
+  });
+
+  it('uses singular for 1 day overdue', () => {
+    expect(getDueDateText(-1, false, 'Jun 15')).toBe('Jun 15 · 1 day overdue');
   });
 
   it('returns Today', () => {

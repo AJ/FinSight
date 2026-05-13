@@ -30,6 +30,7 @@ import {
 import {
   getAPRForIssuer,
 } from '@/lib/creditCard/constants';
+import { getDaysUntilDue } from '@/lib/creditCard/dueDateUrgency';
 
 /** Ensure a value is a proper Date object */
 function toDate(v: Date | string): Date {
@@ -211,7 +212,6 @@ export const useCreditCardStore = create<CreditCardStore>()(
       },
 
       getDueDates: () => {
-        const now = new Date();
         const uniqueCards = get().getAllUniqueCards();
         const dueDates: DueDateItem[] = [];
 
@@ -221,7 +221,7 @@ export const useCreditCardStore = create<CreditCardStore>()(
           if (!recent || recent.isPaid) continue;
 
           const dueDate = toDate(recent.paymentDueDate);
-          const daysUntilDue = Math.ceil((dueDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
+          const daysUntilDue = getDaysUntilDue(dueDate);
 
           dueDates.push({
             cardIssuer: card.cardIssuer,

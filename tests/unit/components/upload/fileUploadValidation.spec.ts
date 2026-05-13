@@ -26,8 +26,8 @@ describe('getFileExtension', () => {
     expect(getFileExtension('archive.tar.gz')).toBe('.gz');
   });
 
-  it('handles no extension', () => {
-    expect(getFileExtension('README')).toBe('readme');
+  it('returns empty string for no extension', () => {
+    expect(getFileExtension('README')).toBe('');
   });
 
   it('handles hidden files with no extension', () => {

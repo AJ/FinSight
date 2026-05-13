@@ -15,7 +15,9 @@ export interface ValidationResult {
 }
 
 export function getFileExtension(filename: string): string {
-  return filename.toLowerCase().substring(filename.lastIndexOf('.'));
+  const idx = filename.lastIndexOf('.');
+  if (idx === -1) return '';
+  return filename.toLowerCase().substring(idx);
 }
 
 export function validateFile(file: { name: string; type: string; size: number }): ValidationResult {

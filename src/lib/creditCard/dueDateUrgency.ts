@@ -29,7 +29,7 @@ export function classifyUrgency(
       level: 'overdue',
       badgeVariant: 'destructive',
       textClass: 'text-destructive',
-      label: `${Math.abs(daysUntilDue)} days overdue`,
+      label: 'Overdue',
     };
   }
 
@@ -38,7 +38,7 @@ export function classifyUrgency(
       level: 'today',
       badgeVariant: 'destructive',
       textClass: 'text-destructive',
-      label: 'Today',
+      label: 'Due Today',
     };
   }
 
@@ -56,7 +56,7 @@ export function classifyUrgency(
       level: 'urgent',
       badgeVariant: 'outline',
       textClass: 'text-amber-600',
-      label: `${daysUntilDue} days`,
+      label: `${daysUntilDue} day${daysUntilDue > 1 ? 's' : ''}`,
     };
   }
 
@@ -96,9 +96,10 @@ export function getCompactUrgencyInfo(
   formattedDate: string,
 ): CompactUrgencyInfo {
   if (item.isOverdue) {
+    const absDays = Math.abs(item.daysUntilDue);
     return {
       badge: 'destructive',
-      text: `${formattedDate} · ${Math.abs(item.daysUntilDue)} days overdue`,
+      text: `${formattedDate} · ${absDays} day${absDays !== 1 ? 's' : ''} overdue`,
     };
   }
 
@@ -128,7 +129,10 @@ export function getDueDateColorClass(isPaid: boolean, daysUntilDue: number): str
 export function getDueDateText(daysUntilDue: number, isPaid: boolean, formattedDate: string): string {
   if (isPaid) return 'Paid';
   const isOverdue = daysUntilDue < 0;
-  if (isOverdue) return `${formattedDate} · ${Math.abs(daysUntilDue)} days overdue`;
+  if (isOverdue) {
+    const absDays = Math.abs(daysUntilDue);
+    return `${formattedDate} · ${absDays} day${absDays !== 1 ? 's' : ''} overdue`;
+  }
   if (daysUntilDue === 0) return 'Today';
   if (daysUntilDue === 1) return 'Tomorrow';
   return `${formattedDate} · ${daysUntilDue} days`;
