@@ -8,19 +8,13 @@ import { useCreditCardStore } from "@/lib/store/creditCardStore";
 import { useSettingsStore } from "@/lib/store/settingsStore";
 import { formatCurrency } from "@/lib/currencyFormatter";
 import { getAPRForIssuer } from "@/lib/creditCard/constants";
+import { getDaysUntilDue, getDueDateColorClass, getDueDateText, getCardBorderClass } from "@/lib/creditCard/dueDateUrgency";
 import { CreditCardStatement } from "@/types/creditCard";
 
 interface CreditCardDisplayProps {
   cardIssuer: string;
   cardLastFour: string;
   statement: CreditCardStatement;
-}
-
-function formatDate(date: Date): string {
-  return new Intl.DateTimeFormat("en-IN", {
-    month: "short",
-    day: "numeric",
-  }).format(date);
 }
 
 function formatPeriod(start: Date, end: Date): string {
@@ -35,12 +29,11 @@ function formatPeriod(start: Date, end: Date): string {
   return `${startStr} – ${endStr}`;
 }
 
-function getDaysUntilDue(dueDate: Date): number {
-  const now = new Date();
-  now.setHours(0, 0, 0, 0);
-  const due = new Date(dueDate);
-  due.setHours(0, 0, 0, 0);
-  return Math.ceil((due.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
+function formatDate(date: Date): string {
+  return new Intl.DateTimeFormat("en-IN", {
+    month: "short",
+    day: "numeric",
+  }).format(date);
 }
 
 export function CreditCardDisplay({
@@ -55,38 +48,11 @@ export function CreditCardDisplay({
   const dueDate = new Date(statement.paymentDueDate);
   const daysUntilDue = getDaysUntilDue(dueDate);
   const isPaid = statement.isPaid;
-  const isOverdue = daysUntilDue < 0 && !isPaid;
-  const isDueSoon = daysUntilDue >= 0 && daysUntilDue <= 7;
+  const formattedDate = formatDate(dueDate);
 
-  // Determine due date styling
-  const getDueDateColor = () => {
-    if (isPaid) return "text-success";
-    if (isOverdue) return "text-destructive";
-    if (isDueSoon) return "text-warning";
-    return "text-success";
-  };
-
-  const getDueDateText = () => {
-    if (isPaid) return "Paid";
-    if (isOverdue) {
-      return `${formatDate(dueDate)} · ${Math.abs(daysUntilDue)} days overdue`;
-    }
-    if (daysUntilDue === 0) {
-      return "Today";
-    }
-    if (daysUntilDue === 1) {
-      return "Tomorrow";
-    }
-    return `${formatDate(dueDate)} · ${daysUntilDue} days`;
-  };
-
-  // Card border styling based on status
-  const getCardBorderClass = () => {
-    if (isPaid) return "";
-    if (isOverdue) return "border-destructive";
-    if (isDueSoon) return "border-warning";
-    return "";
-  };
+  const dueDateColor = getDueDateColorClass(isPaid, daysUntilDue);
+  const dueDateText = getDueDateText(daysUntilDue, isPaid, formattedDate);
+  const cardBorderClass = getCardBorderClass(isPaid, daysUntilDue);
 
   // APR display
   const apr = statement.apr ?? getAPRForIssuer(cardIssuer);
@@ -106,7 +72,7 @@ export function CreditCardDisplay({
 
   return (
     <Card
-      className={`cursor-pointer transition-all hover:border-primary ${getCardBorderClass()}`}
+      className={`cursor-pointer transition-all hover:border-primary ${cardBorderClass}`}
     >
       <CardContent className="p-4">
         {/* Header: Bank, Card Name, Last 4 */}
@@ -146,8 +112,8 @@ export function CreditCardDisplay({
           </div>
           <div className="text-right">
             <div className="text-[10px] text-muted-foreground">Due Date</div>
-            <div className={`text-sm font-semibold ${getDueDateColor()}`}>
-              {getDueDateText()}
+            <div className={`text-sm font-semibold ${dueDateColor}`}>
+              {dueDateText}
             </div>
           </div>
         </div>

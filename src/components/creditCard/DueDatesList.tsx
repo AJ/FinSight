@@ -9,6 +9,11 @@ import { useCreditCardStore } from "@/lib/store/creditCardStore";
 import { useSettingsStore } from "@/lib/store/settingsStore";
 import { formatCurrency } from "@/lib/currencyFormatter";
 import { format } from "date-fns";
+import {
+  getCompactUrgencyInfo,
+  classifyUrgency,
+  classifyPaidUrgency,
+} from "@/lib/creditCard/dueDateUrgency";
 
 interface DueDateItemWithStatement {
   cardIssuer: string;
@@ -84,26 +89,7 @@ export function DueDatesList({ compact = false }: DueDatesListProps) {
       ? mostUrgent.dueDate
       : new Date(mostUrgent.dueDate);
 
-    const getUrgencyInfo = () => {
-      if (mostUrgent.isOverdue) {
-        return {
-          badge: "destructive" as const,
-          text: `${format(dueDate, "MMM d")} · ${Math.abs(mostUrgent.daysUntilDue)} days overdue`,
-        };
-      }
-      if (mostUrgent.daysUntilDue === 0) {
-        return { badge: "destructive" as const, text: "Today" };
-      }
-      if (mostUrgent.daysUntilDue === 1) {
-        return { badge: "outline" as const, text: "Tomorrow" };
-      }
-      if (mostUrgent.daysUntilDue <= 7) {
-        return { badge: "outline" as const, text: `${format(dueDate, "MMM d")} · ${mostUrgent.daysUntilDue} days` };
-      }
-      return { badge: "secondary" as const, text: `${format(dueDate, "MMM d")} · ${mostUrgent.daysUntilDue} days` };
-    };
-
-    const urgency = getUrgencyInfo();
+    const urgency = getCompactUrgencyInfo(mostUrgent, format(dueDate, "MMM d"));
 
     return (
       <Card>
@@ -159,50 +145,17 @@ export function DueDatesList({ compact = false }: DueDatesListProps) {
   } => {
     const cardKey = `${item.cardIssuer}-${item.cardLastFour}`;
     if (paidCards.has(cardKey)) {
-      return {
-        variant: "secondary",
-        icon: <Check className="w-3 h-3" />,
-        label: "Paid",
-        className: "text-green-600",
-      };
+      const paid = classifyPaidUrgency();
+      return { variant: paid.badgeVariant, icon: <Check className="w-3 h-3" />, label: paid.label, className: paid.textClass };
     }
 
-    if (item.isOverdue) {
-      return {
-        variant: "destructive",
-        icon: <AlertTriangle className="w-3 h-3" />,
-        label: "Overdue",
-        className: "text-destructive",
-      };
-    } else if (item.daysUntilDue === 0) {
-      return {
-        variant: "destructive",
-        icon: <AlertTriangle className="w-3 h-3" />,
-        label: "Due Today",
-        className: "text-destructive",
-      };
-    } else if (item.daysUntilDue <= 3) {
-      return {
-        variant: "outline",
-        icon: <Clock className="w-3 h-3" />,
-        label: `${item.daysUntilDue} day${item.daysUntilDue > 1 ? "s" : ""}`,
-        className: "text-amber-600",
-      };
-    } else if (item.daysUntilDue <= 7) {
-      return {
-        variant: "secondary",
-        icon: <Clock className="w-3 h-3" />,
-        label: `${item.daysUntilDue} days`,
-        className: "text-muted-foreground",
-      };
-    } else {
-      return {
-        variant: "outline",
-        icon: <CheckCircle2 className="w-3 h-3" />,
-        label: `${item.daysUntilDue} days`,
-        className: "text-muted-foreground",
-      };
-    }
+    const urgency = classifyUrgency(item.daysUntilDue, item.isOverdue);
+    const icon = urgency.level === 'overdue' || urgency.level === 'today'
+      ? <AlertTriangle className="w-3 h-3" />
+      : urgency.level === 'urgent' || urgency.level === 'soon'
+        ? <Clock className="w-3 h-3" />
+        : <CheckCircle2 className="w-3 h-3" />;
+    return { variant: urgency.badgeVariant, icon, label: urgency.label, className: urgency.textClass };
   };
 
   const handleMarkPaid = (item: DueDateItemWithStatement) => {
