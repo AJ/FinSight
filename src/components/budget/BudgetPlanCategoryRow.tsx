@@ -2,29 +2,10 @@
 
 import { createElement } from 'react';
 import { getCategoryDisplay, getCategoryIcon } from '@/components/transactions/CategoryBadge';
-import { NEEDS, WANTS, SAVES } from '@/lib/budget/templateApply';
+import { getCategoryGroup, groupStyles } from '@/lib/budget/categoryEligibility';
 import { Currency } from '@/types';
 import { X } from 'lucide-react';
 import { cn } from '@/lib/utils';
-
-const needsSet = new Set(NEEDS);
-const wantsSet = new Set(WANTS);
-const savesSet = new Set(SAVES);
-
-type CategoryGroup = 'Needs' | 'Wants' | 'Saves';
-
-function getCategoryGroup(categoryId: string): CategoryGroup | null {
-  if (needsSet.has(categoryId)) return 'Needs';
-  if (wantsSet.has(categoryId)) return 'Wants';
-  if (savesSet.has(categoryId)) return 'Saves';
-  return null;
-}
-
-const groupStyles: Record<CategoryGroup, string> = {
-  Needs: 'bg-blue-500/15 text-blue-400',
-  Wants: 'bg-purple-500/15 text-purple-400',
-  Saves: 'bg-green-500/15 text-green-400',
-};
 
 interface BudgetPlanCategoryRowProps {
   categoryId: string;

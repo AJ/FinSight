@@ -12,10 +12,11 @@ import { BudgetPlanView } from '@/components/budget/BudgetPlanView';
 import { BudgetEmptyState } from '@/components/budget/BudgetEmptyState';
 import { BudgetInfoBanner } from '@/components/budget/BudgetInfoBanner';
 import { BudgetHighlights } from '@/components/budget/BudgetHighlights';
-import { getBudgetableCategoryIds } from '@/lib/budget/categoryEligibility';
+import { getBudgetableCategoryIds, partitionCategories } from '@/lib/budget/categoryEligibility';
 import { computeAutoFill } from '@/lib/budget/autoFill';
 import { computeTemplateAllocation } from '@/lib/budget/templateApply';
-import { findCarryForwardState } from '@/lib/budget/carryForward';
+import { computeAllocationSummary, computeSummaryTotals } from '@/lib/budget/progressCalculation';
+import { findCarryForwardState, isBudgetDirty } from '@/lib/budget/carryForward';
 import { calculateMedianMonthlyIncome } from '@/lib/forecaster';
 import { format, startOfMonth } from 'date-fns';
 import { cn } from '@/lib/utils';
@@ -53,12 +54,9 @@ function BudgetPageContent() {
     [budgetStore, selectedMonth, monthTransactions]
   );
 
-  const summaryData = useMemo(() => {
-    const budgeted = progress.reduce((s, p) => s + p.budgeted, 0);
-    const spent = progress.reduce((s, p) => s + p.spent, 0);
-    const remaining = progress.reduce((s, p) => s + p.remaining, 0);
-    return { budgeted, spent, remaining, income: period?.income ?? null };
-  }, [progress, period]);
+  const summaryData = useMemo(() =>
+    computeSummaryTotals(progress, period?.income ?? null),
+  [progress, period]);
 
   const hasBudget = !!period;
   const hasAnyData = hasBudget || monthTransactions.length > 0;
@@ -89,15 +87,11 @@ function BudgetPageContent() {
   }, []);
 
   // Dirty tracking
-  const isDirty = useMemo(() => {
-    const savedAllocMap = Object.fromEntries((period?.allocations ?? []).map(a => [a.categoryId, a.amount]));
-    return localIncome !== (period?.income ?? 0)
-      || JSON.stringify(localAllocations) !== JSON.stringify(savedAllocMap)
-      || JSON.stringify(localHidden) !== JSON.stringify(period?.hiddenCategories ?? []);
-  }, [localIncome, localAllocations, localHidden, period]);
+  const isDirty = useMemo(() =>
+    isBudgetDirty({ localIncome, localAllocations, localHidden, period }),
+  [localIncome, localAllocations, localHidden, period]);
 
-  const totalAllocated = Object.values(localAllocations).reduce((s, v) => s + v, 0);
-  const isOverAllocated = totalAllocated > localIncome;
+  const { isOverAllocated } = computeAllocationSummary(localIncome, localAllocations);
 
   // Unsaved changes dialog
   const [showDiscardDialog, setShowDiscardDialog] = useState(false);
@@ -207,8 +201,7 @@ function BudgetPageContent() {
 
   // Derived: visible and hidden category lists
   const allCategoryIds = getBudgetableCategoryIds();
-  const visibleCategoryIds = allCategoryIds.filter(id => !localHidden.includes(id) && id in localAllocations);
-  const hiddenCategoryIds = allCategoryIds.filter(id => localHidden.includes(id) || !(id in localAllocations));
+  const { visible: visibleCategoryIds, hidden: hiddenCategoryIds } = partitionCategories(allCategoryIds, localHidden, localAllocations);
 
   return (
     <div className="flex-1 overflow-y-auto">

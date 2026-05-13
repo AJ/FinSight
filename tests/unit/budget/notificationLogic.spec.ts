@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { getApplicableNotification } from '@/lib/budget/notificationLogic';
+import { getApplicableNotification, getNotificationLabels } from '@/lib/budget/notificationLogic';
 
 describe('getApplicableNotification', () => {
   const may2026 = '2026-05';
@@ -107,5 +107,22 @@ describe('getApplicableNotification', () => {
       dismissedEOM: null,
     });
     expect(result).toBeNull();
+  });
+});
+
+describe('getNotificationLabels', () => {
+  it('returns "no budget" labels', () => {
+    const labels = getNotificationLabels({ type: 'noBudget', month: '2026-04' }, 'April 2026');
+    expect(labels.message).toContain('No budget for April 2026');
+    expect(labels.actionLabel).toBe('Set one up');
+    expect(labels.dismissLabel).toBe('Dismiss');
+  });
+
+  it('returns "eom" labels', () => {
+    const labels = getNotificationLabels({ type: 'eom', month: '2026-05' }, 'May 2026');
+    expect(labels.message).toContain('New month starting soon');
+    expect(labels.message).toContain('May 2026');
+    expect(labels.actionLabel).toBe('Plan now');
+    expect(labels.dismissLabel).toBe('Remind me later');
   });
 });

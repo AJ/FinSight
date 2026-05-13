@@ -8,6 +8,7 @@ export { FrequencyPeriod } from './FrequencyPeriod';
 
 // Classes
 export { Category } from './Category';
+export type { CategoryGroup } from './Category';
 export { Transaction } from './Transaction';
 
 // Interfaces

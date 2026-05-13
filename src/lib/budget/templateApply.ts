@@ -1,12 +1,9 @@
 import { Transaction } from '@/types';
 import { getBudgetableCategoryIds } from './categoryEligibility';
+import { Category } from '@/models/Category';
 import { forecastAllCategories } from '@/lib/forecaster';
 
 export type TemplateId = '50/30/20' | '60/20/20' | '70/20/10';
-
-export const NEEDS = ['groceries', 'housing', 'utilities', 'healthcare', 'insurance', 'bills', 'taxes', 'fees', 'transportation'];
-export const WANTS = ['dining', 'entertainment', 'shopping', 'travel', 'education'];
-export const SAVES = ['investment', 'other', 'interest-expense'];
 
 const DEFAULT_NEEDS = ['housing', 'groceries', 'utilities', 'transportation'];
 const DEFAULT_WANTS = ['dining', 'entertainment', 'shopping'];
@@ -41,28 +38,22 @@ export function computeTemplateAllocation(input: TemplateApplyInput): TemplateAp
   const forecasts = forecastAllCategories(transactions, categoryIds);
   const hasHistory = Object.values(forecasts).some(v => v > 0);
 
-  let needsCats: string[];
-  let wantsCats: string[];
-  let savesCats: string[];
+  const needsCats = Category.getByGroup('needs').map(c => c.id);
+  const wantsCats = Category.getByGroup('wants').map(c => c.id);
+  const savesCats = Category.getByGroup('saves').map(c => c.id);
 
-  if (hasHistory) {
-    needsCats = categoryIds.filter(id => NEEDS.includes(id) && forecasts[id] > 0);
-    wantsCats = categoryIds.filter(id => WANTS.includes(id) && forecasts[id] > 0);
-    savesCats = categoryIds.filter(id => SAVES.includes(id) && forecasts[id] > 0);
-  } else {
-    needsCats = categoryIds.filter(id => DEFAULT_NEEDS.includes(id));
-    wantsCats = categoryIds.filter(id => DEFAULT_WANTS.includes(id));
-    savesCats = categoryIds.filter(id => DEFAULT_SAVES.includes(id));
-  }
+  const activeNeeds = hasHistory ? needsCats.filter(id => forecasts[id] > 0) : needsCats.filter(id => DEFAULT_NEEDS.includes(id));
+  const activeWants = hasHistory ? wantsCats.filter(id => forecasts[id] > 0) : wantsCats.filter(id => DEFAULT_WANTS.includes(id));
+  const activeSaves = hasHistory ? savesCats.filter(id => forecasts[id] > 0) : savesCats.filter(id => DEFAULT_SAVES.includes(id));
 
   const allocations: Record<string, number> = {};
-  const needsPerCat = needsCats.length > 0 ? Math.round(targetIncome * needsPct / needsCats.length) : 0;
-  const wantsPerCat = wantsCats.length > 0 ? Math.round(targetIncome * wantsPct / wantsCats.length) : 0;
-  const savesPerCat = savesCats.length > 0 ? Math.round(targetIncome * savesPct / savesCats.length) : 0;
+  const needsPerCat = activeNeeds.length > 0 ? Math.round(targetIncome * needsPct / activeNeeds.length) : 0;
+  const wantsPerCat = activeWants.length > 0 ? Math.round(targetIncome * wantsPct / activeWants.length) : 0;
+  const savesPerCat = activeSaves.length > 0 ? Math.round(targetIncome * savesPct / activeSaves.length) : 0;
 
-  needsCats.forEach(id => { allocations[id] = needsPerCat; });
-  wantsCats.forEach(id => { allocations[id] = wantsPerCat; });
-  savesCats.forEach(id => { allocations[id] = savesPerCat; });
+  activeNeeds.forEach(id => { allocations[id] = needsPerCat; });
+  activeWants.forEach(id => { allocations[id] = wantsPerCat; });
+  activeSaves.forEach(id => { allocations[id] = savesPerCat; });
 
   const hidden = categoryIds.filter(id => !(id in allocations));
 

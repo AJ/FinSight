@@ -1,9 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import {
   computeTemplateAllocation,
-  NEEDS,
-  SAVES,
 } from '@/lib/budget/templateApply';
+import { Category } from '@/models/Category';
 import { makeTransaction, makeCategory } from '@tests/unit/factories';
 import '@/lib/categorization/categories'; // Populate category registry for getBudgetableCategoryIds()
 
@@ -145,12 +144,13 @@ describe('computeTemplateAllocation', () => {
     expect(result).not.toBeNull();
 
     // SAVES categories should NOT appear in allocations
-    for (const cat of SAVES) {
+    const savesIds = Category.getByGroup('saves').map(c => c.id);
+    for (const cat of savesIds) {
       expect(result!.allocations).not.toHaveProperty(cat);
     }
 
     // And SAVES categories should appear in hidden
-    for (const cat of SAVES) {
+    for (const cat of savesIds) {
       expect(result!.hidden).toContain(cat);
     }
   });
@@ -187,7 +187,8 @@ describe('computeTemplateAllocation', () => {
     expect(result).not.toBeNull();
 
     // No NEEDS categories should be in allocations
-    for (const cat of NEEDS) {
+    const needsIds = Category.getByGroup('needs').map(c => c.id);
+    for (const cat of needsIds) {
       expect(result!.allocations).not.toHaveProperty(cat);
     }
 

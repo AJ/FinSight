@@ -54,4 +54,43 @@ describe('Category', () => {
     expect(cat.icon).toBe('icon');
     expect(cat.color).toBe('#fff');
   });
+
+  describe('group property', () => {
+    it('has group for expense categories', () => {
+      expect(Category.fromId('groceries')?.group).toBe('needs');
+      expect(Category.fromId('dining')?.group).toBe('wants');
+      expect(Category.fromId('investment')?.group).toBe('saves');
+    });
+
+    it('has undefined group for income categories', () => {
+      expect(Category.fromId('income')?.group).toBeUndefined();
+      expect(Category.fromId('cashback')?.group).toBeUndefined();
+    });
+
+    it('has undefined group for excluded categories without group', () => {
+      expect(Category.fromId('transfer')?.group).toBeUndefined();
+    });
+  });
+
+  describe('getByGroup', () => {
+    it('returns only needs categories', () => {
+      const cats = Category.getByGroup('needs');
+      expect(cats.length).toBeGreaterThan(0);
+      expect(cats.every(c => c.group === 'needs')).toBe(true);
+      expect(cats.map(c => c.id)).toContain('groceries');
+      expect(cats.map(c => c.id)).toContain('housing');
+    });
+
+    it('returns only wants categories', () => {
+      const cats = Category.getByGroup('wants');
+      expect(cats.every(c => c.group === 'wants')).toBe(true);
+      expect(cats.map(c => c.id)).toContain('dining');
+    });
+
+    it('returns only saves categories', () => {
+      const cats = Category.getByGroup('saves');
+      expect(cats.every(c => c.group === 'saves')).toBe(true);
+      expect(cats.map(c => c.id)).toContain('investment');
+    });
+  });
 });

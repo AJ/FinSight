@@ -3,6 +3,8 @@
 import { useState, useMemo } from 'react';
 import { Currency, Transaction } from '@/types';
 import { getBudgetableCategories } from '@/lib/budget/categoryEligibility';
+import { computeAllocationSummary } from '@/lib/budget/progressCalculation';
+import { getSaveDisabledReason } from '@/lib/budget/carryForward';
 import { forecastCategorySpending } from '@/lib/forecaster';
 import { getCategoryDisplay } from '@/components/transactions/CategoryBadge';
 import { BudgetPlanCategoryRow } from './BudgetPlanCategoryRow';
@@ -60,9 +62,7 @@ export function BudgetPlanView({
     [transactions, budgetableCats]
   );
 
-  const totalAllocated = Object.values(allocations).reduce((s, v) => s + v, 0);
-  const unallocated = income - totalAllocated;
-  const allocPct = income > 0 ? Math.round((totalAllocated / income) * 100) : 0;
+  const { totalAllocated, unallocated, allocPct } = computeAllocationSummary(income, allocations);
 
   const [hoveredRow, setHoveredRow] = useState<string | null>(null);
   const [pendingRemove, setPendingRemove] = useState<string | null>(null);
@@ -91,11 +91,7 @@ export function BudgetPlanView({
   const hasCategories = visibleCategoryIds.length > 0;
 
   const canSave = isDirty && !isOverAllocated && income > 0 && hasCategories;
-  const saveDisabledReason = !isDirty ? 'No changes to save'
-    : isOverAllocated ? 'Over-allocated — reduce category amounts to fit within budget'
-    : income === 0 ? 'Set a total budget first'
-    : !hasCategories ? 'Add at least one category'
-    : '';
+  const saveDisabledReason = getSaveDisabledReason({ isDirty, isOverAllocated, income, hasCategories });
 
   const canApplyTemplate = income > 0 || medianIncome > 0;
   const canAutoFill = (income > 0 || medianIncome > 0) && hasSpendingHistory;

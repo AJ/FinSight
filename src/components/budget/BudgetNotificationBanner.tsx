@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/button';
 import { format } from 'date-fns';
 import { useRouter } from 'next/navigation';
 import { AlertTriangle } from 'lucide-react';
-import { getApplicableNotification } from '@/lib/budget/notificationLogic';
+import { getApplicableNotification, getNotificationLabels } from '@/lib/budget/notificationLogic';
 
 export function BudgetNotificationBanner() {
   const router = useRouter();
@@ -53,13 +53,7 @@ export function BudgetNotificationBanner() {
   };
 
   const monthLabel = format(new Date(notification.month + '-01'), 'MMMM yyyy');
-
-  const message = notification.type === 'noBudget'
-    ? `No budget for ${monthLabel}.`
-    : `New month starting soon. Set up your ${monthLabel} budget.`;
-
-  const actionLabel = notification.type === 'noBudget' ? 'Set one up' : 'Plan now';
-  const dismissLabel = notification.type === 'noBudget' ? 'Dismiss' : 'Remind me later';
+  const { message, actionLabel, dismissLabel } = getNotificationLabels(notification, monthLabel);
 
   return (
     <div className="flex items-center justify-between gap-4 p-3 rounded-lg border border-yellow-500/20 bg-yellow-500/5 mb-4">

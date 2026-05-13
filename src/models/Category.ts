@@ -1,5 +1,7 @@
 import { CategoryType } from './CategoryType';
 
+export type CategoryGroup = 'needs' | 'wants' | 'saves';
+
 /**
  * Category class with static registry for lookup.
  * Categories are registered at module load time via Category.register().
@@ -17,6 +19,7 @@ export class Category {
     public readonly keywords: string[] = [],
     public readonly icon?: string,
     public readonly color?: string,
+    public readonly group?: CategoryGroup,
   ) {}
 
   get isIncome(): boolean {
@@ -43,5 +46,9 @@ export class Category {
 
   static getByType(type: CategoryType): Category[] {
     return Category.getAll().filter((c) => c.type === type);
+  }
+
+  static getByGroup(group: CategoryGroup): Category[] {
+    return Category.getAll().filter((c) => c.group === group);
   }
 }

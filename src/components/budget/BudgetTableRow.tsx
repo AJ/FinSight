@@ -6,6 +6,7 @@ import { BudgetProgress, Currency, Transaction } from '@/types';
 import { formatCurrency } from '@/lib/currencyFormatter';
 import { getCategoryDisplay, getCategoryIcon } from '@/components/transactions/CategoryBadge';
 import { computeSparklineData, computeSparklineSVGPoints, getSparklineColor } from '@/lib/budget/sparklineData';
+import { getStatusDisplay } from '@/lib/budget/progressCalculation';
 import { cn } from '@/lib/utils';
 
 interface BudgetTableRowProps {
@@ -15,13 +16,6 @@ interface BudgetTableRowProps {
   selectedMonth: string;
   hasBudget: boolean;
 }
-
-const statusConfig: Record<BudgetProgress['status'], { label: string; className: string }> = {
-  'on-track': { label: 'On Track', className: 'bg-green-500/15 text-green-400' },
-  'warning': { label: 'Warning', className: 'bg-yellow-500/15 text-yellow-400' },
-  'over-budget': { label: 'Over', className: 'bg-red-500/15 text-red-400' },
-  'not-set': { label: 'No budget', className: 'bg-muted text-muted-foreground' },
-};
 
 export const BudgetTableRow = memo(function BudgetTableRow({
   progress,
@@ -35,7 +29,7 @@ export const BudgetTableRow = memo(function BudgetTableRow({
     () => computeSparklineData(transactions, categoryId, 5, startOfMonth(new Date(selectedMonth + '-01'))),
     [transactions, categoryId, selectedMonth]
   );
-  const config = statusConfig[status];
+  const config = getStatusDisplay(status);
 
   const isOverBudget = percentUsed >= 100;
   const sparklineColor = getSparklineColor(percentUsed);

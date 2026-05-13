@@ -24,3 +24,27 @@ export function getApplicableNotification(input: NotificationInput): Notificatio
 
   return null;
 }
+
+export interface NotificationLabels {
+  message: string;
+  actionLabel: string;
+  dismissLabel: string;
+}
+
+export function getNotificationLabels(
+  notification: NotificationType,
+  monthLabel: string,
+): NotificationLabels {
+  if (notification.type === 'noBudget') {
+    return {
+      message: `No budget for ${monthLabel}.`,
+      actionLabel: 'Set one up',
+      dismissLabel: 'Dismiss',
+    };
+  }
+  return {
+    message: `New month starting soon. Set up your ${monthLabel} budget.`,
+    actionLabel: 'Plan now',
+    dismissLabel: 'Remind me later',
+  };
+}

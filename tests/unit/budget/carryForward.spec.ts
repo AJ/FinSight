@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { findCarryForwardState } from '@/lib/budget/carryForward';
+import { findCarryForwardState, isBudgetDirty, getSaveDisabledReason } from '@/lib/budget/carryForward';
 import { makeBudgetPeriod } from '@tests/unit/factories';
 import type { BudgetPeriod } from '@/types';
 
@@ -192,5 +192,113 @@ describe('findCarryForwardState', () => {
     expect(result.income).toBe(48000);
     expect(result.allocations).toEqual({ groceries: 10000, dining: 5000 });
     expect(result.hidden).toEqual(['insurance']);
+  });
+});
+
+describe('isBudgetDirty', () => {
+  it('returns false when local state matches period', () => {
+    const period = makeBudgetPeriod({
+      income: 50000,
+      allocations: [{ categoryId: 'groceries', amount: 10000 }],
+      hiddenCategories: ['travel'],
+    });
+
+    expect(isBudgetDirty({
+      localIncome: 50000,
+      localAllocations: { groceries: 10000 },
+      localHidden: ['travel'],
+      period,
+    })).toBe(false);
+  });
+
+  it('returns true when income differs', () => {
+    const period = makeBudgetPeriod({ income: 50000 });
+
+    expect(isBudgetDirty({
+      localIncome: 60000,
+      localAllocations: {},
+      localHidden: [],
+      period,
+    })).toBe(true);
+  });
+
+  it('returns true when allocations differ', () => {
+    const period = makeBudgetPeriod({
+      allocations: [{ categoryId: 'groceries', amount: 10000 }],
+    });
+
+    expect(isBudgetDirty({
+      localIncome: 0,
+      localAllocations: { groceries: 15000 },
+      localHidden: [],
+      period,
+    })).toBe(true);
+  });
+
+  it('returns true when hidden categories differ', () => {
+    const period = makeBudgetPeriod({ hiddenCategories: ['travel'] });
+
+    expect(isBudgetDirty({
+      localIncome: 0,
+      localAllocations: {},
+      localHidden: [],
+      period,
+    })).toBe(true);
+  });
+
+  it('returns true when period is null and local state is non-default', () => {
+    expect(isBudgetDirty({
+      localIncome: 50000,
+      localAllocations: {},
+      localHidden: [],
+      period: null,
+    })).toBe(true);
+  });
+
+  it('returns false when period is null and local state is default', () => {
+    expect(isBudgetDirty({
+      localIncome: 0,
+      localAllocations: {},
+      localHidden: [],
+      period: null,
+    })).toBe(false);
+  });
+});
+
+describe('getSaveDisabledReason', () => {
+  it('returns empty string when all conditions met', () => {
+    expect(getSaveDisabledReason({
+      isDirty: true, isOverAllocated: false, income: 50000, hasCategories: true,
+    })).toBe('');
+  });
+
+  it('returns "No changes to save" when not dirty', () => {
+    expect(getSaveDisabledReason({
+      isDirty: false, isOverAllocated: false, income: 50000, hasCategories: true,
+    })).toBe('No changes to save');
+  });
+
+  it('returns "Over-allocated" when over budget', () => {
+    expect(getSaveDisabledReason({
+      isDirty: true, isOverAllocated: true, income: 50000, hasCategories: true,
+    })).toContain('Over-allocated');
+  });
+
+  it('returns "Set a total budget" when income is zero', () => {
+    expect(getSaveDisabledReason({
+      isDirty: true, isOverAllocated: false, income: 0, hasCategories: true,
+    })).toBe('Set a total budget first');
+  });
+
+  it('returns "Add at least one category" when no categories', () => {
+    expect(getSaveDisabledReason({
+      isDirty: true, isOverAllocated: false, income: 50000, hasCategories: false,
+    })).toBe('Add at least one category');
+  });
+
+  it('prioritizes "not dirty" over other reasons', () => {
+    expect(getSaveDisabledReason({
+      isDirty: false, isOverAllocated: true, income: 0, hasCategories: false,
+    })).toBe('No changes to save');
   });
 });

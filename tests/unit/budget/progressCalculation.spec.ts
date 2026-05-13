@@ -3,6 +3,9 @@ import {
   aggregateSpendingByCategory,
   classifyBudgetStatus,
   computeBudgetProgress,
+  computeSummaryTotals,
+  getStatusDisplay,
+  computeAllocationSummary,
   type TransactionLike,
   type PeriodLike,
 } from '@/lib/budget/progressCalculation';
@@ -210,5 +213,82 @@ describe('computeBudgetProgress', () => {
     const groceries = result.find(r => r.categoryId === 'groceries')!;
 
     expect(groceries.spent).toBe(0);
+  });
+});
+
+describe('computeSummaryTotals', () => {
+  it('aggregates budgeted, spent, remaining from progress entries', () => {
+    const progress = [
+      { categoryId: 'a', budgeted: 10000, spent: 5000, remaining: 5000, percentUsed: 50, status: 'on-track' as const },
+      { categoryId: 'b', budgeted: 8000, spent: 8000, remaining: 0, percentUsed: 100, status: 'over-budget' as const },
+    ];
+
+    const result = computeSummaryTotals(progress, 60000);
+
+    expect(result.budgeted).toBe(18000);
+    expect(result.spent).toBe(13000);
+    expect(result.remaining).toBe(5000);
+    expect(result.income).toBe(60000);
+  });
+
+  it('returns zeros for empty progress', () => {
+    const result = computeSummaryTotals([], null);
+    expect(result.budgeted).toBe(0);
+    expect(result.spent).toBe(0);
+    expect(result.remaining).toBe(0);
+    expect(result.income).toBeNull();
+  });
+});
+
+describe('getStatusDisplay', () => {
+  it('returns display info for each status', () => {
+    const onTrack = getStatusDisplay('on-track');
+    expect(onTrack.label).toBe('On Track');
+    expect(onTrack.className).toBeTruthy();
+
+    const warning = getStatusDisplay('warning');
+    expect(warning.label).toBe('Warning');
+
+    const over = getStatusDisplay('over-budget');
+    expect(over.label).toBe('Over');
+
+    const notSet = getStatusDisplay('not-set');
+    expect(notSet.label).toBe('No budget');
+  });
+});
+
+describe('computeAllocationSummary', () => {
+  it('computes totals for allocations within budget', () => {
+    const result = computeAllocationSummary(50000, { groceries: 15000, dining: 10000 });
+
+    expect(result.totalAllocated).toBe(25000);
+    expect(result.unallocated).toBe(25000);
+    expect(result.allocPct).toBe(50);
+    expect(result.isOverAllocated).toBe(false);
+  });
+
+  it('detects over-allocation', () => {
+    const result = computeAllocationSummary(10000, { groceries: 8000, dining: 5000 });
+
+    expect(result.totalAllocated).toBe(13000);
+    expect(result.unallocated).toBe(-3000);
+    expect(result.allocPct).toBe(130);
+    expect(result.isOverAllocated).toBe(true);
+  });
+
+  it('handles zero income', () => {
+    const result = computeAllocationSummary(0, { groceries: 5000 });
+
+    expect(result.allocPct).toBe(0);
+    expect(result.isOverAllocated).toBe(true);
+  });
+
+  it('handles empty allocations', () => {
+    const result = computeAllocationSummary(50000, {});
+
+    expect(result.totalAllocated).toBe(0);
+    expect(result.unallocated).toBe(50000);
+    expect(result.allocPct).toBe(0);
+    expect(result.isOverAllocated).toBe(false);
   });
 });

@@ -75,3 +75,50 @@ export function computeBudgetProgress(
 
   return progress;
 }
+
+export interface SummaryTotals {
+  budgeted: number;
+  spent: number;
+  remaining: number;
+  income: number | null;
+}
+
+export function computeSummaryTotals(
+  progress: ProgressEntry[],
+  income: number | null,
+): SummaryTotals {
+  const budgeted = progress.reduce((s, p) => s + p.budgeted, 0);
+  const spent = progress.reduce((s, p) => s + p.spent, 0);
+  const remaining = progress.reduce((s, p) => s + p.remaining, 0);
+  return { budgeted, spent, remaining, income };
+}
+
+export type StatusDisplay = { label: string; className: string };
+
+const STATUS_DISPLAY_MAP: Record<ProgressEntry['status'], StatusDisplay> = {
+  'on-track': { label: 'On Track', className: 'bg-green-500/15 text-green-400' },
+  'warning': { label: 'Warning', className: 'bg-yellow-500/15 text-yellow-400' },
+  'over-budget': { label: 'Over', className: 'bg-red-500/15 text-red-400' },
+  'not-set': { label: 'No budget', className: 'bg-muted text-muted-foreground' },
+};
+
+export function getStatusDisplay(status: ProgressEntry['status']): StatusDisplay {
+  return STATUS_DISPLAY_MAP[status];
+}
+
+export interface AllocationSummary {
+  totalAllocated: number;
+  unallocated: number;
+  allocPct: number;
+  isOverAllocated: boolean;
+}
+
+export function computeAllocationSummary(
+  income: number,
+  allocations: Record<string, number>,
+): AllocationSummary {
+  const totalAllocated = Object.values(allocations).reduce((s, v) => s + v, 0);
+  const unallocated = income - totalAllocated;
+  const allocPct = income > 0 ? Math.round((totalAllocated / income) * 100) : 0;
+  return { totalAllocated, unallocated, allocPct, isOverAllocated: totalAllocated > income };
+}

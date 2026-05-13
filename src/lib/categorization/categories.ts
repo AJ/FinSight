@@ -7,7 +7,7 @@ Category.register(new Category("groceries", "Groceries", CategoryType.Expense,
     "whole foods", "costco", "aldi", "safeway", "publix",
     "trader joe", "target", "market", "food", "h-e-b", "meijer",
     "sams club", "bj", "fresh", "produce"],
-  "ShoppingCart", "#22c55e"));
+  "ShoppingCart", "#22c55e", "needs"));
 
 Category.register(new Category("dining", "Dining", CategoryType.Expense,
   ["restaurant", "cafe", "coffee", "starbucks", "mcdonalds",
@@ -17,41 +17,41 @@ Category.register(new Category("dining", "Dining", CategoryType.Expense,
     "uber eats", "grubhub", "postmates", "eatery", "brasserie",
     "swiggy", "zomato", "blinkit", "zepto", "instamart", "foodpanda",
     "deliveroo", "menulog", "just eat", "skipthedishes"],
-  "Utensils", "#f97316"));
+  "Utensils", "#f97316", "wants"));
 
 Category.register(new Category("transportation", "Transportation", CategoryType.Expense,
   ["gas", "fuel", "shell", "exxon", "chevron", "bp", "mobil",
     "uber", "lyft", "taxi", "parking", "toll", "car wash",
     "auto", "mechanic", "oil change", "tire", "repair",
     "bus", "metro", "transit", "train", "amtrak", "fuel station"],
-  "Car", "#3b82f6"));
+  "Car", "#3b82f6", "needs"));
 
 Category.register(new Category("utilities", "Utilities", CategoryType.Expense,
   ["electric", "electricity", "power", "water", "gas bill",
     "internet", "phone", "mobile", "verizon", "at&t", "t-mobile",
     "comcast", "xfinity", "spectrum", "utility", "sewer",
     "garbage", "trash", "heating", "cooling", "pge", "duke energy"],
-  "Zap", "#eab308"));
+  "Zap", "#eab308", "needs"));
 
 Category.register(new Category("housing", "Housing", CategoryType.Expense,
   ["rent", "mortgage", "home", "apartment", "lease",
     "maintenance", "repair", "property", "hoa", "condo",
     "landlord", "real estate", "housing"],
-  "Home", "#8b5cf6"));
+  "Home", "#8b5cf6", "needs"));
 
 Category.register(new Category("healthcare", "Healthcare", CategoryType.Expense,
   ["pharmacy", "doctor", "hospital", "medical", "health",
     "dental", "vision", "optometry", "clinic", "urgent care",
     "cvs", "walgreens", "rite aid", "prescription", "medicine",
     "insurance", "copay", "deductible", "lab", "specialist"],
-  "Heart", "#ef4444"));
+  "Heart", "#ef4444", "needs"));
 
 Category.register(new Category("entertainment", "Entertainment", CategoryType.Expense,
   ["netflix", "spotify", "hulu", "disney", "hbo", "amazon prime",
     "youtube", "movie", "cinema", "theater", "concert", "gaming",
     "playstation", "xbox", "nintendo", "steam", "game", "music",
     "apple music", "tidal", "deezer", "audible", "podcast"],
-  "Film", "#ec4899"));
+  "Film", "#ec4899", "wants"));
 
 Category.register(new Category("shopping", "Shopping", CategoryType.Expense,
   ["amazon", "ebay", "etsy", "wish", "aliexpress",
@@ -59,7 +59,7 @@ Category.register(new Category("shopping", "Shopping", CategoryType.Expense,
     "nordstrom", "macy", "jcpenney", "kohl", "ross", "tj maxx",
     "marshalls", "home depot", "lowes", "ikea", "wayfair",
     "retail", "store", "shop", "online", "order"],
-  "ShoppingBag", "#14b8a6"));
+  "ShoppingBag", "#14b8a6", "wants"));
 
 Category.register(new Category("income", "Income", CategoryType.Income,
   ["salary", "paycheck", "deposit", "income", "payment received",
@@ -95,28 +95,28 @@ Category.register(new Category("bills", "Bills & Payments", CategoryType.Expense
     "card payment", "loan payment", "emi", "loan emi",
     "credit card bill", "card bill", "loan repayment",
     "payment to", "pmt", "payment-debit", "autopay"],
-  "Receipt", "#f59e0b"));
+  "Receipt", "#f59e0b", "needs"));
 
 Category.register(new Category("investment", "Investment", CategoryType.Excluded,
   ["stock", "stocks", "dividend", "crypto", "bitcoin", "ethereum",
     "trading", "investment", "brokerage", "fidelity", "vanguard",
     "schwab", "robinhood", "coinbase", "binance", "etf", "mutual fund",
     "401k", "ira", "securities"],
-  "LineChart", "#0891b2"));
+  "LineChart", "#0891b2", "saves"));
 
 Category.register(new Category("insurance", "Insurance", CategoryType.Expense,
   ["insurance", "premium", "coverage", "policy", "geico",
     "progressive", "state farm", "allstate", "farmers",
     "life insurance", "auto insurance", "home insurance",
     "health insurance", "liability"],
-  "Shield", "#64748b"));
+  "Shield", "#64748b", "needs"));
 
 Category.register(new Category("education", "Education", CategoryType.Expense,
   ["tuition", "school", "university", "college", "course",
     "books", "textbook", "education", "learning", "udemy",
     "coursera", "edx", "skillshare", "masterclass", "training",
     "workshop", "seminar", "class", "lesson", "tutoring"],
-  "GraduationCap", "#7c3aed"));
+  "GraduationCap", "#7c3aed", "wants"));
 
 Category.register(new Category("travel", "Travel", CategoryType.Expense,
   ["airline", "flight", "hotel", "booking", "airbnb",
@@ -124,30 +124,30 @@ Category.register(new Category("travel", "Travel", CategoryType.Expense,
     "united", "delta", "american airlines", "southwest",
     "jetblue", "marriott", "hilton", "hyatt", "rental car",
     "hertz", "enterprise", "avis", "lyft", "uber"],
-  "Plane", "#0ea5e9"));
+  "Plane", "#0ea5e9", "wants"));
 
 Category.register(new Category("fees", "Fees & Charges", CategoryType.Expense,
   ["fee", "charges", "penalty", "late fee", "service fee",
     "annual fee", "maintenance fee", "transaction fee",
     "fcy markup", "foreign currency", "currency conversion",
     "bank fee", "processing fee", "admin fee", "administrative"],
-  "AlertCircle", "#f43f5e"));
+  "AlertCircle", "#f43f5e", "needs"));
 
 Category.register(new Category("taxes", "Taxes", CategoryType.Expense,
   ["tax", "gst", "vat", "cess", "duty", "tds", "tax deducted",
     "igst", "cgst", "sgst", "ugst", "sales tax", "income tax",
     "property tax", "stamp duty", "excise", "levy", "impost"],
-  "Receipt", "#d946ef"));
+  "Receipt", "#d946ef", "needs"));
 
 Category.register(new Category("interest-expense", "Interest", CategoryType.Expense,
   ["interest", "finance charge", "interest charged", "interest debited",
     "igp", "interest payment", "loan interest", "credit interest",
     "overdue interest", "penal interest", "interest on"],
-  "Percent", "#a855f7"));
+  "Percent", "#a855f7", "saves"));
 
 Category.register(new Category("other", "Other", CategoryType.Excluded,
   [],
-  "HelpCircle", "#6b7280"));
+  "HelpCircle", "#6b7280", "saves"));
 
 /**
  * Default categories for transaction classification.
