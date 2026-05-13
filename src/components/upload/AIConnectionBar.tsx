@@ -32,6 +32,7 @@ import {
   ChevronUp,
   AlertTriangle,
 } from 'lucide-react';
+import { resolveModelSelection, findModelContextLength } from '@/components/chat/chatCompanions';
 
 interface AIConnectionBarProps {
   /** Called whenever connection status or model changes */
@@ -95,11 +96,11 @@ export function AIConnectionBar({ onStatusChange, disabled = false }: AIConnecti
           setModelInfos(res.models);
           setLLMServerUrl(url);
 
-          if (modelIds.length > 0 && (!llmModel || !modelIds.includes(llmModel))) {
-            setLLMModel(modelIds[0]);
-            const selected = res.models.find(m => m.id === modelIds[0]);
-            if (selected?.contextLength) {
-              setModelContextLength(selected.contextLength);
+          const selection = resolveModelSelection(llmModel, res.models);
+          if (selection) {
+            setLLMModel(selection.modelId);
+            if (selection.contextLength) {
+              setModelContextLength(selection.contextLength);
             }
           }
           onStatusChange?.(true, llmModel || modelIds[0] || null);
@@ -158,8 +159,7 @@ export function AIConnectionBar({ onStatusChange, disabled = false }: AIConnecti
             value={llmModel || ''}
             onValueChange={(v) => {
               setLLMModel(v);
-              const match = modelInfos.find(m => m.id === v);
-              setModelContextLength(match?.contextLength ?? null);
+              setModelContextLength(findModelContextLength(modelInfos, v));
               onStatusChange?.(true, v);
             }}
             disabled={disabled}
@@ -279,8 +279,7 @@ export function AIConnectionBar({ onStatusChange, disabled = false }: AIConnecti
             value={llmModel || ''}
             onValueChange={(v) => {
               setLLMModel(v);
-              const match = modelInfos.find(m => m.id === v);
-              setModelContextLength(match?.contextLength ?? null);
+              setModelContextLength(findModelContextLength(modelInfos, v));
               onStatusChange?.(true, v);
             }}
           >

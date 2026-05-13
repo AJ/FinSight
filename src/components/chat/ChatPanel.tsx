@@ -33,6 +33,7 @@ import {
 } from 'lucide-react';
 import { getClient } from '@/lib/llm/index';
 import { debugError } from '@/lib/utils/debug';
+import { buildSystemPrompt, buildChatMessages, classifyStreamError } from './chatCompanions';
 
 const messageVariants = {
   hidden: (isUser: boolean) => ({
@@ -193,27 +194,14 @@ export function ChatPanel() {
           maxChars: optimizationPlan.contextMaxChars,
         });
 
-        const systemPrompt = `You are a helpful financial assistant. You have access to the user's bank statement data below. Answer questions accurately and concisely.
+        const systemPrompt = buildSystemPrompt(statementContext);
 
-${statementContext || 'No statement data available yet.'}
-
-Guidelines:
-- Use ONLY the provided statement context for factual answers. Do not invent or assume missing transactions, balances, merchants, categories, or dates.
-- Be concise and precise with numbers.
-- Format currency amounts properly.
-- If asked for calculations, show your work briefly.
-- If the data doesn't contain enough info, say so clearly.
-- When answering with amounts, trends, counts, or conclusions, mention the relevant transaction dates and/or transactions you used.
-- The relevant transactions section is sampled and not exhaustive. If the sampled context is not enough to support a confident answer, say that explicitly.`;
-
-        const chatMessages = [
-          { role: 'system', content: systemPrompt },
-          ...messages.slice(-optimizationPlan.historyWindow).map((m) => ({
-            role: m.role,
-            content: m.content,
-          })),
-          { role: 'user', content: text },
-        ];
+        const chatMessages = buildChatMessages(
+          messages,
+          optimizationPlan.historyWindow,
+          systemPrompt,
+          text,
+        );
 
         // Stream directly from browser → LLM
         const stream = client.chatStream(llmServerUrl, selectedModel, chatMessages, {
@@ -249,9 +237,7 @@ Guidelines:
         debugError('Chat', err);
         updateMessage(
           assistantId,
-          err instanceof Error && err.message.toLowerCase().includes('timed out')
-            ? '⚠️ Request timed out — the model took too long to respond.'
-            : '⚠️ Connection error — check that your LLM is running and try again.'
+          classifyStreamError(err),
         );
       } finally {
         if (streamSignal.aborted) {
