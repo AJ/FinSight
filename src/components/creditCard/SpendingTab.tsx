@@ -10,6 +10,15 @@ import { useSettingsStore } from "@/lib/store/settingsStore";
 import { formatCurrency } from "@/lib/currencyFormatter";
 import { getCategoryDisplay } from "@/components/transactions/CategoryBadge";
 import { PeriodComparisonView } from "./PeriodComparisonView";
+import {
+  filterCCSpendTransactions,
+  aggregateByCategory,
+  aggregateByCard,
+  aggregateByMerchant,
+  computeMonthlyTrend,
+  computeTotalSpend,
+  COLORS,
+} from "./spendingAggregation";
 
 /**
  * Spending Tab
@@ -21,131 +30,44 @@ import { PeriodComparisonView } from "./PeriodComparisonView";
  * - Monthly Trend (line chart)
  */
 
-const COLORS = [
-  "oklch(0.65 0.185 45)",   // primary orange
-  "oklch(0.65 0.15 220)",   // blue
-  "oklch(0.68 0.14 150)",   // green
-  "oklch(0.75 0.15 70)",    // yellow
-  "oklch(0.70 0.15 300)",   // purple
-  "oklch(0.60 0.12 180)",   // cyan
-];
-
 export function SpendingTab() {
   const transactions = useTransactionStore((state) => state.transactions);
   const currency = useSettingsStore((state) => state.currency);
 
   // Get CC spending transactions only (purchases/charges, not payments/refunds)
-  const ccTransactions = useMemo(() => {
-    return transactions.filter((t) => t.sourceType === "credit_card" && t.isDebit);
-  }, [transactions]);
+  const ccTransactions = useMemo(
+    () => filterCCSpendTransactions(transactions),
+    [transactions],
+  );
 
   // Category breakdown
-  const categoryData = useMemo(() => {
-    const byCategory: Record<string, number> = {};
-
-    for (const txn of ccTransactions) {
-      const catId = txn.category?.id || "uncategorized";
-      byCategory[catId] = (byCategory[catId] || 0) + Math.abs(txn.amount);
-    }
-
-    const total = Object.values(byCategory).reduce((sum, v) => sum + v, 0);
-
-    return Object.entries(byCategory)
-      .map(([catId, amount]) => {
-        const display = getCategoryDisplay(catId);
-        return {
-          id: catId,
-          name: display.name,
-          value: amount,
-          percentage: total > 0 ? Math.round((amount / total) * 100) : 0,
-          color: display.color,
-        };
-      })
-      .sort((a, b) => b.value - a.value)
-      .slice(0, 6);
-  }, [ccTransactions]);
+  const categoryData = useMemo(
+    () => aggregateByCategory(ccTransactions, getCategoryDisplay),
+    [ccTransactions],
+  );
 
   // By Card breakdown
-  const cardData = useMemo(() => {
-    const byCard: Record<string, { issuer: string; lastFour: string; amount: number }> = {};
-
-    for (const txn of ccTransactions) {
-      if (!txn.cardIssuer || !txn.cardLastFour) continue;
-      const key = `${txn.cardIssuer}-${txn.cardLastFour}`;
-      if (!byCard[key]) {
-        byCard[key] = { issuer: txn.cardIssuer, lastFour: txn.cardLastFour, amount: 0 };
-      }
-      byCard[key].amount += Math.abs(txn.amount);
-    }
-
-    const total = Object.values(byCard).reduce((sum, c) => sum + c.amount, 0);
-
-    return Object.entries(byCard)
-      .map(([key, data], idx) => ({
-        key,
-        label: `${data.issuer.split(" ")[0]} ****${data.lastFour}`,
-        amount: data.amount,
-        percentage: total > 0 ? Math.round((data.amount / total) * 100) : 0,
-        color: COLORS[idx % COLORS.length],
-      }))
-      .sort((a, b) => b.amount - a.amount);
-  }, [ccTransactions]);
+  const cardData = useMemo(
+    () => aggregateByCard(ccTransactions),
+    [ccTransactions],
+  );
 
   // Top Merchants
-  const merchantData = useMemo(() => {
-    const byMerchant: Record<string, { count: number; amount: number }> = {};
-
-    for (const txn of ccTransactions) {
-      // Simple merchant extraction - first word or two of description
-      const desc = txn.description?.trim() || "Unknown";
-      const merchant = desc.split(/\s+/).slice(0, 2).join(" ").substring(0, 20);
-
-      if (!byMerchant[merchant]) {
-        byMerchant[merchant] = { count: 0, amount: 0 };
-      }
-      byMerchant[merchant].count += 1;
-      byMerchant[merchant].amount += Math.abs(txn.amount);
-    }
-
-    return Object.entries(byMerchant)
-      .map(([name, data]) => ({
-        name,
-        count: data.count,
-        amount: data.amount,
-      }))
-      .sort((a, b) => b.amount - a.amount)
-      .slice(0, 5);
-  }, [ccTransactions]);
+  const merchantData = useMemo(
+    () => aggregateByMerchant(ccTransactions),
+    [ccTransactions],
+  );
 
   // Monthly trend (last 6 months)
-  const monthlyData = useMemo(() => {
-    const byMonth: Record<string, number> = {};
-    const now = new Date();
+  const monthlyData = useMemo(
+    () => computeMonthlyTrend(ccTransactions),
+    [ccTransactions],
+  );
 
-    // Initialize last 6 months
-    for (let i = 5; i >= 0; i--) {
-      const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
-      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
-      byMonth[key] = 0;
-    }
-
-    for (const txn of ccTransactions) {
-      const d = new Date(txn.date);
-      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
-      if (key in byMonth) {
-        byMonth[key] += Math.abs(txn.amount);
-      }
-    }
-
-    return Object.entries(byMonth).map(([month, amount]) => ({
-      month: new Date(month + "-01").toLocaleDateString("en-IN", { month: "short" }),
-      amount,
-    }));
-  }, [ccTransactions]);
-
-  const totalSpend = useMemo(() => {
-    return ccTransactions.reduce((sum, t) => sum + Math.abs(t.amount), 0);
-  }, [ccTransactions]);
+  const totalSpend = useMemo(
+    () => computeTotalSpend(ccTransactions),
+    [ccTransactions],
+  );
 
   if (ccTransactions.length === 0) {
     return (
