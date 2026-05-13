@@ -144,3 +144,98 @@ describe('buildTrendData', () => {
     expect(result.labels).toEqual([]);
   });
 });
+
+describe('shouldUseWeeklyPeriods', () => {
+  it('returns true at exactly 7-week boundary', () => {
+    const first = new Date(2025, 0, 6);
+    const last = new Date(2025, 1, 17); // ~6 weeks apart
+    expect(shouldUseWeeklyPeriods(first, last)).toBe(true);
+  });
+
+  it('returns true for same date (0 weeks)', () => {
+    const d = new Date(2025, 0, 15);
+    expect(shouldUseWeeklyPeriods(d, d)).toBe(true);
+  });
+});
+
+describe('buildWeeklyPeriods', () => {
+  it('produces single period for same-week dates', () => {
+    const first = new Date(2025, 0, 6); // Monday
+    const last = new Date(2025, 0, 8); // Wednesday same week
+
+    const periods = buildWeeklyPeriods(first, last);
+    expect(periods).toHaveLength(1);
+  });
+
+  it('snaps mid-week start date to Monday', () => {
+    const wed = new Date(2025, 0, 8); // Wednesday
+    const fri = new Date(2025, 0, 10); // Friday same week
+
+    const periods = buildWeeklyPeriods(wed, fri);
+    expect(periods).toHaveLength(1);
+    expect(periods[0].start.getDay()).toBe(1); // Monday
+  });
+});
+
+describe('buildMonthlyPeriods', () => {
+  it('produces single period for same-month dates', () => {
+    const first = new Date(2025, 0, 10);
+    const last = new Date(2025, 0, 25);
+
+    const periods = buildMonthlyPeriods(first, last);
+    expect(periods).toHaveLength(1);
+    expect(periods[0].label).toBe('Jan 2025');
+  });
+
+  it('returns empty for maxMonths 0', () => {
+    const first = new Date(2025, 0, 1);
+    const last = new Date(2025, 2, 31);
+
+    const periods = buildMonthlyPeriods(first, last, 0);
+    expect(periods).toEqual([]);
+  });
+});
+
+describe('aggregateByPeriod', () => {
+  it('handles transactions with null category (neither income nor expense)', () => {
+    const txns = [
+      { dateObj: new Date(2025, 0, 10), amount: 100, category: null },
+    ];
+    const periods = [
+      { start: new Date(2025, 0, 1), end: new Date(2025, 0, 31), label: 'Jan' },
+    ];
+
+    const { incomeByPeriod, expensesByPeriod } = aggregateByPeriod(txns, periods);
+    expect(incomeByPeriod).toEqual([0]);
+    expect(expensesByPeriod).toEqual([0]);
+  });
+
+  it('handles negative amounts via Math.abs', () => {
+    const txns = [
+      { dateObj: new Date(2025, 0, 10), amount: -500, category: { isExpense: true } },
+    ];
+    const periods = [
+      { start: new Date(2025, 0, 1), end: new Date(2025, 0, 31), label: 'Jan' },
+    ];
+
+    const { expensesByPeriod } = aggregateByPeriod(txns, periods);
+    expect(expensesByPeriod).toEqual([500]);
+  });
+
+  it('returns empty arrays for empty periods', () => {
+    const { incomeByPeriod, expensesByPeriod } = aggregateByPeriod([], []);
+    expect(incomeByPeriod).toEqual([]);
+    expect(expensesByPeriod).toEqual([]);
+  });
+});
+
+describe('buildTrendData', () => {
+  it('handles single transaction', () => {
+    const result = buildTrendData([
+      { date: new Date(2025, 0, 10), amount: 500, category: { isIncome: true } },
+    ]);
+
+    expect(result.labels).toHaveLength(1);
+    expect(result.isWeekly).toBe(true);
+  });
+});

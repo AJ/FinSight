@@ -34,6 +34,11 @@ describe('calculateSavingsTrend', () => {
   it('returns 0 when both are zero', () => {
     expect(calculateSavingsTrend(0, 0)).toBe(0);
   });
+
+  it('handles negative previous savings', () => {
+    const result = calculateSavingsTrend(1000, -500);
+    expect(result).toBe(((1000 - (-500)) / 500) * 100);
+  });
 });
 
 describe('calculateSavingsRate', () => {
@@ -107,6 +112,16 @@ describe('calculateFinancialHealthScore', () => {
   it('produces minimum score with worst-case inputs', () => {
     // Current tiers produce floor of 15: 50 - 25 (savings) - 10 (util)
     expect(calculateFinancialHealthScore(-50, 100, true)).toBe(15);
+  });
+
+  it('tests exact boundary at savingsRate -10', () => {
+    // -10 falls into >= -10 tier (subtracts 5)
+    expect(calculateFinancialHealthScore(-10, 0, true)).toBe(65); // 50 - 5 + 20
+  });
+
+  it('tests exact boundary at savingsRate -25', () => {
+    // -25 falls into >= -25 tier (subtracts 15)
+    expect(calculateFinancialHealthScore(-25, 0, true)).toBe(55); // 50 - 15 + 20
   });
 
   it('clamps score to 100 maximum', () => {

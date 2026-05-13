@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { computeSparklineData } from '@/lib/budget/sparklineData';
+import { computeSparklineData, computeSparklineSVGPoints, getSparklineColor } from '@/lib/budget/sparklineData';
 import { makeTransaction, makeCategory } from '@tests/unit/factories';
 import { CategoryType } from '@/models';
 import '@/lib/categorization/categories';
@@ -112,5 +112,108 @@ describe('computeSparklineData', () => {
 
     expect(result).toHaveLength(5);
     expect(result.every(p => p.amount === 0)).toBe(true);
+  });
+});
+
+describe('computeSparklineSVGPoints', () => {
+  it('returns empty result for single data point', () => {
+    const result = computeSparklineSVGPoints([{ month: '2026-01', amount: 100 }]);
+    expect(result.polyline).toBe('');
+    expect(result.dots).toEqual([]);
+  });
+
+  it('returns empty result for empty data', () => {
+    const result = computeSparklineSVGPoints([]);
+    expect(result.polyline).toBe('');
+    expect(result.dots).toEqual([]);
+  });
+
+  it('computes coordinates for flat data', () => {
+    const data = [
+      { month: '2026-01', amount: 100 },
+      { month: '2026-02', amount: 100 },
+      { month: '2026-03', amount: 100 },
+    ];
+
+    const { polyline, dots } = computeSparklineSVGPoints(data, 100, 28, 5, 6, 6);
+
+    expect(dots).toHaveLength(3);
+    // All amounts equal, so all dots should share the same y
+    const ys = dots.map(d => d.y);
+    expect(ys.every(y => y === ys[0])).toBe(true);
+    // X values should be evenly spaced
+    expect(dots[0].x).toBeCloseTo(5);
+    expect(dots[2].x).toBeCloseTo(95);
+    // Polyline should contain all dot coordinates
+    expect(polyline).toContain(`${dots[0].x},${dots[0].y}`);
+  });
+
+  it('computes rising line for increasing data', () => {
+    const data = [
+      { month: '2026-01', amount: 100 },
+      { month: '2026-02', amount: 200 },
+      { month: '2026-03', amount: 300 },
+    ];
+
+    const { dots } = computeSparklineSVGPoints(data, 100, 28, 5, 6, 6);
+
+    // First point (lowest) should have highest y (SVG y goes down)
+    expect(dots[0].y).toBeGreaterThan(dots[1].y);
+    expect(dots[1].y).toBeGreaterThan(dots[2].y);
+  });
+
+  it('respects custom dimensions and padding', () => {
+    const data = [
+      { month: '2026-01', amount: 0 },
+      { month: '2026-02', amount: 100 },
+    ];
+
+    const { dots } = computeSparklineSVGPoints(data, 200, 50, 10, 8, 8);
+
+    expect(dots).toHaveLength(2);
+    // First dot at paddingX=10, last at width-paddingX=190
+    expect(dots[0].x).toBeCloseTo(10);
+    expect(dots[1].x).toBeCloseTo(190);
+    // Max value (100) should be at top (y = height - paddingBottom = 50 - 8 = 42)
+    // Min value (0) should be at bottom (y = 50 - 8 = 42... wait, min=0 so y = 50-8-(0/100)*34 = 42)
+    // Actually: max = 100, drawHeight = 50 - 8 - 8 = 34
+    // dot[0] amount=0: y = 50 - 8 - (0/100)*34 = 42
+    // dot[1] amount=100: y = 50 - 8 - (100/100)*34 = 8
+    expect(dots[0].y).toBeCloseTo(42);
+    expect(dots[1].y).toBeCloseTo(8);
+  });
+
+  it('handles all-zero amounts without division by zero', () => {
+    const data = [
+      { month: '2026-01', amount: 0 },
+      { month: '2026-02', amount: 0 },
+      { month: '2026-03', amount: 0 },
+    ];
+
+    const { dots, polyline } = computeSparklineSVGPoints(data);
+
+    expect(dots).toHaveLength(3);
+    expect(polyline).not.toBe('');
+    // All y values should be equal (bottom of chart)
+    const ys = dots.map(d => d.y);
+    expect(ys.every(y => y === ys[0])).toBe(true);
+  });
+});
+
+describe('getSparklineColor', () => {
+  it('returns red for 100% and above', () => {
+    expect(getSparklineColor(100)).toBe('#ef4444');
+    expect(getSparklineColor(150)).toBe('#ef4444');
+  });
+
+  it('returns yellow for 80-99%', () => {
+    expect(getSparklineColor(80)).toBe('#eab308');
+    expect(getSparklineColor(99)).toBe('#eab308');
+  });
+
+  it('returns green for under 80%', () => {
+    expect(getSparklineColor(79)).toBe('#22c55e');
+    expect(getSparklineColor(0)).toBe('#22c55e');
+    expect(getSparklineColor(50)).toBe('#22c55e');
   });
 });

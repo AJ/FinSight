@@ -32,7 +32,7 @@ export function normalizeTransactionDates(
   return transactions
     .map((t) => ({
       ...t,
-      dateObj: t.date instanceof Date ? t.date : new Date(t.date),
+      dateObj: t.date,
     }))
     .filter((t) => !isNaN(t.dateObj.getTime()));
 }
@@ -86,6 +86,7 @@ export function buildMonthlyPeriods(
     current = new Date(current.getFullYear(), current.getMonth() + 1, 1);
   }
 
+  if (maxMonths <= 0) return [];
   return months.length > maxMonths ? months.slice(-maxMonths) : months;
 }
 

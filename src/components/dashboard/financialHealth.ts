@@ -124,7 +124,7 @@ export function computeMonthlyFinancials(
   const byMonth = new Map<string, TransactionLike[]>();
   const validDates: Date[] = [];
   for (const t of transactions) {
-    const date = t.date instanceof Date ? t.date : new Date(t.date);
+    const date = t.date;
     if (isNaN(date.getTime())) continue;
     validDates.push(date);
     const key = getYearMonth(date);
@@ -166,7 +166,7 @@ export function computeMonthlyFinancials(
   }
 
   // Projected annual savings based on monthly average
-  const avgMonthlySavings = numMonths > 0 ? totalSavings / numMonths : totalSavings;
+  const avgMonthlySavings = totalSavings / numMonths;
 
   return {
     recentIncome: totalIncome,

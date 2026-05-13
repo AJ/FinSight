@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { BudgetPeriod, BudgetAllocation, BudgetProgress, Transaction } from '@/types';
 import { getApplicableNotification } from '@/lib/budget/notificationLogic';
+import { computeBudgetProgress } from '@/lib/budget/progressCalculation';
 import { format } from 'date-fns';
 
 interface BudgetStore {
@@ -184,41 +185,7 @@ export const useBudgetStore = create<BudgetStore>()(
 
       computeProgress: (month, transactions) => {
         const period = get().periods[month];
-        const allocatedIds = new Set((period?.allocations ?? []).map(a => a.categoryId));
-
-        const spending: Record<string, number> = {};
-        for (const t of transactions) {
-          if (!t.isExpense) continue;
-          const txnMonth = format(t.date, 'yyyy-MM');
-          if (txnMonth !== month) continue;
-          spending[t.category.id] = (spending[t.category.id] || 0) + Math.abs(t.amount);
-        }
-
-        const allCategoryIds = new Set([...allocatedIds, ...Object.keys(spending)]);
-        const progress: BudgetProgress[] = [];
-
-        for (const categoryId of allCategoryIds) {
-          const alloc = period?.allocations?.find(a => a.categoryId === categoryId);
-          const budgeted = alloc?.amount ?? 0;
-          const spent = spending[categoryId] ?? 0;
-          const remaining = budgeted - spent;
-          const percentUsed = budgeted > 0 ? Math.round((spent / budgeted) * 100) : 0;
-
-          let status: BudgetProgress['status'];
-          if (budgeted === 0 && spent > 0) {
-            status = 'not-set';
-          } else if (percentUsed >= 100) {
-            status = 'over-budget';
-          } else if (percentUsed >= 80) {
-            status = 'warning';
-          } else {
-            status = 'on-track';
-          }
-
-          progress.push({ categoryId, budgeted, spent, remaining, percentUsed, status });
-        }
-
-        return progress;
+        return computeBudgetProgress(period, transactions, month);
       },
     }),
     {

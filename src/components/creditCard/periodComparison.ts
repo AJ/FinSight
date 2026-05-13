@@ -54,8 +54,7 @@ export function filterByPeriod(
   end: Date,
 ): TransactionLike[] {
   return transactions.filter((t) => {
-    const date = t.date instanceof Date ? t.date : new Date(t.date);
-    return date >= start && date <= end;
+    return t.date >= start && t.date <= end;
   });
 }
 

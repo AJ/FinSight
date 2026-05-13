@@ -55,6 +55,15 @@ describe('aggregateSpendByCategory', () => {
     expect(result.salary).toBeUndefined();
     expect(result.transfer).toBeUndefined();
   });
+
+  it('includes categories with undefined isExpense and isIncome', () => {
+    const txns = [
+      { amount: 100, category: { id: 'food' } },
+    ];
+
+    const result = aggregateSpendByCategory(txns);
+    expect(result.food).toBe(100);
+  });
 });
 
 describe('buildPieChartData', () => {
@@ -100,12 +109,20 @@ describe('buildPieChartData', () => {
   });
 
   it('uses fallback name and color when lookup returns minimal info', () => {
-    const minimalLookup = (id: string): CategoryLike => ({});
+    const minimalLookup = (id: string): CategoryLike => ({ id });
     const byCategory = { unknown_cat: 100 };
 
     const result = buildPieChartData(byCategory, minimalLookup);
     expect(result.labels[0]).toContain('unknown_cat');
     expect(result.colors[0]).toBe('#6b7280');
+  });
+
+  it('handles zero-amount categories with 0.0% label', () => {
+    const byCategory = { food: 0, transport: 0 };
+
+    const result = buildPieChartData(byCategory, lookup);
+    expect(result.labels).toHaveLength(2);
+    expect(result.labels[0]).toContain('0.0%');
   });
 });
 

@@ -176,6 +176,10 @@ describe('computeChangePercent', () => {
   it('returns 0 when both are equal', () => {
     expect(computeChangePercent(100, 100)).toBe(0);
   });
+
+  it('returns 0 for negative previous value', () => {
+    expect(computeChangePercent(100, -50)).toBe(0);
+  });
 });
 
 describe('getSortedCategoriesByCurrentSpend', () => {
