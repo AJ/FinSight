@@ -8,6 +8,7 @@ import { useTransactionStore } from "@/lib/store/transactionStore";
 import { useCreditCardStore } from "@/lib/store/creditCardStore";
 import { useSettingsStore } from "@/lib/store/settingsStore";
 import { formatCurrency } from "@/lib/currencyFormatter";
+import { computeTrueBalance } from "./trueBalanceCalculation";
 
 interface TrueBalanceWidgetProps {
   /** Variant: 'true' shows bank-CC, 'total' shows sum of CC dues only */
@@ -35,19 +36,7 @@ export function TrueBalanceWidget({ variant = "true", compact = false }: TrueBal
   const ccOutstanding = getTotalOutstanding();
 
   const { bankBalance, trueBalance, breakdown } = useMemo(() => {
-    // Calculate bank balance from non-CC transactions
-    const bankIncome = transactions
-      .filter((t) => t.sourceType !== "credit_card" && t.isIncome)
-      .reduce((sum, t) => sum + t.amount, 0);
-
-    const bankExpenses = transactions
-      .filter((t) => t.sourceType !== "credit_card" && t.isExpense)
-      .reduce((sum, t) => sum + Math.abs(t.amount), 0);
-
-    const bankBalance = bankIncome - bankExpenses;
-
-    // True balance = bank balance - CC outstanding
-    const trueBalance = bankBalance - ccOutstanding;
+    const result = computeTrueBalance(transactions, ccOutstanding);
 
     // Get breakdown for total variant
     const cards = getAllUniqueCards();
@@ -59,7 +48,7 @@ export function TrueBalanceWidget({ variant = "true", compact = false }: TrueBal
       }
     }
 
-    return { bankBalance, trueBalance, breakdown };
+    return { bankBalance: result.bankBalance, trueBalance: result.trueBalance, breakdown };
   }, [transactions, ccOutstanding, currency, getAllUniqueCards, getMostRecentStatement]);
 
   // Don't show if no CC data
