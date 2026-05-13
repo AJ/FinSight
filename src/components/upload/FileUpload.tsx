@@ -6,46 +6,11 @@ import { motion } from 'framer-motion';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
+import { validateFile } from './fileUploadValidation';
 
 interface FileUploadProps {
   onFileSelect: (file: File) => void;
   isProcessing?: boolean;
-}
-
-const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10 MB
-const VALID_EXTENSIONS = ['.csv', '.pdf', '.xls', '.xlsx'];
-
-// MIME type validation to prevent extension spoofing
-const ALLOWED_MIME_TYPES: Record<string, string[]> = {
-  '.csv': ['text/csv', 'application/vnd.ms-excel', 'text/plain'],
-  '.pdf': ['application/pdf'],
-  '.xls': ['application/vnd.ms-excel', 'application/msexcel'],
-  '.xlsx': ['application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'],
-};
-
-function validateAndSelectFile(file: File, onFileSelect: (file: File) => void): boolean {
-  const fileExtension = file.name.toLowerCase().substring(file.name.lastIndexOf('.'));
-
-  if (!VALID_EXTENSIONS.includes(fileExtension)) {
-    alert('Please upload a valid file (CSV, PDF, XLS, or XLSX)');
-    return false;
-  }
-
-  // Validate MIME type to prevent extension spoofing
-  const allowedMimes = ALLOWED_MIME_TYPES[fileExtension];
-  // Some browsers may return empty string for type, so we allow that
-  if (file.type && allowedMimes && !allowedMimes.includes(file.type)) {
-    alert('File content does not match its extension. Please upload a valid file.');
-    return false;
-  }
-
-  if (file.size > MAX_FILE_SIZE) {
-    alert('File is too large. Maximum size is 10 MB.');
-    return false;
-  }
-
-  onFileSelect(file);
-  return true;
 }
 
 export function FileUpload({ onFileSelect, isProcessing = false }: FileUploadProps) {
@@ -68,7 +33,9 @@ export function FileUpload({ onFileSelect, isProcessing = false }: FileUploadPro
 
       const file = e.dataTransfer.files[0];
       if (file) {
-        validateAndSelectFile(file, onFileSelect);
+        const result = validateFile(file);
+        if (!result.valid) { alert(result.error); return; }
+        onFileSelect(file);
       }
     },
     [onFileSelect]
@@ -78,7 +45,9 @@ export function FileUpload({ onFileSelect, isProcessing = false }: FileUploadPro
     (e: React.ChangeEvent<HTMLInputElement>) => {
       const file = e.target.files?.[0];
       if (file) {
-        validateAndSelectFile(file, onFileSelect);
+        const result = validateFile(file);
+        if (!result.valid) { alert(result.error); return; }
+        onFileSelect(file);
         // Reset input value so same file can be selected again
         e.target.value = '';
       }

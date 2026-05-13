@@ -30,25 +30,13 @@ import { Label } from "@/components/ui/label";
 import { debugLog, debugWarn } from "@/lib/utils/debug";
 import { computeFileHash } from "@/lib/utils/fileHash";
 import { useTransactionStore } from "@/lib/store/transactionStore";
+import { isAbortError, formatElapsedSeconds, getFileExtension } from "./fileUploadValidation";
 
 const MAX_PASSWORD_ATTEMPTS = 3;
 
 interface FileProcessorProps {
   onSuccess?: () => void;
   onProcessingChange?: (isProcessing: boolean) => void;
-}
-
-function isAbortError(error: unknown): boolean {
-  if (!error || typeof error !== "object") return false;
-
-  const err = error as Record<string, unknown>;
-  const message = typeof err.message === "string" ? err.message.toLowerCase() : "";
-
-  return (
-    err.name === "AbortError" ||
-    message.includes("cancelled") ||
-    message.includes("canceled")
-  );
 }
 
 export function FileProcessor({ onSuccess, onProcessingChange }: FileProcessorProps) {
@@ -73,7 +61,7 @@ export function FileProcessor({ onSuccess, onProcessingChange }: FileProcessorPr
     } else {
       // Log processing time when done
       if (processingStartTime.current > 0) {
-        const elapsed = ((Date.now() - processingStartTime.current) / 1000).toFixed(2);
+        const elapsed = formatElapsedSeconds(processingStartTime.current);
         debugLog(`[FileProcessor] Processing completed in ${elapsed}s`);
         processingStartTime.current = 0;
       }
@@ -163,7 +151,7 @@ export function FileProcessor({ onSuccess, onProcessingChange }: FileProcessorPr
 
     // Show processing time toast
     if (processingStartTime.current > 0) {
-      const elapsed = ((Date.now() - processingStartTime.current) / 1000).toFixed(2);
+      const elapsed = formatElapsedSeconds(processingStartTime.current);
       toast.success('Statement processed successfully', {
         description: `Completed in ${elapsed} seconds`,
         duration: 5000,
@@ -244,8 +232,7 @@ export function FileProcessor({ onSuccess, onProcessingChange }: FileProcessorPr
 
   // Process a file with optional password (for PDFs)
   const processFile = useCallback(async (file: File, password?: string) => {
-    const ext = file.name.toLowerCase();
-    const isPDF = ext.endsWith(".pdf");
+    const isPDF = getFileExtension(file.name) === '.pdf';
 
     // Show statement type selector for ALL file types
     setPendingTypeFile(file);
@@ -449,7 +436,7 @@ export function FileProcessor({ onSuccess, onProcessingChange }: FileProcessorPr
         
         // Log processing time even on error
         if (processingStartTime.current > 0) {
-          const elapsed = ((Date.now() - processingStartTime.current) / 1000).toFixed(2);
+          const elapsed = formatElapsedSeconds(processingStartTime.current);
           debugLog(`[FileProcessor] Processing failed after ${elapsed}s: ${errorMessage}`);
           processingStartTime.current = 0;
         }
