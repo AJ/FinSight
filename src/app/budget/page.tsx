@@ -1,6 +1,6 @@
 'use client';
 
-import { Suspense, useState, useMemo, useCallback, useEffect } from 'react';
+import { Suspense, useState, useMemo, useCallback } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
 import { useTransactionStore } from '@/lib/store/transactionStore';
 import { useBudgetStore } from '@/lib/store/budgetStore';
@@ -70,6 +70,16 @@ function BudgetPageContent() {
   );
   const [localHidden, setLocalHidden] = useState<string[]>(period?.hiddenCategories ?? []);
 
+  // Reset local state when month changes (synchronous during render, no effect cascading)
+  const [prevMonth, setPrevMonth] = useState(selectedMonth);
+  if (prevMonth !== selectedMonth) {
+    setPrevMonth(selectedMonth);
+    const result = findCarryForwardState({ month: selectedMonth, periods: useBudgetStore.getState().periods });
+    setLocalIncome(result.income);
+    setLocalAllocations(result.allocations);
+    setLocalHidden(result.hidden);
+  }
+
   const loadMonthState = useCallback((month: string) => {
     const allPeriods = useBudgetStore.getState().periods;
     const result = findCarryForwardState({ month, periods: allPeriods });
@@ -77,10 +87,6 @@ function BudgetPageContent() {
     setLocalAllocations(result.allocations);
     setLocalHidden(result.hidden);
   }, []);
-
-  useEffect(() => {
-    loadMonthState(selectedMonth);
-  }, [selectedMonth, loadMonthState]);
 
   // Dirty tracking
   const isDirty = useMemo(() => {

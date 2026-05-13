@@ -12,13 +12,14 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    "coverage/**",
     // Third-party libraries copied to public:
     "public/pdf.mjs",
     "public/pdf.worker.min.mjs",
   ]),
   {
     rules: {
-      '@typescript-eslint/no-explicit-any': 'warn',
+      '@typescript-eslint/no-explicit-any': 'error',
     },
   },
 ]);

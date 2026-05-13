@@ -2,20 +2,21 @@
 
 import { createElement } from 'react';
 import { getCategoryDisplay, getCategoryIcon } from '@/components/transactions/CategoryBadge';
+import { NEEDS, WANTS, SAVES } from '@/lib/budget/templateApply';
 import { Currency } from '@/types';
 import { X } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
-const NEEDS = new Set(['groceries', 'housing', 'utilities', 'healthcare', 'insurance', 'bills', 'taxes', 'fees', 'transportation']);
-const WANTS = new Set(['dining', 'entertainment', 'shopping', 'travel', 'education']);
-const SAVES = new Set(['investment', 'other', 'interest-expense']);
+const needsSet = new Set(NEEDS);
+const wantsSet = new Set(WANTS);
+const savesSet = new Set(SAVES);
 
 type CategoryGroup = 'Needs' | 'Wants' | 'Saves';
 
 function getCategoryGroup(categoryId: string): CategoryGroup | null {
-  if (NEEDS.has(categoryId)) return 'Needs';
-  if (WANTS.has(categoryId)) return 'Wants';
-  if (SAVES.has(categoryId)) return 'Saves';
+  if (needsSet.has(categoryId)) return 'Needs';
+  if (wantsSet.has(categoryId)) return 'Wants';
+  if (savesSet.has(categoryId)) return 'Saves';
   return null;
 }
 

@@ -5,7 +5,7 @@ import { startOfMonth } from 'date-fns';
 import { BudgetProgress, Currency, Transaction } from '@/types';
 import { formatCurrency } from '@/lib/currencyFormatter';
 import { getCategoryDisplay, getCategoryIcon } from '@/components/transactions/CategoryBadge';
-import { computeSparklineData } from '@/lib/budget/sparklineData';
+import { computeSparklineData, computeSparklineSVGPoints, getSparklineColor } from '@/lib/budget/sparklineData';
 import { cn } from '@/lib/utils';
 
 interface BudgetTableRowProps {
@@ -38,8 +38,7 @@ export const BudgetTableRow = memo(function BudgetTableRow({
   const config = statusConfig[status];
 
   const isOverBudget = percentUsed >= 100;
-  const isWarning = percentUsed >= 80 && !isOverBudget;
-  const sparklineColor = isOverBudget ? '#ef4444' : isWarning ? '#eab308' : '#22c55e';
+  const sparklineColor = getSparklineColor(percentUsed);
   const isNotSet = status === 'not-set';
 
   return (
@@ -97,18 +96,7 @@ export const BudgetTableRow = memo(function BudgetTableRow({
             <line x1="0" y1="8" x2="100" y2="8" stroke="#ef4444" strokeWidth="0.5" strokeDasharray="3,3" opacity="0.25" />
           )}
           {sparkline.length > 1 && (() => {
-            const max = Math.max(...sparkline.map(p => p.amount), 1);
-            const points = sparkline.map((p, i) => {
-              const x = 5 + (i / (sparkline.length - 1)) * 90;
-              const y = 22 - (p.amount / max) * 18;
-              return `${x},${y}`;
-            }).join(' ');
-
-            const dotPositions = sparkline.map((p, i) => {
-              const x = 5 + (i / (sparkline.length - 1)) * 90;
-              const y = 22 - (p.amount / max) * 18;
-              return { x, y };
-            });
+            const { polyline, dots } = computeSparklineSVGPoints(sparkline);
 
             return (
               <g>
@@ -118,16 +106,16 @@ export const BudgetTableRow = memo(function BudgetTableRow({
                   strokeWidth="1.5"
                   strokeLinejoin="round"
                   strokeLinecap="round"
-                  points={points}
+                  points={polyline}
                 />
-                {dotPositions.map((pos, i) => (
+                {dots.map((pos, i) => (
                   <circle
                     key={i}
                     cx={pos.x}
                     cy={pos.y}
-                    r={i === dotPositions.length - 1 ? 2.5 : 1.5}
+                    r={i === dots.length - 1 ? 2.5 : 1.5}
                     fill={sparklineColor}
-                    opacity={i === dotPositions.length - 1 ? 1 : 0.4}
+                    opacity={i === dots.length - 1 ? 1 : 0.4}
                   />
                 ))}
               </g>
