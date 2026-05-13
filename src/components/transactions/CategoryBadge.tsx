@@ -2,48 +2,8 @@
 
 import { Badge } from "@/components/ui/badge";
 import { getCategoryById } from "@/lib/categorization/categories";
-import {
-  ShoppingCart,
-  Utensils,
-  Car,
-  Zap,
-  Home,
-  Heart,
-  Film,
-  ShoppingBag,
-  TrendingUp,
-  ArrowLeftRight,
-  LineChart,
-  Shield,
-  GraduationCap,
-  Plane,
-  HelpCircle,
-  AlertCircle,
-  Percent,
-  Receipt,
-  LucideIcon,
-} from "lucide-react";
-
-// Map icon names to Lucide components
-export const iconMap: Record<string, LucideIcon> = {
-  ShoppingCart,
-  Utensils,
-  Car,
-  Zap,
-  Home,
-  Heart,
-  Film,
-  ShoppingBag,
-  TrendingUp,
-  ArrowLeftRight,
-  LineChart,
-  Shield,
-  GraduationCap,
-  Plane,
-  HelpCircle,
-  Percent,
-  Receipt,
-};
+import { HelpCircle, AlertCircle } from "lucide-react";
+import { iconMap } from "./categoryDisplay";
 
 interface CategoryBadgeProps {
   categoryId: string;
@@ -110,28 +70,4 @@ export function CategoryBadge({
   );
 }
 
-/**
- * Get just the icon component for a category.
- */
-export function getCategoryIcon(categoryId: string): LucideIcon {
-  const category = getCategoryById(categoryId);
-  if (!category || !category.icon) return HelpCircle;
-  return iconMap[category.icon] || HelpCircle;
-}
-
-/**
- * Get category display info.
- */
-export function getCategoryDisplay(categoryId: string): {
-  name: string;
-  icon: LucideIcon;
-  color: string;
-} {
-  const category = getCategoryById(categoryId);
-  const iconName = category?.icon || "";
-  return {
-    name: category?.name || "Unknown",
-    icon: iconMap[iconName] || HelpCircle,
-    color: category?.color || "#6b7280",
-  };
-}
+export { getCategoryIcon, getCategoryDisplay } from "./categoryDisplay";

@@ -9,7 +9,8 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { getCategoryById, DEFAULT_CATEGORIES } from "@/lib/categorization/categories";
-import { getCategoryDisplay } from "./CategoryBadge";
+import { getCategoryDisplay } from "./categoryDisplay";
+import { filterAndSortCategories } from "./categoryDisplay";
 import { ChevronDown, AlertCircle, Check, Search } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -33,26 +34,10 @@ export function InlineCategoryEditor({
   const IconComponent = display.icon;
 
   // Filter categories by search term (show all categories, not filtered by type)
-  const filteredCategories = useMemo(() => {
-    const categories = DEFAULT_CATEGORIES.filter((c) => {
-      if (!searchTerm) return true;
-
-      const search = searchTerm.toLowerCase();
-      const matchesName = c.name.toLowerCase().includes(search);
-      const matchesKeywords = c.keywords.some(kw => kw.toLowerCase().includes(search));
-      return matchesName || matchesKeywords;
-    });
-
-    // Sort alphabetically, put "Other" at bottom
-    const otherCategory = categories.find((c) => c.id === "other");
-    const regularCategories = categories
-      .filter((c) => c.id !== "other")
-      .sort((a, b) => a.name.localeCompare(b.name));
-
-    return otherCategory
-      ? [...regularCategories, otherCategory]
-      : regularCategories;
-  }, [searchTerm]);
+  const filteredCategories = useMemo(
+    () => filterAndSortCategories(DEFAULT_CATEGORIES, searchTerm),
+    [searchTerm],
+  );
 
   // Reset search when popover closes
   const handleOpenChange = (open: boolean) => {
