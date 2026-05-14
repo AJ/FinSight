@@ -7,6 +7,7 @@ import { Percent, AlertTriangle, CheckCircle2 } from "lucide-react";
 import { useCreditCardStore } from "@/lib/store/creditCardStore";
 import { useSettingsStore } from "@/lib/store/settingsStore";
 import { formatCurrency } from "@/lib/currencyFormatter";
+import { getUtilizationStatus } from "@/lib/creditCard/creditCardClassification";
 
 /**
  * Credit Utilization Card
@@ -28,46 +29,8 @@ export function CreditUtilizationCard() {
   }
 
   const aggregatePercent = Math.round(utilization.aggregate * 100);
-
-  // Determine utilization status
-  const getStatus = (util: number): {
-    label: string;
-    color: string;
-    textColor: string;
-    icon: React.ReactNode;
-  } => {
-    if (util < 0.10) {
-      return {
-        label: "Excellent",
-        color: "bg-success",
-        textColor: "text-success",
-        icon: <CheckCircle2 className="w-4 h-4" />,
-      };
-    } else if (util < 0.30) {
-      return {
-        label: "Good",
-        color: "bg-blue-500",
-        textColor: "text-blue-500",
-        icon: <CheckCircle2 className="w-4 h-4" />,
-      };
-    } else if (util < 0.50) {
-      return {
-        label: "Fair",
-        color: "bg-amber-500",
-        textColor: "text-amber-500",
-        icon: <AlertTriangle className="w-4 h-4" />,
-      };
-    } else {
-      return {
-        label: "High",
-        color: "bg-destructive",
-        textColor: "text-destructive",
-        icon: <AlertTriangle className="w-4 h-4" />,
-      };
-    }
-  };
-
-  const status = getStatus(utilization.aggregate);
+  const status = getUtilizationStatus(utilization.aggregate);
+  const StatusIcon = status.tier === "fair" || status.tier === "poor" ? AlertTriangle : CheckCircle2;
 
   return (
     <Card>
@@ -83,7 +46,7 @@ export function CreditUtilizationCard() {
           <div className="flex items-center justify-between">
             <span className="text-sm text-muted-foreground">Overall</span>
             <div className={`flex items-center gap-1 ${status.textColor}`}>
-              {status.icon}
+              <StatusIcon className="w-4 h-4" />
               <span className="text-sm font-medium">{status.label}</span>
             </div>
           </div>
@@ -108,7 +71,7 @@ export function CreditUtilizationCard() {
               const cardUtil = utilization.perCard.get(key);
               if (!cardUtil) return null;
 
-              const cardStatus = getStatus(cardUtil.utilization);
+              const cardStatus = getUtilizationStatus(cardUtil.utilization);
               const cardPercent = Math.round(cardUtil.utilization * 100);
 
               return (

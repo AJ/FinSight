@@ -24,6 +24,7 @@ import { useCreditCardStore } from "@/lib/store/creditCardStore";
 import { useSettingsStore } from "@/lib/store/settingsStore";
 import { formatCurrency } from "@/lib/currencyFormatter";
 import { PaymentBehavior } from "@/types/creditCard";
+import { getPaymentRateColor, getPaymentRateLabel } from "@/lib/creditCard/creditCardClassification";
 import { format } from "date-fns";
 
 /**
@@ -53,20 +54,6 @@ export function PaymentBehaviorCard() {
   if (!hasCCData || !behavior) {
     return null;
   }
-
-  const getRateColor = (rate: number): string => {
-    if (rate >= 0.9) return "text-success";
-    if (rate >= 0.7) return "text-blue-500";
-    if (rate >= 0.5) return "text-amber-500";
-    return "text-destructive";
-  };
-
-  const getRateLabel = (rate: number): string => {
-    if (rate >= 0.9) return "Excellent";
-    if (rate >= 0.7) return "Good";
-    if (rate >= 0.5) return "Fair";
-    return "Needs Improvement";
-  };
 
   const fullPayPercent = Math.round(behavior.fullPayRate * 100);
   const onTimePercent = Math.round(behavior.onTimeRate * 100);
@@ -112,11 +99,11 @@ export function PaymentBehaviorCard() {
               <span className="text-sm">Full Payment Rate</span>
             </div>
             <div className="flex items-center gap-2">
-              <span className={`font-medium ${getRateColor(behavior.fullPayRate)}`}>
+              <span className={`font-medium ${getPaymentRateColor(behavior.fullPayRate)}`}>
                 {fullPayPercent}%
               </span>
               <Badge variant="outline" className="text-xs">
-                {getRateLabel(behavior.fullPayRate)}
+                {getPaymentRateLabel(behavior.fullPayRate)}
               </Badge>
             </div>
           </div>
@@ -134,11 +121,11 @@ export function PaymentBehaviorCard() {
               <span className="text-sm">On-time Payment Rate</span>
             </div>
             <div className="flex items-center gap-2">
-              <span className={`font-medium ${getRateColor(behavior.onTimeRate)}`}>
+              <span className={`font-medium ${getPaymentRateColor(behavior.onTimeRate)}`}>
                 {onTimePercent}%
               </span>
               <Badge variant="outline" className="text-xs">
-                {getRateLabel(behavior.onTimeRate)}
+                {getPaymentRateLabel(behavior.onTimeRate)}
               </Badge>
             </div>
           </div>

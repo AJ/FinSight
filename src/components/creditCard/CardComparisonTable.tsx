@@ -19,6 +19,7 @@ import { useSettingsStore } from "@/lib/store/settingsStore";
 import { formatCurrency } from "@/lib/currencyFormatter";
 import { format, startOfMonth, endOfMonth } from "date-fns";
 import { getCategoryDisplay } from "@/components/transactions/CategoryBadge";
+import { getUtilizationTextColor } from "@/lib/creditCard/creditCardClassification";
 
 type SortKey = "totalSpend" | "transactionCount" | "utilization";
 
@@ -126,12 +127,7 @@ export function CardComparisonTable() {
               {sortedComparison.map((card) => {
                 const topCategories = getTopCategories(card.categoryBreakdown);
                 const utilPercent = Math.round(card.utilization * 100);
-                const utilColor =
-                  card.utilization < 0.3
-                    ? "text-success"
-                    : card.utilization < 0.5
-                    ? "text-amber-600"
-                    : "text-destructive";
+                const utilColor = getUtilizationTextColor(card.utilization);
 
                 return (
                   <TableRow key={card.cardLabel}>

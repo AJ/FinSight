@@ -16,12 +16,7 @@ import { useCreditCardStore } from "@/lib/store/creditCardStore";
 import { useSettingsStore } from "@/lib/store/settingsStore";
 import { formatCurrency } from "@/lib/currencyFormatter";
 import { format } from "date-fns";
-import { CreditCardStatement } from "@/types/creditCard";
-
-/** Ensure a value is a proper Date object */
-function toDate(v: Date | string): Date {
-  return v instanceof Date ? v : new Date(v);
-}
+import { toDate, groupStatementsByCard } from "@/lib/creditCard/statementGrouping";
 
 /**
  * Statement History Card
@@ -37,21 +32,10 @@ export function StatementHistoryCard() {
   const [expandedCards, setExpandedCards] = useState<Set<string>>(new Set());
 
   // Group statements by card
-  const statementsByCard = useMemo(() => {
-    const groups = new Map<string, CreditCardStatement[]>();
-    for (const stmt of statements) {
-      const key = `${stmt.cardIssuer}-${stmt.cardLastFour}`;
-      if (!groups.has(key)) {
-        groups.set(key, []);
-      }
-      groups.get(key)!.push(stmt);
-    }
-    // Sort each group by statement date descending
-    for (const [, stmts] of groups) {
-      stmts.sort((a, b) => toDate(b.statementDate).getTime() - toDate(a.statementDate).getTime());
-    }
-    return groups;
-  }, [statements]);
+  const statementsByCard = useMemo(
+    () => groupStatementsByCard(statements),
+    [statements],
+  );
 
   if (statements.length === 0) {
     return null;

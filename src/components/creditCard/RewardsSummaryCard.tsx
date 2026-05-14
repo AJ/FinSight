@@ -15,6 +15,7 @@ import { useCreditCardStore } from "@/lib/store/creditCardStore";
 import { useSettingsStore } from "@/lib/store/settingsStore";
 import { formatCurrency } from "@/lib/currencyFormatter";
 import { format } from "date-fns";
+import { formatPoints } from "@/lib/creditCard/rewardFormatting";
 
 /**
  * Rewards Summary Card
@@ -38,12 +39,6 @@ export function RewardsSummaryCard() {
   if (!hasCashback && !hasPoints) {
     return null;
   }
-
-  const formatPoints = (pts: number) => {
-    if (pts >= 1000000) return `${(pts / 1000000).toFixed(1)}M`;
-    if (pts >= 1000) return `${(pts / 1000).toFixed(1)}K`;
-    return pts.toLocaleString();
-  };
 
   const formatPercent = (rate: number) => `${(rate * 100).toFixed(2)}%`;
 

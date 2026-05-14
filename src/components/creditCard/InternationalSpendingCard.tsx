@@ -7,13 +7,10 @@ import { Globe, MapPin, DollarSign } from "lucide-react";
 import { useTransactionStore } from "@/lib/store/transactionStore";
 import { useSettingsStore } from "@/lib/store/settingsStore";
 import { formatCurrency } from "@/lib/currencyFormatter";
-
-interface CurrencyTotal {
-  currency: string;
-  originalAmount: number;
-  inrAmount: number;
-  transactionCount: number;
-}
+import {
+  computeInternationalSummary,
+  getCurrencySymbol,
+} from "./internationalSpendingCalculation";
 
 /**
  * International Spending Card
@@ -27,46 +24,10 @@ export function InternationalSpendingCard() {
   const transactions = useTransactionStore((state) => state.transactions);
   const currency = useSettingsStore((state) => state.currency);
 
-  const internationalData = useMemo(() => {
-    // Filter international transactions
-    const intlTxns = transactions.filter(
-      (t) => t.isInternational && t.originalCurrency && t.sourceType === "credit_card"
-    );
-
-    if (intlTxns.length === 0) return null;
-
-    // Group by currency
-    const currencyMap = new Map<string, CurrencyTotal>();
-
-    for (const txn of intlTxns) {
-      const curr = txn.originalCurrency!.code;
-      const existing = currencyMap.get(curr);
-
-      if (existing) {
-        existing.originalAmount += txn.originalAmount || Math.abs(txn.amount);
-        existing.inrAmount += Math.abs(txn.amount);
-        existing.transactionCount++;
-      } else {
-        currencyMap.set(curr, {
-          currency: curr,
-          originalAmount: txn.originalAmount || Math.abs(txn.amount),
-          inrAmount: Math.abs(txn.amount),
-          transactionCount: 1,
-        });
-      }
-    }
-
-    // Convert to array and sort by INR amount
-    const currencies = Array.from(currencyMap.values()).sort(
-      (a, b) => b.inrAmount - a.inrAmount
-    );
-
-    // Calculate totals
-    const totalInr = currencies.reduce((sum, c) => sum + c.inrAmount, 0);
-    const totalTxns = intlTxns.length;
-
-    return { currencies, totalInr, totalTxns };
-  }, [transactions]);
+  const internationalData = useMemo(
+    () => computeInternationalSummary(transactions),
+    [transactions],
+  );
 
   // Don't show if no international transactions
   if (!internationalData || internationalData.currencies.length === 0) {
@@ -74,22 +35,6 @@ export function InternationalSpendingCard() {
   }
 
   const { currencies, totalInr, totalTxns } = internationalData;
-
-  // Currency symbols map
-  const getCurrencySymbol = (code: string): string => {
-    const symbols: Record<string, string> = {
-      USD: "$",
-      EUR: "€",
-      GBP: "£",
-      JPY: "¥",
-      SGD: "S$",
-      AED: "د.إ",
-      AUD: "A$",
-      CAD: "C$",
-      CHF: "Fr",
-    };
-    return symbols[code] || code;
-  };
 
   return (
     <Card>

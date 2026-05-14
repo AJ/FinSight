@@ -9,6 +9,11 @@ import { Activity, TrendingUp, TrendingDown, Percent, Clock, Wallet } from "luci
 import { useCreditCardStore } from "@/lib/store/creditCardStore";
 import { useTransactionStore } from "@/lib/store/transactionStore";
 import { FinancialHealthScore } from "@/types/creditCard";
+import {
+  getHealthScoreColor,
+  getHealthScoreLabel,
+  getHealthBadgeVariant,
+} from "@/lib/creditCard/creditCardClassification";
 
 interface FinancialHealthScoreCardProps {
   /** Compact mode hides component breakdown */
@@ -48,31 +53,9 @@ export function FinancialHealthScoreCard({ compact = false }: FinancialHealthSco
     return null;
   }
 
-  const getScoreColor = (score: number): string => {
-    if (score >= 80) return "text-success";
-    if (score >= 60) return "text-blue-500";
-    if (score >= 40) return "text-amber-500";
-    return "text-destructive";
-  };
-
-  const getScoreLabel = (score: number): string => {
-    if (score >= 80) return "Excellent";
-    if (score >= 60) return "Good";
-    if (score >= 40) return "Fair";
-    return "Needs Work";
-  };
-
   const { score, components } = healthScore;
-  const scoreColor = getScoreColor(score);
-  const scoreLabel = getScoreLabel(score);
-
-  // Get badge variant based on score
-  const getBadgeVariant = (score: number): "default" | "secondary" | "outline" | "destructive" => {
-    if (score >= 80) return "default";
-    if (score >= 60) return "secondary";
-    if (score >= 40) return "outline";
-    return "destructive";
-  };
+  const scoreColor = getHealthScoreColor(score);
+  const scoreLabel = getHealthScoreLabel(score);
 
   // Check for partial data indicator
   const hasBankData = transactions.some((t) => t.sourceType !== "credit_card");
@@ -91,7 +74,7 @@ export function FinancialHealthScoreCard({ compact = false }: FinancialHealthSco
             <span className="text-sm text-muted-foreground font-normal">/100</span>
           </div>
           <div className="flex items-center gap-2 mt-1.5 flex-wrap">
-            <Badge variant={getBadgeVariant(score)}>{scoreLabel}</Badge>
+            <Badge variant={getHealthBadgeVariant(score)}>{scoreLabel}</Badge>
             {partialInfo && (
               <span className="text-xs text-muted-foreground">{partialInfo}</span>
             )}
@@ -128,7 +111,7 @@ export function FinancialHealthScoreCard({ compact = false }: FinancialHealthSco
               <span>Credit Utilization</span>
             </div>
             <div className="flex items-center gap-2">
-              <span className={`text-sm font-medium ${getScoreColor(components.utilization.score)}`}>
+              <span className={`text-sm font-medium ${getHealthScoreColor(components.utilization.score)}`}>
                 {Math.round(components.utilization.value * 100)}%
               </span>
               <span className="text-xs text-muted-foreground w-8">
@@ -144,7 +127,7 @@ export function FinancialHealthScoreCard({ compact = false }: FinancialHealthSco
               <span>Full Payment Rate</span>
             </div>
             <div className="flex items-center gap-2">
-              <span className={`text-sm font-medium ${getScoreColor(components.fullPayRate.score)}`}>
+              <span className={`text-sm font-medium ${getHealthScoreColor(components.fullPayRate.score)}`}>
                 {Math.round(components.fullPayRate.value * 100)}%
               </span>
               <span className="text-xs text-muted-foreground w-8">
@@ -160,7 +143,7 @@ export function FinancialHealthScoreCard({ compact = false }: FinancialHealthSco
               <span>On-time Payment</span>
             </div>
             <div className="flex items-center gap-2">
-              <span className={`text-sm font-medium ${getScoreColor(components.onTimeRate.score)}`}>
+              <span className={`text-sm font-medium ${getHealthScoreColor(components.onTimeRate.score)}`}>
                 {Math.round(components.onTimeRate.value * 100)}%
               </span>
               <span className="text-xs text-muted-foreground w-8">
@@ -176,7 +159,7 @@ export function FinancialHealthScoreCard({ compact = false }: FinancialHealthSco
               <span>Spending vs Income</span>
             </div>
             <div className="flex items-center gap-2">
-              <span className={`text-sm font-medium ${getScoreColor(components.spendingTrend.score)}`}>
+              <span className={`text-sm font-medium ${getHealthScoreColor(components.spendingTrend.score)}`}>
                 {components.spendingTrend.value < 1 ? (
                   <span className="flex items-center gap-1">
                     <TrendingUp className="w-3 h-3" />

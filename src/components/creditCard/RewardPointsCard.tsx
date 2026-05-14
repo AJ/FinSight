@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import { useCreditCardStore } from "@/lib/store/creditCardStore";
 import { format } from "date-fns";
+import { formatPoints } from "@/lib/creditCard/rewardFormatting";
 
 /**
  * Reward Points Card
@@ -26,16 +27,6 @@ export function RewardPointsCard() {
 
   const hasPoints = analysis.totalPointsAllCards > 0 || analysis.byCard.some(c => c.currentBalance > 0);
   const hasExpiringSoon = analysis.expiringSoon.length > 0;
-
-  const formatPoints = (points: number) => {
-    if (points >= 1000000) {
-      return `${(points / 1000000).toFixed(1)}M`;
-    }
-    if (points >= 1000) {
-      return `${(points / 1000).toFixed(1)}K`;
-    }
-    return points.toLocaleString();
-  };
 
   return (
     <Card>
