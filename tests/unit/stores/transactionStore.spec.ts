@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { useTransactionStore } from '@/lib/store/transactionStore';
-import { CategoryType, SourceType, type Transaction } from '@/types';
+import { CategoryType, CategorizedBy, SourceType, type Transaction } from '@/types';
 import { makeTransaction as _makeTransaction, makeCategory } from '@tests/unit/factories';
 
 function makeTransaction(id: string = 'txn-1', amount: number = 1299, description: string = 'Test Transaction') {
@@ -66,6 +66,53 @@ describe('useTransactionStore', () => {
       useTransactionStore.getState().updateTransaction('upd-6', { amount: 999 });
       expect(useTransactionStore.getState().transactions[0].amount).toBe(100);
     });
+
+    it('updates amount', () => {
+      useTransactionStore.getState().addTransactions([makeTransaction('upd-amt')]);
+      useTransactionStore.getState().updateTransaction('upd-amt', { amount: 7500 });
+      expect(useTransactionStore.getState().transactions[0].amount).toBe(7500);
+    });
+
+    it('updates date', () => {
+      useTransactionStore.getState().addTransactions([makeTransaction('upd-date')]);
+      const newDate = new Date('2025-03-20');
+      useTransactionStore.getState().updateTransaction('upd-date', { date: newDate });
+      expect(useTransactionStore.getState().transactions[0].date.getFullYear()).toBe(2025);
+    });
+
+    it('updates balance', () => {
+      useTransactionStore.getState().addTransactions([makeTransaction('upd-bal')]);
+      useTransactionStore.getState().updateTransaction('upd-bal', { balance: 50000 });
+      expect(useTransactionStore.getState().transactions[0].balance).toBe(50000);
+    });
+
+    it('updates merchant', () => {
+      useTransactionStore.getState().addTransactions([makeTransaction('upd-merch')]);
+      useTransactionStore.getState().updateTransaction('upd-merch', { merchant: 'AMAZON' });
+      expect(useTransactionStore.getState().transactions[0].merchant).toBe('AMAZON');
+    });
+
+    it('updates anomaly fields', () => {
+      useTransactionStore.getState().addTransactions([makeTransaction('upd-anom')]);
+      useTransactionStore.getState().updateTransaction('upd-anom', {
+        isAnomaly: true,
+        anomalyDismissed: true,
+      } as Partial<Transaction>);
+      const txn = useTransactionStore.getState().transactions[0];
+      expect(txn.isAnomaly).toBe(true);
+      expect(txn.anomalyDismissed).toBe(true);
+    });
+
+    it('updates needsReview and categoryConfidence', () => {
+      useTransactionStore.getState().addTransactions([makeTransaction('upd-conf')]);
+      useTransactionStore.getState().updateTransaction('upd-conf', {
+        needsReview: false,
+        categoryConfidence: 0.95,
+      });
+      const txn = useTransactionStore.getState().transactions[0];
+      expect(txn.needsReview).toBe(false);
+      expect(txn.categoryConfidence).toBe(0.95);
+    });
   });
 
   describe('deleteTransaction', () => {
@@ -106,6 +153,42 @@ describe('useTransactionStore', () => {
       );
       expect(filtered.some(t => t.id === 'date-1')).toBe(true);
     });
+
+    it('excludes transactions outside range', () => {
+      useTransactionStore.getState().addTransactions([
+        _makeTransaction({ id: 'date-in', date: new Date('2024-06-15') }),
+        _makeTransaction({ id: 'date-out', date: new Date('2024-07-15') }),
+      ]);
+      const filtered = useTransactionStore.getState().getTransactionsByDateRange(
+        new Date('2024-06-01'),
+        new Date('2024-06-30'),
+      );
+      expect(filtered).toHaveLength(1);
+      expect(filtered[0].id).toBe('date-in');
+    });
+
+    it('includes boundary dates', () => {
+      useTransactionStore.getState().addTransactions([
+        _makeTransaction({ id: 'date-start', date: new Date('2024-06-01') }),
+        _makeTransaction({ id: 'date-end', date: new Date('2024-06-30') }),
+      ]);
+      const filtered = useTransactionStore.getState().getTransactionsByDateRange(
+        new Date('2024-06-01'),
+        new Date('2024-06-30'),
+      );
+      expect(filtered).toHaveLength(2);
+    });
+
+    it('returns empty for no matches', () => {
+      useTransactionStore.getState().addTransactions([
+        _makeTransaction({ id: 'date-other', date: new Date('2024-03-15') }),
+      ]);
+      const filtered = useTransactionStore.getState().getTransactionsByDateRange(
+        new Date('2024-06-01'),
+        new Date('2024-06-30'),
+      );
+      expect(filtered).toHaveLength(0);
+    });
   });
 
   describe('getTransactionsByCategory', () => {
@@ -143,6 +226,21 @@ describe('useTransactionStore', () => {
       );
       expect(total).toBe(20000);
     });
+
+    it('excludes expense transactions from income total', () => {
+      useTransactionStore.getState().addTransactions([
+        _makeTransaction({ id: 'inc-4', amount: 50000, type: 'credit', category: makeCategory('income', CategoryType.Income) }),
+        _makeTransaction({ id: 'inc-5', amount: 3000, type: 'debit', category: makeCategory('shopping') }),
+      ]);
+      expect(useTransactionStore.getState().getTotalIncome()).toBe(50000);
+    });
+
+    it('returns 0 when no income exists', () => {
+      useTransactionStore.getState().addTransactions([
+        _makeTransaction({ id: 'inc-6', amount: 3000, type: 'debit', category: makeCategory('shopping') }),
+      ]);
+      expect(useTransactionStore.getState().getTotalIncome()).toBe(0);
+    });
   });
 
   describe('getTotalExpenses', () => {
@@ -162,6 +260,21 @@ describe('useTransactionStore', () => {
         new Date('2024-06-30'),
       );
       expect(total).toBe(3000);
+    });
+
+    it('excludes income transactions from expense total', () => {
+      useTransactionStore.getState().addTransactions([
+        _makeTransaction({ id: 'exp-4', amount: 5000, type: 'debit', category: makeCategory('shopping') }),
+        _makeTransaction({ id: 'exp-5', amount: 10000, type: 'credit', category: makeCategory('income', CategoryType.Income) }),
+      ]);
+      expect(useTransactionStore.getState().getTotalExpenses()).toBe(5000);
+    });
+
+    it('returns 0 when no expenses exist', () => {
+      useTransactionStore.getState().addTransactions([
+        _makeTransaction({ id: 'exp-6', amount: 10000, type: 'credit', category: makeCategory('income', CategoryType.Income) }),
+      ]);
+      expect(useTransactionStore.getState().getTotalExpenses()).toBe(0);
     });
   });
 
@@ -212,6 +325,31 @@ describe('useTransactionStore', () => {
       useTransactionStore.getState().updateCategory('nonexistent', 'dining');
       expect(useTransactionStore.getState().transactions[0].category.id).toBe('shopping');
     });
+
+    it('sets categorizedBy to Manual by default', () => {
+      useTransactionStore.getState().addTransactions([makeTransaction('uc-3')]);
+      useTransactionStore.getState().updateCategory('uc-3', 'dining');
+      expect(useTransactionStore.getState().transactions[0].categorizedBy).toBe(CategorizedBy.Manual);
+    });
+
+    it('sets categorizedBy to Rule when specified', () => {
+      useTransactionStore.getState().addTransactions([makeTransaction('uc-4')]);
+      useTransactionStore.getState().updateCategory('uc-4', 'groceries', CategorizedBy.Rule);
+      expect(useTransactionStore.getState().transactions[0].categorizedBy).toBe(CategorizedBy.Rule);
+      expect(useTransactionStore.getState().transactions[0].category.id).toBe('groceries');
+    });
+
+    it('sets categorizedBy to AI when specified', () => {
+      useTransactionStore.getState().addTransactions([makeTransaction('uc-5')]);
+      useTransactionStore.getState().updateCategory('uc-5', 'travel', CategorizedBy.AI);
+      expect(useTransactionStore.getState().transactions[0].categorizedBy).toBe(CategorizedBy.AI);
+    });
+
+    it('sets needsReview to false', () => {
+      useTransactionStore.getState().addTransactions([_makeTransaction({ id: 'uc-6', needsReview: true })]);
+      useTransactionStore.getState().updateCategory('uc-6', 'dining');
+      expect(useTransactionStore.getState().transactions[0].needsReview).toBe(false);
+    });
   });
 
   describe('getTransactionsNeedingReview', () => {
@@ -223,6 +361,13 @@ describe('useTransactionStore', () => {
       const result = useTransactionStore.getState().getTransactionsNeedingReview();
       expect(result).toHaveLength(1);
       expect(result[0].id).toBe('rev-1');
+    });
+
+    it('returns empty when no transactions need review', () => {
+      useTransactionStore.getState().addTransactions([
+        _makeTransaction({ id: 'rev-3', needsReview: false }),
+      ]);
+      expect(useTransactionStore.getState().getTransactionsNeedingReview()).toHaveLength(0);
     });
   });
 
@@ -250,6 +395,24 @@ describe('useTransactionStore', () => {
       expect(result).toHaveLength(1);
       expect(result[0].id).toBe('act-1');
     });
+
+    it('dismissAnomaly is a no-op for non-matching id', () => {
+      useTransactionStore.getState().addTransactions([makeTransaction('anom-noop')]);
+      const before = useTransactionStore.getState().transactions[0].anomalyDismissed;
+      useTransactionStore.getState().dismissAnomaly('nonexistent');
+      expect(useTransactionStore.getState().transactions[0].anomalyDismissed).toBe(before);
+    });
+
+    it('restoreAnomaly is a no-op for non-matching id', () => {
+      useTransactionStore.getState().addTransactions([makeTransaction('anom-restore-noop')]);
+      useTransactionStore.getState().restoreAnomaly('nonexistent');
+      expect(useTransactionStore.getState().transactions).toHaveLength(1);
+    });
+
+    it('getActiveAnomalies returns empty when no anomalies exist', () => {
+      useTransactionStore.getState().addTransactions([makeTransaction('anom-none')]);
+      expect(useTransactionStore.getState().getActiveAnomalies()).toHaveLength(0);
+    });
   });
 
   describe('hasFileImported', () => {
@@ -270,6 +433,28 @@ describe('useTransactionStore', () => {
       const result = useTransactionStore.getState().hasFileImported('abc123');
       expect(result.alreadyImported).toBe(true);
       expect(result.sourceType).toBe(SourceType.Bank);
+    });
+
+    it('returns earliest date when multiple transactions match hash', () => {
+      useTransactionStore.getState().addTransactions([
+        _makeTransaction({ id: 'hash-early', date: new Date('2024-01-10'), sourceFileHash: 'same-hash', sourceType: SourceType.Bank }),
+        _makeTransaction({ id: 'hash-late', date: new Date('2024-06-15'), sourceFileHash: 'same-hash', sourceType: SourceType.CreditCard }),
+      ]);
+
+      const result = useTransactionStore.getState().hasFileImported('same-hash');
+      expect(result.alreadyImported).toBe(true);
+      expect(result.importDate!.getFullYear()).toBe(2024);
+      expect(result.importDate!.getMonth()).toBe(0); // January
+    });
+
+    it('returns sourceType from matching transaction', () => {
+      useTransactionStore.getState().addTransactions([
+        _makeTransaction({ id: 'hash-cc', date: new Date('2024-03-15'), sourceFileHash: 'cc-hash', sourceType: SourceType.CreditCard }),
+      ]);
+
+      const result = useTransactionStore.getState().hasFileImported('cc-hash');
+      expect(result.alreadyImported).toBe(true);
+      expect(result.sourceType).toBe(SourceType.CreditCard);
     });
   });
 });

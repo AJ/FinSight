@@ -7,9 +7,9 @@ export interface HealthMetric {
 }
 
 export interface FinancialHealthResult {
-  recentIncome: number;
-  recentExpenses: number;
-  recentSavings: number;
+  totalIncome: number;
+  totalExpenses: number;
+  totalSavings: number;
   savingsRate: number;
   savingsTrend: number;
   score: number;
@@ -114,27 +114,27 @@ export function computeMonthlyFinancials(
     return { hasData: false };
   }
 
-  // Compute all-time totals (matches hero StatCards)
-  const totalIncome = transactions.filter((t) => t.isIncome).reduce((sum, t) => sum + t.amount, 0);
-  const totalExpenses = transactions.filter((t) => t.isExpense).reduce((sum, t) => sum + Math.abs(t.amount), 0);
-  const totalSavings = totalIncome - totalExpenses;
-  const savingsRate = calculateSavingsRate(totalSavings, totalIncome);
-
-  // Month-over-month trend (secondary metric)
+  // Group by month, filtering out transactions with invalid dates
   const byMonth = new Map<string, TransactionLike[]>();
-  const validDates: Date[] = [];
+  const validTransactions: TransactionLike[] = [];
   for (const t of transactions) {
     const date = t.date;
     if (isNaN(date.getTime())) continue;
-    validDates.push(date);
+    validTransactions.push(t);
     const key = getYearMonth(date);
     if (!byMonth.has(key)) byMonth.set(key, []);
     byMonth.get(key)!.push(t);
   }
 
-  if (validDates.length === 0) {
+  if (validTransactions.length === 0) {
     return { hasData: false };
   }
+
+  // Compute totals from valid-date transactions only (same set used for monthly grouping)
+  const totalIncome = validTransactions.filter((t) => t.isIncome).reduce((sum, t) => sum + t.amount, 0);
+  const totalExpenses = validTransactions.filter((t) => t.isExpense).reduce((sum, t) => sum + Math.abs(t.amount), 0);
+  const totalSavings = totalIncome - totalExpenses;
+  const savingsRate = calculateSavingsRate(totalSavings, totalIncome);
 
   const sortedMonths = Array.from(byMonth.keys()).sort((a, b) => b.localeCompare(a));
   const recentMonthKey = sortedMonths[0];
@@ -169,9 +169,9 @@ export function computeMonthlyFinancials(
   const avgMonthlySavings = totalSavings / numMonths;
 
   return {
-    recentIncome: totalIncome,
-    recentExpenses: totalExpenses,
-    recentSavings: totalSavings,
+    totalIncome,
+    totalExpenses,
+    totalSavings,
     savingsRate,
     savingsTrend,
     score,

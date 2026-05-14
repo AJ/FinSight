@@ -48,6 +48,14 @@ export const useInsightsStore = create<InsightsStore>()(
     }),
     {
       name: 'insights-storage',
+      // isGenerating is transient UI state — must not persist.
+      // If the user closes the browser mid-generation, isGenerating: true
+      // would be restored on reload, permanently stuck in loading state.
+      partialize: (state) => ({
+        insights: state.insights,
+        generatedAt: state.generatedAt,
+        error: state.error,
+      }),
     }
   )
 );

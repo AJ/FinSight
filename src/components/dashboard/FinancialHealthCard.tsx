@@ -23,24 +23,24 @@ export function FinancialHealthCard() {
     return computeMonthlyFinancials(transactions, utilization.aggregate, hasCCData);
   }, [transactions, getUtilization, getAllUniqueCards]);
 
-  if (!monthlyData.hasData || !('recentSavings' in monthlyData)) {
+  if (!monthlyData.hasData) {
     return null;
   }
 
-  // Extract values with defaults for TypeScript
   const {
-    recentSavings = 0,
-    savingsRate = 0,
-    savingsTrend = 0,
-    score = 50,
-    scoreLabel = "Fair",
-    metrics = [],
-    projectedAnnualSavings = 0,
-    monthDisplay = "",
-    isNegativeSavings = false,
+    totalSavings,
+    savingsRate,
+    savingsTrend,
+    score,
+    scoreLabel,
+    metrics,
+    projectedAnnualSavings,
+    monthDisplay,
+    isNegativeSavings,
   } = monthlyData;
 
   const isTrendPositive = savingsTrend > 0;
+  const isTrendZero = savingsTrend === 0;
   const savingsTrendAbs = Math.abs(savingsTrend);
 
   return (
@@ -61,11 +61,11 @@ export function FinancialHealthCard() {
             <h2 className="text-xl font-bold text-foreground mb-1">
               {isNegativeSavings ? (
                 <>
-                  You overspent by {formatCurrency(Math.abs(recentSavings), currency, false)} in {monthDisplay}
+                  You overspent by {formatCurrency(Math.abs(totalSavings), currency, false)} in {monthDisplay}
                 </>
               ) : (
                 <>
-                  You saved {formatCurrency(recentSavings, currency, false)} in {monthDisplay}
+                  You saved {formatCurrency(totalSavings, currency, false)} in {monthDisplay}
                 </>
               )}
             </h2>
@@ -84,18 +84,24 @@ export function FinancialHealthCard() {
             </p>
 
             {/* Trend */}
-            <div className={`flex items-center gap-2 font-medium mb-4 ${
-              isTrendPositive ? 'text-success' : 'text-destructive'
-            }`}>
-              {isTrendPositive ? (
-                <TrendingUp className="w-4 h-4" />
-              ) : (
-                <TrendingDown className="w-4 h-4" />
-              )}
-              <span>
-                {isTrendPositive ? '+' : '-'}{savingsTrendAbs.toFixed(0)}% vs previous month
-              </span>
-            </div>
+            {isTrendZero ? (
+              <p className="text-muted-foreground text-sm mb-4">
+                No change vs previous month
+              </p>
+            ) : (
+              <div className={`flex items-center gap-2 font-medium mb-4 ${
+                isTrendPositive ? 'text-success' : 'text-destructive'
+              }`}>
+                {isTrendPositive ? (
+                  <TrendingUp className="w-4 h-4" />
+                ) : (
+                  <TrendingDown className="w-4 h-4" />
+                )}
+                <span>
+                  {isTrendPositive ? '+' : '-'}{savingsTrendAbs.toFixed(0)}% vs previous month
+                </span>
+              </div>
+            )}
 
             {/* Tip */}
             <div className={`flex items-start gap-2 text-sm rounded-lg p-3 ${

@@ -58,6 +58,25 @@ describe('normalizeTransactionType', () => {
   it('returns null for object input', () => {
     expect(normalizeTransactionType({})).toBeNull();
   });
+
+  it('returns null for empty string', () => {
+    expect(normalizeTransactionType('')).toBeNull();
+  });
+
+  it('returns null for boolean input', () => {
+    expect(normalizeTransactionType(true)).toBeNull();
+    expect(normalizeTransactionType(false)).toBeNull();
+  });
+});
+
+describe('TransactionType enum', () => {
+  it('has Credit with value "credit"', () => {
+    expect(TransactionType.Credit).toBe('credit');
+  });
+
+  it('has Debit with value "debit"', () => {
+    expect(TransactionType.Debit).toBe('debit');
+  });
 });
 
 describe('normalizeTransactionTypeStrict', () => {
@@ -79,5 +98,21 @@ describe('normalizeTransactionTypeStrict', () => {
     expect(() => normalizeTransactionTypeStrict(null)).toThrow(
       'Invalid transaction type',
     );
+  });
+
+  it('accepts legacy "income" alias', () => {
+    expect(normalizeTransactionTypeStrict('income')).toBe(TransactionType.Credit);
+  });
+
+  it('accepts legacy "expense" alias', () => {
+    expect(normalizeTransactionTypeStrict('expense')).toBe(TransactionType.Debit);
+  });
+
+  it('includes raw value in error message', () => {
+    expect(() => normalizeTransactionTypeStrict('bogus')).toThrow(/"bogus"/);
+  });
+
+  it('throws on undefined', () => {
+    expect(() => normalizeTransactionTypeStrict(undefined)).toThrow();
   });
 });

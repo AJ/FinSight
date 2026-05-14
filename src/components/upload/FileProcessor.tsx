@@ -31,8 +31,7 @@ import { debugLog, debugWarn } from "@/lib/utils/debug";
 import { computeFileHash } from "@/lib/utils/fileHash";
 import { useTransactionStore } from "@/lib/store/transactionStore";
 import { isAbortError, formatElapsedSeconds, getFileExtension } from "./fileUploadValidation";
-
-const MAX_PASSWORD_ATTEMPTS = 3;
+import { handlePasswordRetryResult, isAutoDetectAvailable, resolveDuplicateStatementType } from "./fileProcessorCompanions";
 
 interface FileProcessorProps {
   onSuccess?: () => void;
@@ -176,9 +175,8 @@ export function FileProcessor({ onSuccess, onProcessingChange }: FileProcessorPr
     password?: string,
     sourceFileHash?: string,
   ) => {
-    const abortController = new AbortController();
     abortManager.current = new AbortManager();
-    abortManager.current.signal(); // Register the signal
+    const signal = abortManager.current.signal();
     wasCancelledRef.current = false;
 
     try {
@@ -192,11 +190,11 @@ export function FileProcessor({ onSuccess, onProcessingChange }: FileProcessorPr
         password,
         statementType: selectedType === 'auto' ? undefined : selectedType,
         onProgress: setProgress,
-        signal: abortController.signal,
+        signal,
         sourceFileHash,
       });
 
-      if (wasCancelledRef.current || abortController.signal.aborted) {
+      if (wasCancelledRef.current || signal.aborted) {
         return;
       }
 
@@ -207,7 +205,7 @@ export function FileProcessor({ onSuccess, onProcessingChange }: FileProcessorPr
         reviewSession.sourceMetadata?.failedChunks,
       );
     } catch (err) {
-      if (abortController.signal.aborted || wasCancelledRef.current || isAbortError(err)) {
+      if (signal.aborted || wasCancelledRef.current || isAbortError(err)) {
         return;
       }
 
@@ -224,14 +222,11 @@ export function FileProcessor({ onSuccess, onProcessingChange }: FileProcessorPr
       throw err;
     }
 
-    if (abortController.signal.aborted) {
-      return;
-    }
     abortManager.current.abortAll();
   }, [processReviewSession, setCurrency]);
 
   // Process a file with optional password (for PDFs)
-  const processFile = useCallback(async (file: File, password?: string) => {
+  const processFile = useCallback((file: File, password?: string) => {
     const isPDF = getFileExtension(file.name) === '.pdf';
 
     // Show statement type selector for ALL file types
@@ -265,30 +260,21 @@ export function FileProcessor({ onSuccess, onProcessingChange }: FileProcessorPr
       setPendingTypePassword(undefined);
       setStatementType('auto');
     } catch (err) {
-      // debugError('[FileProcessor][PasswordSubmit] Error:', err, 'isPasswordError:', isPasswordError(err));
       if (isPasswordError(err)) {
         const newAttempts = passwordAttempts + 1;
+        const retry = handlePasswordRetryResult(passwordAttempts);
         setPasswordAttempts(newAttempts);
-        debugLog(`[FileProcessor][PasswordSubmit] Password attempt ${newAttempts} failed for file:`, fileToProcess.name, 'max attempts:', MAX_PASSWORD_ATTEMPTS);
-        if (newAttempts >= MAX_PASSWORD_ATTEMPTS) {
-          debugLog(`[FileProcessor][PasswordSubmit] Max password attempts reached for file:`, fileToProcess.name, ' newAttempts:', newAttempts);
-          // Too many failed attempts
-          debugLog('[FileProcessor][PasswordSubmit] Password correct, file processed successfully. Clearing password state and setpendingfile to null. Attempt counts', newAttempts);
+        if (retry.maxReached) {
           setPendingFile(null);
           setPasswordAttempts(0);
           setPendingTypeFile(null);
           setPendingTypePassword(undefined);
           setError("Too many failed password attempts. Please try uploading again.");
         } else {
-          // Show error and re-open dialog for retry
-          const remaining = MAX_PASSWORD_ATTEMPTS - newAttempts;
-          setPasswordError(`Incorrect password. ${remaining} attempt${remaining > 1 ? "s" : ""} remaining.`);
+          setPasswordError(`Incorrect password. ${retry.remaining} attempt${retry.remaining > 1 ? "s" : ""} remaining.`);
           setPasswordDialogOpen(true);
         }
       } else {
-        debugLog('[FileProcessor][PasswordSubmit] "other" error:', err);
-        // Other error
-        debugLog('[FileProcessor][PasswordSubmit] Non-password error occurred. Clearing pending file and password state. Error:', err, 'pendingFile:', fileToProcess.name, 'passwordAttempts:', passwordAttempts);
         setPendingFile(null);
         setPasswordAttempts(0);
         setPendingTypeFile(null);
@@ -346,19 +332,6 @@ export function FileProcessor({ onSuccess, onProcessingChange }: FileProcessorPr
       }
     }
   }, [pendingTypeFile, statementType, pendingTypePassword, pendingHash, processFileWithStatementType]);
-  // ========== FIX (2026-03-16) END ==========
-  // Old code (sync, no error handling):
-  /*
-  const handleStatementTypeContinue = useCallback(() => {
-    setStatementTypeDialogOpen(false);
-    if (pendingTypeFile) {
-      setIsProcessing(true);
-      processFileWithStatementType(pendingTypeFile, statementType, pendingTypePassword);
-      setPendingTypeFile(null);
-      setPendingTypePassword(undefined);
-    }
-  }, [pendingTypeFile, statementType, pendingTypePassword, processFileWithStatementType]);
-  */
 
   // Handle statement type dialog cancel
   const handleStatementTypeCancel = useCallback(() => {
@@ -369,21 +342,33 @@ export function FileProcessor({ onSuccess, onProcessingChange }: FileProcessorPr
     setProgress(null);
   }, []);
 
-  const handleDuplicateContinue = useCallback(() => {
+  const handleDuplicateContinue = useCallback(async () => {
     setDuplicateDialogOpen(false);
-    if (pendingTypeFile) {
+    if (pendingTypeFile && duplicateSourceType) {
       setIsProcessing(true);
-      const type = duplicateSourceType === SourceType.CreditCard
-        ? 'credit_card'
-        : 'bank';
-      processFileWithStatementType(
-        pendingTypeFile,
-        type,
-        undefined,
-        pendingHash ?? undefined,
-      );
+      const type = resolveDuplicateStatementType(duplicateSourceType);
+      try {
+        await processFileWithStatementType(
+          pendingTypeFile,
+          type,
+          undefined,
+          pendingHash ?? undefined,
+        );
+      } catch (err) {
+        if (isPasswordError(err)) {
+          setPendingFile(pendingTypeFile);
+          setPasswordDialogOpen(true);
+        } else if (!isAbortError(err) && !wasCancelledRef.current) {
+          setError(err instanceof Error ? err.message : "Failed to process file");
+        }
+      } finally {
+        if (!passwordDialogOpen) {
+          setIsProcessing(false);
+          setProgress(null);
+        }
+      }
     }
-  }, [pendingTypeFile, duplicateSourceType, pendingHash, processFileWithStatementType]);
+  }, [pendingTypeFile, duplicateSourceType, pendingHash, processFileWithStatementType, passwordDialogOpen]);
 
   const handleDuplicateCancel = useCallback(() => {
     setDuplicateDialogOpen(false);
@@ -442,13 +427,9 @@ export function FileProcessor({ onSuccess, onProcessingChange }: FileProcessorPr
         }
       }
     } finally {
-      // Only clear processing if not waiting for password
-      if (!passwordDialogOpen) {
-        // debugError('[FileProcessor][handleFileSelect] Finally block reached. Clearing processing state. passwordDialogOpen:', passwordDialogOpen);
-        if (isMountedRef.current) {
-          setIsProcessing(false);
-          setProgress(null);
-        }
+      if (isMountedRef.current) {
+        setIsProcessing(false);
+        setProgress(null);
       }
     }
   };
@@ -573,7 +554,7 @@ export function FileProcessor({ onSuccess, onProcessingChange }: FileProcessorPr
             }}
           >
             {/* Auto-detect is only available for PDFs */}
-            {statementType === 'auto' && (
+            {isAutoDetectAvailable(pendingTypeFile?.name ?? null) && (
               <div className="flex items-start space-x-2">
                 <RadioGroupItem value="auto" id="auto-detect" />
                 <Label htmlFor="auto-detect" className="flex-1">

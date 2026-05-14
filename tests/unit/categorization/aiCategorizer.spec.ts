@@ -78,6 +78,20 @@ describe('applyCategorizationResults', () => {
     expect(updated[0].needsReview).toBe(false);
   });
 
+  it('sets needsReview to true when confidence is exactly 0.84', () => {
+    const txns = [makeTransaction({ id: '1' })];
+    const results = [{ id: '1', category: 'dining', confidence: 0.84, source: 'ai' as const }];
+    const updated = applyCategorizationResults(txns, results);
+    expect(updated[0].needsReview).toBe(true);
+  });
+
+  it('sets needsReview to false when confidence is 1.0', () => {
+    const txns = [makeTransaction({ id: '1' })];
+    const results = [{ id: '1', category: 'dining', confidence: 1.0, source: 'rule' as const }];
+    const updated = applyCategorizationResults(txns, results);
+    expect(updated[0].needsReview).toBe(false);
+  });
+
   it('maps source "rule" to CategorizedBy.Rule', () => {
     const txns = [makeTransaction({ id: '1' })];
     const results = [{ id: '1', category: 'shopping', confidence: 0.98, source: 'rule' as const }];
@@ -108,6 +122,17 @@ describe('batchTransactions', () => {
     const batches = batchTransactions(txns, 10);
     expect(batches).toHaveLength(1);
     expect(batches[0]).toHaveLength(2);
+  });
+
+  it('handles empty input', () => {
+    expect(batchTransactions([], 10)).toHaveLength(0);
+  });
+
+  it('handles exact batch size', () => {
+    const txns = Array.from({ length: 10 }, (_, i) => makeTransaction({ id: String(i) }));
+    const batches = batchTransactions(txns, 10);
+    expect(batches).toHaveLength(1);
+    expect(batches[0]).toHaveLength(10);
   });
 });
 
@@ -140,6 +165,15 @@ describe('categorizeTransactions', () => {
       provider: 'ollama',
       baseUrl: 'http://localhost:11434',
       model: '',
+    })).rejects.toThrow('model');
+  });
+
+  it('throws when model is whitespace only', async () => {
+    const txns = [makeTransaction({ id: '1' })];
+    await expect(categorizeTransactions(txns, {
+      provider: 'ollama',
+      baseUrl: 'http://localhost:11434',
+      model: '   ',
     })).rejects.toThrow('model');
   });
 

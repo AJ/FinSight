@@ -234,9 +234,9 @@ describe('computeMonthlyFinancials', () => {
 
     expect(result.hasData).toBe(true);
     if (!result.hasData) return;
-    expect(result.recentIncome).toBe(5000);
-    expect(result.recentExpenses).toBe(3500);
-    expect(result.recentSavings).toBe(1500);
+    expect(result.totalIncome).toBe(5000);
+    expect(result.totalExpenses).toBe(3500);
+    expect(result.totalSavings).toBe(1500);
     expect(result.savingsRate).toBe(30);
     expect(result.savingsTrend).toBe(100); // prev month = 0, recent > 0
     expect(result.projectedAnnualSavings).toBe(18000); // 1500/month * 12
@@ -255,8 +255,8 @@ describe('computeMonthlyFinancials', () => {
     expect(result.hasData).toBe(true);
     if (!result.hasData) return;
     // All-time: income 9000, expenses 3000, savings 6000
-    expect(result.recentSavings).toBe(6000);
-    expect(result.recentIncome).toBe(9000);
+    expect(result.totalSavings).toBe(6000);
+    expect(result.totalIncome).toBe(9000);
     // Month trend: March savings 3000, Feb savings 3000 → 0% change
     expect(result.savingsTrend).toBe(0);
   });
@@ -269,7 +269,7 @@ describe('computeMonthlyFinancials', () => {
 
     expect(result.hasData).toBe(true);
     if (!result.hasData) return;
-    expect(result.recentSavings).toBe(-1000);
+    expect(result.totalSavings).toBe(-1000);
     expect(result.isNegativeSavings).toBe(true);
     expect(result.savingsRate).toBe(-50);
   });
@@ -297,7 +297,7 @@ describe('computeMonthlyFinancials', () => {
 
     expect(result.hasData).toBe(true);
     if (!result.hasData) return;
-    expect(result.recentIncome).toBe(22000); // all-time total
+    expect(result.totalIncome).toBe(22000); // all-time total
     expect(result.monthDisplay).toBe('Jan 2025 – Mar 2025');
   });
 
@@ -308,9 +308,9 @@ describe('computeMonthlyFinancials', () => {
 
     expect(result.hasData).toBe(true);
     if (!result.hasData) return;
-    expect(result).toHaveProperty('recentIncome');
-    expect(result).toHaveProperty('recentExpenses');
-    expect(result).toHaveProperty('recentSavings');
+    expect(result).toHaveProperty('totalIncome');
+    expect(result).toHaveProperty('totalExpenses');
+    expect(result).toHaveProperty('totalSavings');
     expect(result).toHaveProperty('savingsRate');
     expect(result).toHaveProperty('savingsTrend');
     expect(result).toHaveProperty('score');
@@ -319,5 +319,21 @@ describe('computeMonthlyFinancials', () => {
     expect(result).toHaveProperty('projectedAnnualSavings');
     expect(result).toHaveProperty('monthDisplay');
     expect(result).toHaveProperty('isNegativeSavings');
+  });
+
+  it('excludes invalid-date transactions from totals and projection', () => {
+    const result = computeMonthlyFinancials([
+      txn('2025-03-10', 5000, 'income'),
+      txn('2025-03-15', 2000, 'expense'),
+      // Invalid-date transaction should NOT inflate totals or projection
+      { date: new Date('invalid'), isIncome: true, isExpense: false, amount: 100000 },
+    ], 0, false);
+
+    expect(result.hasData).toBe(true);
+    if (!result.hasData) return;
+    expect(result.totalIncome).toBe(5000);
+    expect(result.totalExpenses).toBe(2000);
+    expect(result.totalSavings).toBe(3000);
+    expect(result.projectedAnnualSavings).toBe(3000 * 12);
   });
 });

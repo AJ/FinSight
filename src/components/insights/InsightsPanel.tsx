@@ -53,7 +53,6 @@ export function InsightsPanel() {
       debugLog("InsightsPanel", "Generated insights:", insightsWithIds);
       setInsights(insightsWithIds);
     } catch (err) {
-      //console.error('[InsightsPanel]', err);
       debugLog("InsightsPanel", "Error generating insights:", err);
       setError(
         err instanceof Error

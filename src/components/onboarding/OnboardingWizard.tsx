@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import {
   Dialog,
   DialogContent,
@@ -17,7 +17,7 @@ import { LLMProvider, ModelInfo } from '@/lib/llm/types';
 import { Currency } from '@/types';
 import { cn } from '@/lib/utils';
 
-type ConnectionStatus = 'disconnected' | 'connecting' | 'connected' | 'failed';
+export type ConnectionStatus = 'disconnected' | 'connecting' | 'connected' | 'failed';
 
 interface OnboardingState {
   provider: LLMProvider | null;
@@ -54,6 +54,12 @@ export function OnboardingWizard({ open, onOpenChange }: OnboardingWizardProps) 
   const setCurrentStep = useOnboardingStore((state) => state.setCurrentStep);
   const markOnboardingComplete = useOnboardingStore((state) => state.markOnboardingComplete);
 
+  // Reset step on mount — local React state resets on refresh but persisted
+  // currentStep does not, causing step 2/3 to render with empty data.
+  useEffect(() => {
+    setCurrentStep(1);
+  }, [setCurrentStep]);
+
   const [state, setState] = useState<OnboardingState>({
     provider: null,
     serverUrl: '',
@@ -87,8 +93,10 @@ export function OnboardingWizard({ open, onOpenChange }: OnboardingWizardProps) 
 
   const handleStep3Complete = useCallback((currency: Currency) => {
     const settings = useSettingsStore.getState();
-    settings.setLLMProvider(state.provider!);
+    // Order matters: setLLMProvider clears llmModel internally,
+    // so setLLMModel must come AFTER setLLMProvider.
     settings.setLLMServerUrl(state.serverUrl);
+    settings.setLLMProvider(state.provider!);
     settings.setLLMModel(state.model || null);
     settings.setCurrency(currency);
 

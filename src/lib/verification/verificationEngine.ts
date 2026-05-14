@@ -46,6 +46,7 @@ export interface VerificationReport {
   reconciliation: {
     passed: boolean
     computedClosing?: number
+    expectedClosing?: number
     difference?: number
   }
   overallConfidence: number
@@ -216,6 +217,7 @@ function reconcile(
   return {
     passed: difference <= AMOUNT_TOLERANCE,
     computedClosing,
+    expectedClosing: meta.closingBalance,
     difference
   }
 }

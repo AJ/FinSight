@@ -57,8 +57,9 @@ describe('runPreReviewPipeline', () => {
     expect(saved!.fileName).toBe('test.csv');
   });
 
-  it('preserves warnings from extraction', async () => {
-    // CSV with a bad row that will produce a parsing warning
+  it('silently drops rows with unparseable dates', async () => {
+    // parseRow returns { transaction: null, error: null } when parseDate() fails.
+    // These rows are silently omitted — no ParsingError, no warning generated.
     const csv = `Date,Description,Amount,Type
 20/10/2025,Salary Credit,1000,credit
 not-a-date,Bad Row,abc,debit
@@ -72,8 +73,8 @@ not-a-date,Bad Row,abc,debit
       defaultCurrency: INR,
     });
 
-    expect(result.warnings.length).toBeGreaterThanOrEqual(0); // warnings are non-fatal
-    expect(result.transactions.length).toBeGreaterThanOrEqual(1); // at least the valid rows
+    expect(result.transactions).toHaveLength(2);
+    expect(result.warnings).toHaveLength(0);
   });
 
   it('throws when CSV has no date column', async () => {
@@ -222,5 +223,72 @@ Some purchase,100`;
 
     // statementType is passed through — CSV parser preserves it
     expect(result.statementType).toBe('credit_card');
+  });
+
+  it('has no verificationReport for CSV (no verification inputs)', async () => {
+    const csv = `Date,Description,Amount,Type
+20/10/2025,Salary,5000,credit`;
+
+    const result = await runPreReviewPipeline({
+      file: createCSVFile(csv),
+      provider: 'ollama',
+      baseUrl: 'http://localhost:11434',
+      model: 'test-model',
+      defaultCurrency: INR,
+    });
+
+    // CSV parser sets verificationInputs to undefined → attachVerificationToExtractionBundle is a no-op
+    expect(result.verificationReport).toBeUndefined();
+  });
+
+  it('has null statementSummary for CSV', async () => {
+    const csv = `Date,Description,Amount,Type
+20/10/2025,Salary,5000,credit`;
+
+    const result = await runPreReviewPipeline({
+      file: createCSVFile(csv),
+      provider: 'ollama',
+      baseUrl: 'http://localhost:11434',
+      model: 'test-model',
+      defaultCurrency: INR,
+    });
+
+    expect(result.statementSummary).toBeNull();
+  });
+
+  it('categorizes transactions via keyword fallback when LLM is unavailable', async () => {
+    // fetch rejects → runCategorizationCore falls back to categorizeByKeywords
+    const csv = `Date,Description,Amount,Type
+20/10/2025,AMAZON PURCHASE,250,debit`;
+
+    const result = await runPreReviewPipeline({
+      file: createCSVFile(csv),
+      provider: 'ollama',
+      baseUrl: 'http://localhost:11434',
+      model: 'test-model',
+      defaultCurrency: INR,
+    });
+
+    const tx = result.transactions[0];
+    expect(tx.category.id).toBe('shopping');
+    expect(tx.categoryConfidence).toBe(0.3);
+    expect(tx.needsReview).toBe(true);
+  });
+
+  it('creates sourceMetadata object even without sourceFileHash', async () => {
+    const csv = `Date,Description,Amount,Type
+20/10/2025,Salary,5000,credit`;
+
+    const result = await runPreReviewPipeline({
+      file: createCSVFile(csv),
+      provider: 'ollama',
+      baseUrl: 'http://localhost:11434',
+      model: 'test-model',
+      defaultCurrency: INR,
+    });
+
+    // Pipeline always constructs sourceMetadata, but hash is undefined when not provided
+    expect(result.sourceMetadata).toBeDefined();
+    expect(result.sourceMetadata!.sourceFileHash).toBeUndefined();
   });
 });

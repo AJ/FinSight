@@ -87,6 +87,10 @@ export function AIConnectionBar({ onStatusChange, disabled = false }: AIConnecti
       // Proceed with connection
       if (!silent) setIsConnecting(true);
 
+      // Set URL in store BEFORE checking connection so checkLLMConnection
+      // reads the user-entered URL, not the previous one.
+      setLLMServerUrl(url);
+
       try {
         const res = await checkLLMConnection(true);  // Force fresh check
         if (res.connected) {
@@ -94,16 +98,16 @@ export function AIConnectionBar({ onStatusChange, disabled = false }: AIConnecti
           const modelIds = res.models.map(m => m.id);
           setModels(modelIds);
           setModelInfos(res.models);
-          setLLMServerUrl(url);
 
           const selection = resolveModelSelection(llmModel, res.models);
+          const resolvedModel = selection?.modelId ?? llmModel ?? modelIds[0] ?? null;
           if (selection) {
             setLLMModel(selection.modelId);
             if (selection.contextLength) {
               setModelContextLength(selection.contextLength);
             }
           }
-          onStatusChange?.(true, llmModel || modelIds[0] || null);
+          onStatusChange?.(true, resolvedModel);
         } else {
           setStatus('failed');
           setModels([]);

@@ -358,6 +358,34 @@ describe('extractTextFromPDF', () => {
 
     await expect(extractTextFromPDF(makePdfFile())).rejects.toThrow('Corrupt PDF data');
   });
+
+  it('extracts from a single-page PDF', async () => {
+    const { extractTextFromPDF } = await import('@/lib/parsers/documentExtraction');
+    setupPdfMock([
+      [{ getTextContent: () => Promise.resolve({ items: [
+        makeTextItem('Single Page Content', 40, 700),
+        makeTextItem('More Text', 40, 680),
+      ] }) }],
+    ]);
+
+    const text = await extractTextFromPDF(makePdfFile());
+
+    expect(text).toContain('Single Page Content');
+    expect(text).toContain('More Text');
+    // Single page should have exactly one page break
+    expect(text.split('--- PAGE BREAK ---').length).toBe(2);
+  });
+
+  it('handles PDF with no text items on a page', async () => {
+    const { extractTextFromPDF } = await import('@/lib/parsers/documentExtraction');
+    setupPdfMock([
+      [{ getTextContent: () => Promise.resolve({ items: [] }) }],
+    ]);
+
+    const text = await extractTextFromPDF(makePdfFile());
+
+    expect(text.trim()).toBe('--- PAGE BREAK ---');
+  });
 });
 
 // ── extractTextFromTabular ────────────────────────────────────────────────────

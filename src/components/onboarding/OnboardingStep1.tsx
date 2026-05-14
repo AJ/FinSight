@@ -11,8 +11,7 @@ import { cn } from '@/lib/utils';
 import { LLMProvider, DEFAULT_URLS, ModelInfo } from '@/lib/llm/types';
 import { useSettingsStore } from '@/lib/store/settingsStore';
 import { checkLLMConnection } from '@/lib/store/llmConnectionStore';
-
-type ConnectionStatus = 'disconnected' | 'connecting' | 'connected' | 'failed';
+import type { ConnectionStatus } from './OnboardingWizard';
 
 interface OnboardingStep1Props {
   onComplete: (provider: LLMProvider, serverUrl: string, models: string[], modelInfos: ModelInfo[]) => void;

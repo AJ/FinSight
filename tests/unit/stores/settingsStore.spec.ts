@@ -175,6 +175,37 @@ describe('validateLlmServerUrl', () => {
     expect(result.isRemote).toBe(false);
     expect(result.warning).toBeUndefined();
   });
+
+  it('recognizes 0.0.0.0 as local', () => {
+    const result = validateLlmServerUrl('http://0.0.0.0:11434');
+    expect(result.valid).toBe(true);
+    expect(result.isRemote).toBe(false);
+  });
+
+  it('accepts https URLs', () => {
+    const result = validateLlmServerUrl('https://my-llm-server.example.com');
+    expect(result.valid).toBe(true);
+    expect(result.isRemote).toBe(true);
+    expect(result.sanitized).toBe('https://my-llm-server.example.com');
+  });
+
+  it('trims whitespace from input', () => {
+    const result = validateLlmServerUrl('  http://localhost:11434  ');
+    expect(result.valid).toBe(true);
+    expect(result.sanitized).toBe('http://localhost:11434');
+  });
+
+  it('treats bare http:// as valid with empty hostname (flags as remote)', () => {
+    const result = validateLlmServerUrl('http://');
+    // validator.isURL and new URL('http://') both accept it
+    expect(result.valid).toBe(true);
+    expect(result.isRemote).toBe(true);
+  });
+
+  it('includes hostname in remote warning', () => {
+    const result = validateLlmServerUrl('http://myserver.com:8080');
+    expect(result.warning).toContain('myserver.com');
+  });
 });
 
 describe('remote URL confirmation', () => {

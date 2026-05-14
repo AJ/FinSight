@@ -134,9 +134,9 @@ export function ChatPanel() {
   /* ------------------------------------------------------------------ */
 
   const handleSend = useCallback(
-    async (e?: FormEvent) => {
+    async (e?: FormEvent, overrideText?: string) => {
       e?.preventDefault();
-      const text = input.trim();
+      const text = (overrideText ?? input).trim();
       if (!text || isStreaming) return;
 
       setInput('');
@@ -338,7 +338,7 @@ export function ChatPanel() {
                     className="text-xs sm:text-sm h-auto py-2 px-3 whitespace-normal text-left hover:bg-primary/5 hover:border-primary/30 transition-all"
                     onClick={() => {
                       setInput(q);
-                      setTimeout(() => handleSend(), 50);
+                      handleSend(undefined, q);
                     }}
                   >
                     <Sparkles className="w-3 h-3 mr-1.5 shrink-0 text-primary/60" />
