@@ -16,6 +16,7 @@ import type { TransactionSubType } from "@/models/Transaction";
 import { formatSubType } from "@/models/Transaction";
 import { format } from "date-fns";
 import { DEFAULT_CATEGORIES } from "@/lib/categorization/categories";
+import { parseFormAmount, parseFormDate } from "./reviewEditDialogCompanion";
 
 const SORTED_CATEGORIES = (() => {
   const regular = DEFAULT_CATEGORIES
@@ -91,7 +92,10 @@ export function ReviewEditDialog({
               id="edit-date"
               type="date"
               value={format(get("date", transaction.date), "yyyy-MM-dd")}
-              onChange={(e) => set({ date: new Date(e.target.value) })}
+              onChange={(e) => {
+                const parsed = parseFormDate(e.target.value);
+                if (parsed) set({ date: parsed });
+              }}
               className="col-span-3"
             />
           </div>
@@ -114,7 +118,10 @@ export function ReviewEditDialog({
               id="edit-amount"
               type="number"
               value={Math.abs(get("amount", transaction.amount))}
-              onChange={(e) => set({ amount: parseFloat(e.target.value) })}
+              onChange={(e) => {
+                const parsed = parseFormAmount(e.target.value);
+                if (parsed !== null) set({ amount: parsed });
+              }}
               className="col-span-3"
             />
           </div>

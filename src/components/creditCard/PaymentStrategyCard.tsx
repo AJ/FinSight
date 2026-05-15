@@ -19,6 +19,7 @@ import { useSettingsStore } from "@/lib/store/settingsStore";
 import { formatCurrency } from "@/lib/currencyFormatter";
 import { PaymentStrategy, PaymentRecommendation } from "@/types/creditCard";
 import { compareStrategies } from "@/lib/creditCard/paymentStrategy";
+import { getAPRForIssuer } from "@/lib/creditCard/constants";
 import { format } from "date-fns";
 
 /**
@@ -63,7 +64,7 @@ export function PaymentStrategyCard() {
         issuer: card.cardIssuer,
         lastFour: card.cardLastFour,
         balance: recent.totalDue,
-        apr: recent.apr ?? 0.408,
+        apr: getAPRForIssuer(card.cardIssuer, recent.apr),
       };
     });
 

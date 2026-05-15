@@ -53,3 +53,102 @@ test.describe('Transactions lifecycle E2E', () => {
     await expect(page.getByText('Salary Credit')).not.toBeVisible({ timeout: 5000 });
   });
 });
+
+test.describe('Inline Category Editing', () => {
+  test.beforeEach(async ({ context }) => {
+    await setupTestContext(context);
+    await mockCategorizationAPI(context);
+  });
+
+  test('inline category editor changes category', async ({ context, page }) => {
+    await context.addInitScript(() => {
+      window.localStorage.setItem('transaction-storage', JSON.stringify({
+        state: {
+          transactions: [
+            {
+              id: 't-cat-1',
+              date: '2025-01-05',
+              description: 'BigBasket Grocery',
+              amount: -1500,
+              type: 'debit',
+              category: 'other',
+              merchant: 'BigBasket',
+              needsReview: false,
+              localCurrency: { code: 'INR', symbol: '₹', name: 'Indian Rupee' },
+              sourceType: 'bank',
+            },
+          ],
+        },
+        version: 0,
+      }));
+    });
+
+    await page.goto('/transactions');
+    await expect(page.getByText('BigBasket Grocery')).toBeVisible({ timeout: 10000 });
+
+    // The InlineCategoryEditor renders a button containing the category name
+    const categoryButton = page.getByRole('button', { name: /Other/i });
+    await expect(categoryButton).toBeVisible({ timeout: 5000 });
+    await categoryButton.click();
+
+    // Popover opens with category options — select 'Groceries'
+    const groceriesOption = page.getByRole('button', { name: /^Groceries$/i });
+    await expect(groceriesOption).toBeVisible({ timeout: 5000 });
+    await groceriesOption.click();
+
+    // Wait for popover to close, then verify the table's category button shows 'Groceries'
+    const tableCategoryButton = page.getByRole('table').getByRole('button', { name: /Groceries/i });
+    await expect(tableCategoryButton).toBeVisible({ timeout: 5000 });
+    // The old 'Other' button should no longer be present in the table
+    await expect(page.getByRole('table').getByRole('button', { name: /^Other$/i })).not.toBeVisible({ timeout: 5000 });
+  });
+
+  test('category change persists after reload', async ({ context, page }) => {
+    // Only seed localStorage if transaction-storage doesn't already exist,
+    // so the Zustand-persisted category change survives page.reload().
+    await context.addInitScript(() => {
+      if (!window.localStorage.getItem('transaction-storage')) {
+        window.localStorage.setItem('transaction-storage', JSON.stringify({
+          state: {
+            transactions: [
+              {
+                id: 't-cat-1',
+                date: '2025-01-05',
+                description: 'BigBasket Grocery',
+                amount: -1500,
+                type: 'debit',
+                category: 'other',
+                merchant: 'BigBasket',
+                needsReview: false,
+                localCurrency: { code: 'INR', symbol: '₹', name: 'Indian Rupee' },
+                sourceType: 'bank',
+              },
+            ],
+          },
+          version: 0,
+        }));
+      }
+    });
+
+    await page.goto('/transactions');
+    await expect(page.getByText('BigBasket Grocery')).toBeVisible({ timeout: 10000 });
+
+    // Change category from 'Other' to 'Groceries'
+    const categoryButton = page.getByRole('button', { name: /Other/i });
+    await expect(categoryButton).toBeVisible({ timeout: 5000 });
+    await categoryButton.click();
+
+    const groceriesOption = page.getByRole('button', { name: /^Groceries$/i });
+    await expect(groceriesOption).toBeVisible({ timeout: 5000 });
+    await groceriesOption.click();
+
+    // Wait for the table's category button to reflect the change
+    const tableCategoryButton = page.getByRole('table').getByRole('button', { name: /Groceries/i });
+    await expect(tableCategoryButton).toBeVisible({ timeout: 5000 });
+
+    // Reload and verify persistence
+    await page.reload();
+    await expect(page.getByText('BigBasket Grocery')).toBeVisible({ timeout: 10000 });
+    await expect(page.getByRole('table').getByRole('button', { name: /Groceries/i })).toBeVisible({ timeout: 5000 });
+  });
+});

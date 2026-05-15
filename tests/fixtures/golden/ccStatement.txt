@@ -1,0 +1,30 @@
+Credit Card Statement
+Card: HDFC Regalia Gold ****4321
+Statement Date: 15/01/2025
+Payment Due Date: 05/02/2025
+Credit Limit: 5,00,000.00
+Available Credit: 3,25,000.00
+Total Due: 1,72,500.00
+Minimum Due: 8,625.00
+
+Transactions:
+Date       Description                    Amount
+01/01/2025 AMAZON.IN RETAIL               12,499.00
+03/01/2025 SWIGGY                           856.00
+05/01/2025 MAKEMYTRIP                      24,500.00
+07/01/2025 NETFLIX.COM                       649.00
+09/01/2025 APPLE.COM/BILL                  1,099.00
+10/01/2025 UBER TRIPS                       1,230.00
+12/01/2025 FLIPKART                        15,999.00
+14/01/2025 ZOMATO                           1,450.00
+15/01/2025 RELIANCE FRESH                   3,200.00
+18/01/2025 CROMA                            42,999.00
+20/01/2025 PAYTM                            5,000.00
+22/01/2025 BOOKMYSHOW                         850.00
+25/01/2025 PETROL PUMP IOC                  4,500.00
+28/01/2025 SPOTIFY PREMIUM                    119.00
+30/01/2025 INTEREST CHARGE                  15,049.00
+01/02/2025 LATE PAYMENT FEE                   700.00
+
+Reward Points Earned: 1,725
+Total Reward Points Balance: 12,450

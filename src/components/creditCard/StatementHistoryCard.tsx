@@ -53,9 +53,9 @@ export function StatementHistoryCard() {
     });
   };
 
-  const handleMarkPaid = (statementId: string, paid: boolean) => {
+  const handleMarkPaid = (statementId: string, paid: boolean, totalDue: number) => {
     if (paid) {
-      markStatementPaid(statementId, new Date());
+      markStatementPaid(statementId, new Date(), totalDue);
     } else {
       updateStatement(statementId, { isPaid: false, paidDate: undefined, paidAmount: undefined });
     }
@@ -152,7 +152,7 @@ export function StatementHistoryCard() {
                             size="sm"
                             variant={stmt.isPaid ? "default" : "outline"}
                             className="h-6 px-2 text-xs"
-                            onClick={() => handleMarkPaid(stmt.id, !stmt.isPaid)}
+                            onClick={() => handleMarkPaid(stmt.id, !stmt.isPaid, stmt.totalDue)}
                           >
                             {stmt.isPaid ? "Unpaid" : "Paid"}
                           </Button>

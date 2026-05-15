@@ -33,9 +33,8 @@ export function TrueBalanceWidget({ variant = "true", compact = false }: TrueBal
   const getMostRecentStatement = useCreditCardStore((state) => state.getMostRecentStatement);
   const currency = useSettingsStore((state) => state.currency);
 
-  const ccOutstanding = getTotalOutstanding();
-
-  const { bankBalance, trueBalance, breakdown } = useMemo(() => {
+  const { ccOutstanding, bankBalance, trueBalance, breakdown } = useMemo(() => {
+    const ccOutstanding = getTotalOutstanding();
     const result = computeTrueBalance(transactions, ccOutstanding);
 
     // Get breakdown for total variant
@@ -48,8 +47,8 @@ export function TrueBalanceWidget({ variant = "true", compact = false }: TrueBal
       }
     }
 
-    return { bankBalance: result.bankBalance, trueBalance: result.trueBalance, breakdown };
-  }, [transactions, ccOutstanding, currency, getAllUniqueCards, getMostRecentStatement]);
+    return { ccOutstanding, bankBalance: result.bankBalance, trueBalance: result.trueBalance, breakdown };
+  }, [transactions, currency, getAllUniqueCards, getMostRecentStatement, getTotalOutstanding]);
 
   // Don't show if no CC data
   if (ccOutstanding === 0) {

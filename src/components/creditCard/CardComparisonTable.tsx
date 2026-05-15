@@ -40,13 +40,11 @@ export function CardComparisonTable() {
   const [sortKey, setSortKey] = useState<SortKey>("totalSpend");
   const [sortDesc, setSortDesc] = useState(true);
 
-  // Default to current month
-  const periodStart = startOfMonth(new Date());
-  const periodEnd = endOfMonth(new Date());
-
   const comparison = useMemo(() => {
+    const periodStart = startOfMonth(new Date());
+    const periodEnd = endOfMonth(new Date());
     return getCardComparison(transactions, periodStart, periodEnd);
-  }, [transactions, getCardComparison, periodStart, periodEnd]);
+  }, [transactions, getCardComparison]);
 
   // Don't show if no CC data
   if (comparison.length === 0) {
@@ -84,7 +82,7 @@ export function CardComparisonTable() {
           Card Comparison
         </CardTitle>
         <p className="text-xs text-muted-foreground">
-          {format(periodStart, "MMM yyyy")}
+          {format(startOfMonth(new Date()), "MMM yyyy")}
         </p>
       </CardHeader>
       <CardContent>

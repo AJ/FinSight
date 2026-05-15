@@ -26,7 +26,7 @@ export function PeriodComparisonView() {
   const getAllUniqueCards = useCreditCardStore((state) => state.getAllUniqueCards);
   const currency = useSettingsStore((state) => state.currency);
 
-  const hasCCData = getAllUniqueCards().length > 0;
+  const hasCCData = useMemo(() => getAllUniqueCards().length > 0, [getAllUniqueCards]);
 
   const [periodMonths, setPeriodMonths] = useState<string>("1");
 

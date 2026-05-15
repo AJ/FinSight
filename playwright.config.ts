@@ -10,7 +10,7 @@ import { defineConfig, devices } from '@playwright/test';
  */
 export default defineConfig({
   testDir: './tests',
-  testIgnore: ['**/unit/**', '**/parserNeutralizationBoundary.spec.ts'],
+  testIgnore: ['**/unit/**', '**/live/**', '**/parserNeutralizationBoundary.spec.ts'],
   fullyParallel: true,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 2 : 1,

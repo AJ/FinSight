@@ -61,12 +61,18 @@ function BudgetPageContent() {
   const hasBudget = !!period;
   const hasAnyData = hasBudget || monthTransactions.length > 0;
 
-  // Plan tab: local dirty state
-  const [localIncome, setLocalIncome] = useState<number>(period?.income ?? 0);
-  const [localAllocations, setLocalAllocations] = useState<Record<string, number>>(
-    () => Object.fromEntries((period?.allocations ?? []).map(a => [a.categoryId, a.amount]))
+  // Plan tab: local dirty state — use carry-forward when no period exists for this month
+  const initialCarryForward = useMemo(
+    () => findCarryForwardState({ month: selectedMonth, periods: useBudgetStore.getState().periods }),
+    [], // eslint-disable-line react-hooks/exhaustive-deps -- intentional: compute once on mount
   );
-  const [localHidden, setLocalHidden] = useState<string[]>(period?.hiddenCategories ?? []);
+  const [localIncome, setLocalIncome] = useState<number>(period?.income ?? initialCarryForward.income);
+  const [localAllocations, setLocalAllocations] = useState<Record<string, number>>(
+    () => period?.allocations
+      ? Object.fromEntries(period.allocations.map(a => [a.categoryId, a.amount]))
+      : initialCarryForward.allocations,
+  );
+  const [localHidden, setLocalHidden] = useState<string[]>(period?.hiddenCategories ?? initialCarryForward.hidden);
 
   // Reset local state when month changes (synchronous during render, no effect cascading)
   const [prevMonth, setPrevMonth] = useState(selectedMonth);

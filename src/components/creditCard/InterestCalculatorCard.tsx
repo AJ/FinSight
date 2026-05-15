@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useState, useEffect } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Slider } from "@/components/ui/slider";
@@ -134,6 +134,10 @@ interface CardProjectionProps {
 
 function CardProjection({ projection, currency, isExpanded, onToggle }: CardProjectionProps) {
   const [selectedPayment, setSelectedPayment] = useState(projection.minimumDue);
+
+  useEffect(() => {
+    setSelectedPayment(projection.minimumDue);
+  }, [projection.minimumDue]);
 
   const formatAPR = (apr: number) => `${(apr * 100).toFixed(1)}% APR`;
 

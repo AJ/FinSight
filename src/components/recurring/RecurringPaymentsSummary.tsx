@@ -28,12 +28,12 @@ export function RecurringPaymentsSummary() {
       const shouldScan = !lastScanned ||
         new Date().getTime() - new Date(lastScanned).getTime() > 24 * 60 * 60 * 1000; // Re-scan after 24h
 
-      if (shouldScan || recurringPayments.length === 0) {
+      if (shouldScan) {
         scanTransactions(transactions);
       }
       hasScannedRef.current = true;
     }
-  }, [transactions, isScanning, lastScanned, recurringPayments.length, scanTransactions]);
+  }, [transactions, isScanning, lastScanned, scanTransactions]);
 
   const activePayments = recurringPayments.filter(p => p.isActive);
   const inactivePayments = recurringPayments.filter(p => !p.isActive);

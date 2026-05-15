@@ -231,7 +231,7 @@ export function SpendingTab() {
                 axisLine={false}
                 tickLine={false}
                 tick={{ fill: "oklch(0.60 0.01 55)", fontSize: 11 }}
-                tickFormatter={(v) => `₹${v / 1000}k`}
+                tickFormatter={(v) => `${currency.symbol}${v / 1000}k`}
               />
               <Tooltip
                 cursor={false}

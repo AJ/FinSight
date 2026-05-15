@@ -66,6 +66,24 @@ test.describe('Credit Cards page', () => {
     await expect(page.getByText(/total cc spending.*₹.*4,350/i)).toBeVisible({ timeout: 5000 });
   });
 
+  test('fresh state renders credit cards empty state with upload prompt', async ({ context, page }) => {
+    // Clear all storage to ensure truly fresh state
+    await context.addInitScript(() => {
+      window.localStorage.clear();
+      window.sessionStorage.clear();
+    });
+    await setupTestContext(context);
+    await mockCategorizationAPI(context);
+
+    await page.goto('/credit-cards');
+    // Should render the empty state heading
+    await expect(page.getByRole('heading', { name: 'No Credit Card Data' })).toBeVisible({ timeout: 10000 });
+    // Should show the Upload Statement button
+    await expect(page.getByRole('button', { name: /upload statement/i })).toBeVisible();
+    // Body should be visible (no crash)
+    await expect(page.locator('body')).toBeVisible();
+  });
+
   test('tab switching changes visible content', async ({ context, page }) => {
     await context.addInitScript(({ ccStorage, ccTransactions }) => {
       window.localStorage.setItem('credit-card-storage', JSON.stringify(ccStorage));

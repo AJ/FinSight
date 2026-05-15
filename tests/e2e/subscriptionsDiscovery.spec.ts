@@ -36,7 +36,8 @@ test.describe('Subscriptions discovery E2E', () => {
 
   test('no transactions shows empty state with upload prompt', async ({ page }) => {
     await page.goto('/subscriptions');
-    await expect(page.getByText(/upload|no.*transactions|import/i)).toBeVisible({ timeout: 10000 });
+    // Match the empty state description specifically (not the sidebar button or upload dialog button)
+    await expect(page.getByText('Upload your first statement to detect recurring payments')).toBeVisible({ timeout: 10000 });
     // Should NOT show subscription cards
     await expect(page.getByText(/netflix|spotify|monthly.*fee/i)).not.toBeVisible({ timeout: 3000 });
   });

@@ -6,21 +6,24 @@ import { getReviewSessionTransactions } from '../../utils/storageHelpers';
  * Call this BEFORE page.goto() in beforeEach hooks.
  */
 export async function setupTestContext(context: BrowserContext): Promise<void> {
-  // 1. Bypass Onboarding Wizard
+  // 1. Bypass Onboarding Wizard + seed default settings
   await context.addInitScript(() => {
     window.localStorage.setItem('onboarding-storage', JSON.stringify({
       state: { hasCompletedOnboarding: true },
       version: 1
     }));
-    // 2. Force LM Studio Configuration
-    window.localStorage.setItem('settings-storage', JSON.stringify({
-      state: {
-        llmProvider: 'lmstudio',
-        llmServerUrl: 'http://localhost:1234',
-        llmModel: 'test-model' // Placeholder, will be overridden by mocks
-      },
-      version: 1
-    }));
+    // Only seed settings if not already present — allows tests that change
+    // settings (e.g. currency) to have those changes survive navigation.
+    if (!window.localStorage.getItem('settings-storage')) {
+      window.localStorage.setItem('settings-storage', JSON.stringify({
+        state: {
+          llmProvider: 'lmstudio',
+          llmServerUrl: 'http://localhost:1234',
+          llmModel: 'test-model'
+        },
+        version: 1
+      }));
+    }
   });
 
   // 3. Wait for the settings store to hydrate from localStorage
@@ -134,8 +137,12 @@ export async function mockCategorizationAPI(context: BrowserContext): Promise<vo
 /**
  * Helper to upload a file via the upload dialog.
  * @param password - Optional PDF password. If provided, fills in the password dialog.
+ * @param statementType - Optional statement type selection: 'bank', 'credit_card', or 'auto'.
+ *                        For PDFs with 'auto', auto-detect is used (default PDF behavior).
+ *                        For PDFs with 'bank' or 'credit_card', that radio is selected explicitly.
+ *                        For CSV/XLSX without a value, defaults to 'bank'.
  */
-export async function uploadFile(page: Page, fixturePath: string, options?: { password?: string }): Promise<void> {
+export async function uploadFile(page: Page, fixturePath: string, options?: { password?: string; statementType?: 'bank' | 'credit_card' | 'auto' }): Promise<void> {
   await closeAllDialogs(page);
 
   const uploadBtn = page.getByRole('button', { name: 'Upload Statement', exact: true });
@@ -159,17 +166,35 @@ export async function uploadFile(page: Page, fixturePath: string, options?: { pa
   const continueBtn = page.getByRole('button', { name: 'Continue', exact: true });
   await expect(continueBtn).toBeVisible({ timeout: 10000 });
 
-  // For CSV/XLSX files, auto-detect is not available, so select Bank by default
+  // Determine which radio to select based on statementType option
+  const desiredType = options?.statementType;
   const autoDetect = page.locator('#auto-detect');
   const isAutoVisible = await autoDetect.isVisible({ timeout: 1000 }).catch(() => false);
-  if (!isAutoVisible) {
-    // CSV/XLSX — must pick Bank or Credit Card explicitly; default to Bank
+
+  if (desiredType === 'bank') {
     const bankRadio = page.locator('#bank-statement');
     await expect(bankRadio).toBeVisible({ timeout: 5000 });
     await bankRadio.click();
-    // Wait for Continue button to become enabled
+    await expect(continueBtn).toBeEnabled({ timeout: 3000 });
+  } else if (desiredType === 'credit_card') {
+    const ccRadio = page.locator('#cc-statement');
+    await expect(ccRadio).toBeVisible({ timeout: 5000 });
+    await ccRadio.click();
+    await expect(continueBtn).toBeEnabled({ timeout: 3000 });
+  } else if (desiredType === 'auto') {
+    // auto-detect — only available for PDFs; ensure it's selected
+    if (isAutoVisible) {
+      await autoDetect.click();
+    }
+    await expect(continueBtn).toBeEnabled({ timeout: 3000 });
+  } else if (!isAutoVisible) {
+    // No statementType specified and auto-detect not available (CSV/XLSX) — default to Bank
+    const bankRadio = page.locator('#bank-statement');
+    await expect(bankRadio).toBeVisible({ timeout: 5000 });
+    await bankRadio.click();
     await expect(continueBtn).toBeEnabled({ timeout: 3000 });
   }
+  // If no statementType specified and auto-detect IS visible (PDF), it's already pre-selected
 
   // Use Playwright's click — waits for actionability (stable, enabled, visible)
   await continueBtn.click();

@@ -17,12 +17,18 @@ export async function setLocalStorage(page: Page, key: string, value: unknown): 
 }
 
 export async function clearAllStorage(context: BrowserContext): Promise<void> {
-  // Use context-level clearing which is often more reliable than page.evaluate
   await context.clearCookies();
-  // Add init script to wipe storage on next navigation
+  // One-shot guard: addInitScript runs on EVERY navigation, but we only want
+  // to clear storage once. window.name persists across navigations within the
+  // same tab (unlike window.__flag properties which reset on each page load).
+  // Without this guard, subsequent navigations wipe storage that other
+  // addInitScript calls (setupTestContext) or test logic just set up.
   await context.addInitScript(() => {
-    localStorage.clear();
-    sessionStorage.clear();
+    if (window.name !== '__storage_cleared') {
+      window.name = '__storage_cleared';
+      localStorage.clear();
+      sessionStorage.clear();
+    }
   });
 }
 

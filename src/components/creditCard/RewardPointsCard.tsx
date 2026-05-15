@@ -11,6 +11,8 @@ import {
   Clock,
 } from "lucide-react";
 import { useCreditCardStore } from "@/lib/store/creditCardStore";
+import { useSettingsStore } from "@/lib/store/settingsStore";
+import { formatCurrency } from "@/lib/currencyFormatter";
 import { format } from "date-fns";
 import { formatPoints } from "@/lib/creditCard/rewardFormatting";
 
@@ -22,6 +24,7 @@ import { formatPoints } from "@/lib/creditCard/rewardFormatting";
  */
 export function RewardPointsCard() {
   const getRewardPointsAnalysis = useCreditCardStore((state) => state.getRewardPointsAnalysis);
+  const currency = useSettingsStore((state) => state.currency);
 
   const analysis = useMemo(() => getRewardPointsAnalysis(), [getRewardPointsAnalysis]);
 
@@ -132,7 +135,7 @@ export function RewardPointsCard() {
                       <div className="mt-2 flex items-center gap-1 text-xs">
                         <Star className="w-3 h-3 text-warning" />
                         <span className="text-muted-foreground">
-                          {card.earningRate.toFixed(1)} pts per ₹100 spent
+                          {card.earningRate.toFixed(1)} pts per {formatCurrency(100, currency)} spent
                         </span>
                       </div>
                     )}

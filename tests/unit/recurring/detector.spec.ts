@@ -10,9 +10,10 @@ import {
   getMonthlyAmount,
   getTotalMonthlyRecurring,
   groupTransactionsByMerchant,
+  predictNextDate,
 } from '@/lib/recurring/detector';
 import { TransactionType } from '@/types';
-import type { RecurringPayment, DetectionConfig } from '@/lib/recurring/types';
+import type { RecurringPayment, DetectionConfig, Frequency } from '@/lib/recurring/types';
 import { makeTransaction, makeCategory } from '@tests/unit/factories';
 
 describe('normalizeMerchantName', () => {
@@ -246,5 +247,31 @@ describe('getTotalMonthlyRecurring', () => {
       { id: '2', amount: 149, frequency: 'monthly', isActive: false } as RecurringPayment,
     ];
     expect(getTotalMonthlyRecurring(payments)).toBe(649);
+  });
+});
+
+describe('predictNextDate', () => {
+  it('adds 1 month for monthly frequency', () => {
+    const lastSeen = new Date(2024, 0, 15); // Jan 15
+    const result = predictNextDate(lastSeen, 'monthly');
+    expect(result).toEqual(new Date(2024, 1, 15)); // Feb 15
+  });
+
+  it('adds 7 days for weekly frequency', () => {
+    const lastSeen = new Date(2024, 0, 1); // Jan 1
+    const result = predictNextDate(lastSeen, 'weekly');
+    expect(result).toEqual(new Date(2024, 0, 8)); // Jan 8
+  });
+
+  it('adds 3 months for quarterly frequency', () => {
+    const lastSeen = new Date(2024, 0, 1); // Jan 1
+    const result = predictNextDate(lastSeen, 'quarterly');
+    expect(result).toEqual(new Date(2024, 3, 1)); // Apr 1
+  });
+
+  it('adds 1 year for yearly frequency', () => {
+    const lastSeen = new Date(2024, 5, 15); // Jun 15
+    const result = predictNextDate(lastSeen, 'yearly');
+    expect(result).toEqual(new Date(2025, 5, 15)); // Jun 15 next year
   });
 });

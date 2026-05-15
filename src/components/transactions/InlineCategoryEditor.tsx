@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useState, useMemo, Fragment } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import {
@@ -115,12 +115,11 @@ export function InlineCategoryEditor({
               const showSeparator = isOther && prevCategory && prevCategory.id !== "other";
 
               return (
-                <>
+                <Fragment key={cat.id}>
                   {showSeparator && (
                     <div className="h-px bg-border my-1" />
                   )}
                   <button
-                    key={cat.id}
                     onClick={() => {
                       onCategoryChange(cat.id);
                       setIsOpen(false);
@@ -140,7 +139,7 @@ export function InlineCategoryEditor({
                       <Check className="w-3.5 h-3.5 text-primary" />
                     )}
                   </button>
-                </>
+                </Fragment>
               );
             })
           )}

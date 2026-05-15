@@ -38,7 +38,7 @@ export function FinancialHealthScoreCard({ compact = false }: FinancialHealthSco
   const getTotalExpenses = useTransactionStore((state) => state.getTotalExpenses);
   const getAllUniqueCards = useCreditCardStore((state) => state.getAllUniqueCards);
 
-  const hasCCData = getAllUniqueCards().length > 0;
+  const hasCCData = useMemo(() => getAllUniqueCards().length > 0, [getAllUniqueCards]);
 
   const healthScore: FinancialHealthScore | null = useMemo(() => {
     if (!hasCCData) return null;

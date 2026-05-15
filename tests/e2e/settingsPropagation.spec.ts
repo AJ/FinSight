@@ -154,3 +154,86 @@ test.describe('Settings change propagation E2E', () => {
     }
   });
 });
+
+test.describe('Currency Change Propagation', () => {
+  test.beforeEach(async ({ context }) => {
+    await setupTestContext(context);
+    await mockCategorizationAPI(context);
+
+    // Seed one INR transaction so dashboard and transactions pages have data to format
+    await context.addInitScript(() => {
+      window.localStorage.setItem('transaction-storage', JSON.stringify({
+        state: {
+          transactions: [{
+            id: 'currency-test-1',
+            date: '2025-01-05',
+            description: 'Currency Test Transaction',
+            amount: 1500,
+            type: 'debit',
+            category: 'other',
+            merchant: 'Test Merchant',
+            needsReview: false,
+            localCurrency: { code: 'INR', symbol: '₹', name: 'Indian Rupee' },
+            sourceType: 'bank',
+            isInternational: false,
+          }],
+        },
+        version: 0,
+      }));
+    });
+  });
+
+  async function changeCurrencyToUSD(page: import('@playwright/test').Page): Promise<void> {
+    await page.goto('/settings');
+
+    // Wait for the settings page to fully hydrate
+    await expect(page.getByText('Currency').first()).toBeVisible({ timeout: 5000 });
+
+    // Change currency through the actual UI Select component.
+    // Cannot use localStorage + reload because setupTestContext's addInitScript
+    // re-runs on every navigation and overwrites settings-storage.
+    const currencyTrigger = page.locator('#currency');
+    await currencyTrigger.click();
+
+    const usdOption = page.getByRole('option', { name: /US Dollar/i });
+    await expect(usdOption).toBeVisible({ timeout: 5000 });
+    await usdOption.click();
+
+    // Verify the currency trigger now shows US Dollar
+    await expect(currencyTrigger).toContainText('US Dollar', { timeout: 5000 });
+  }
+
+  test('currency change formats dashboard amounts', async ({ page }) => {
+    // Navigate to dashboard — default currency is INR
+    await page.goto('/');
+    // Wait for the dashboard to render stat cards (rupee symbol in amounts)
+    await expect(page.getByText('₹').first()).toBeVisible({ timeout: 10000 });
+
+    // Change currency to USD
+    await changeCurrencyToUSD(page);
+
+    // Navigate back to dashboard
+    await page.goto('/');
+    // Dollar symbol should now appear instead of rupee
+    await expect(page.getByText('$').first()).toBeVisible({ timeout: 10000 });
+    // Rupee symbol should be gone
+    await expect(page.getByText('₹').first()).not.toBeVisible({ timeout: 5000 });
+  });
+
+  test('currency change formats transaction amounts', async ({ page }) => {
+    // Navigate to transactions page — default currency is INR
+    await page.goto('/transactions');
+    // Wait for the transaction to render with rupee symbol
+    await expect(page.getByText('₹').first()).toBeVisible({ timeout: 10000 });
+
+    // Change currency to USD
+    await changeCurrencyToUSD(page);
+
+    // Navigate back to transactions
+    await page.goto('/transactions');
+    // Dollar symbol should now appear on the transaction amount
+    await expect(page.getByText('$').first()).toBeVisible({ timeout: 10000 });
+    // Rupee symbol should be gone
+    await expect(page.getByText('₹').first()).not.toBeVisible({ timeout: 5000 });
+  });
+});

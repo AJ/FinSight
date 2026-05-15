@@ -10,6 +10,7 @@ export default defineConfig({
       'tests/unit/parseLLMJsonResponse.spec.ts',
       'tests/integration/retryEngine.spec.ts',
       'tests/e2e/**',
+      'tests/live/**',
       'node_modules/**',
     ],
     setupFiles: ['tests/unit/setup.ts'],

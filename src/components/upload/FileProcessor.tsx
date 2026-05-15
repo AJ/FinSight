@@ -403,6 +403,12 @@ export function FileProcessor({ onSuccess, onProcessingChange }: FileProcessorPr
         return;
       }
 
+      // Store hash for pipeline — handleStatementTypeContinue passes it to
+      // processFileWithStatementType so postReviewPipeline stamps sourceFileHash
+      // on every transaction. Without this, duplicate detection can't work on
+      // re-upload because transactions have no hash to compare against.
+      setPendingHash(hash);
+
       // First attempt - no password
       await processFile(file);
     } catch (err) {

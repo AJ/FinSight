@@ -1,0 +1,26 @@
+Statement of Account
+Bank: HDFC Bank
+Account: 1234567890
+Period: 01/01/2025 to 31/01/2025
+Opening Balance: 50,000.00
+
+Date       Description                    Debit      Credit     Balance
+01/01/2025 NEFT-SALARY-EMPLOYER                    75,000.00  1,25,000.00
+02/01/2025 UPI-AMAZON RETAIL             2,499.00              1,22,501.00
+03/01/2025 UPI-SWIGGY ORDER                 450.00              1,22,051.00
+05/01/2025 UPI-BIGBASKET                   1,850.00              1,20,201.00
+07/01/2025 ATM WITHDRAWAL                  5,000.00              1,15,201.00
+08/01/2025 UPI-ELECTRICITY BILL            2,300.00              1,12,901.00
+10/01/2025 UPI-NETFLIX SUBSCRIPTION          649.00              1,12,252.00
+12/01/2025 NEFT-FREELANCE PAYMENT                    15,000.00  1,27,252.00
+14/01/2025 UPI-OLA AUTO                      320.00              1,26,932.00
+15/01/2025 UPI-DMART                       3,200.00              1,23,732.00
+18/01/2025 UPI-ZOMATO                        580.00              1,23,152.00
+20/01/2025 CHEQUE DEPOSIT                             25,000.00  1,48,152.00
+22/01/2025 UPI-AIRTEL PREPAID               599.00              1,47,553.00
+25/01/2025 UPI-FLIPKART                    4,999.00              1,42,554.00
+28/01/2025 UPI-PETROL PUMP                 2,500.00              1,40,054.00
+30/01/2025 INTEREST CREDIT                           245.00  1,40,299.00
+31/01/2025 UPI-INSURANCE PREMIUM           8,500.00              1,31,799.00
+
+Closing Balance: 1,31,799.00

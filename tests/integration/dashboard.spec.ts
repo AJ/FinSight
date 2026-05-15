@@ -80,4 +80,44 @@ test.describe('Dashboard page', () => {
     await page.waitForURL(/\//, { timeout: 10000 }).catch(() => null);
     expect(page.url()).toContain('localhost');
   });
+
+  test('fresh state renders empty dashboard without crash', async ({ context, page }) => {
+    // Clear all storage to ensure truly fresh state
+    await context.addInitScript(() => {
+      window.localStorage.clear();
+      window.sessionStorage.clear();
+    });
+    await setupTestContext(context);
+    await mockCategorizationAPI(context);
+
+    await page.goto('/');
+    // Should render the empty-state hero with "Welcome to FinSight" heading
+    await expect(page.getByRole('heading', { name: 'Welcome to FinSight' })).toBeVisible({ timeout: 10000 });
+    // Should show the Upload Statement CTA button
+    await expect(page.getByRole('button', { name: /upload statement/i })).toBeVisible();
+    // Body should be visible (no crash)
+    await expect(page.locator('body')).toBeVisible();
+  });
+
+  test('stat cards reflect seeded transaction amounts', async ({ context, page }) => {
+    await context.addInitScript(() => {
+      window.localStorage.setItem('transaction-storage', JSON.stringify({
+        state: {
+          transactions: [
+            { id: 's1', date: '2025-01-05', description: 'Salary', amount: 50000, type: 'credit', category: 'income', merchant: 'Employer', needsReview: false, localCurrency: { code: 'INR', symbol: '₹', name: 'Indian Rupee' }, sourceType: 'bank' },
+            { id: 's2', date: '2025-01-10', description: 'Rent', amount: -15000, type: 'debit', category: 'housing', merchant: 'Landlord', needsReview: false, localCurrency: { code: 'INR', symbol: '₹', name: 'Indian Rupee' }, sourceType: 'bank' },
+          ],
+        },
+        version: 0,
+      }));
+    });
+
+    await page.goto('/');
+    // Stat cards should be visible (not the empty state)
+    await expect(page.getByText('Total Income')).toBeVisible({ timeout: 10000 });
+    // Income card should show ₹50,000 (formatted with Indian grouping)
+    await expect(page.getByText(/₹.*50,?000/)).toBeVisible({ timeout: 5000 });
+    // Expenses card should show ₹15,000
+    await expect(page.getByText(/₹.*15,?000/)).toBeVisible({ timeout: 5000 });
+  });
 });
