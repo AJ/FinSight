@@ -454,6 +454,88 @@ describe('processStatement — bank chunked extraction', () => {
     expect(descriptions).toContain('Gas Station');
     expect(descriptions).toContain('Salary Deposit');
   });
+
+  it('returns failure when all chunks fail extraction', async () => {
+    const longLine = 'Transaction data line with sufficient content to build up character count for threshold testing';
+    const longText = Array.from({ length: 250 }, (_, i) => `${longLine} #${i + 1}`).join('\n');
+
+    const brokenResponse = 'BROKEN JSON }}}';
+    mockFetch
+      .mockResolvedValueOnce(ollamaJson(bankSummaryJson()))
+      // Chunk 1: 3 failed retries
+      .mockResolvedValueOnce(ollamaJson(brokenResponse))
+      .mockResolvedValueOnce(ollamaJson(brokenResponse))
+      .mockResolvedValueOnce(ollamaJson(brokenResponse))
+      // Chunk 2: 3 failed retries
+      .mockResolvedValueOnce(ollamaJson(brokenResponse))
+      .mockResolvedValueOnce(ollamaJson(brokenResponse))
+      .mockResolvedValueOnce(ollamaJson(brokenResponse));
+
+    const result = await processStatement(longText, {
+      ...defaultOptions,
+      statementType: 'bank',
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.errors.length).toBeGreaterThan(0);
+    // No transactions extracted (empty array or null)
+    expect((result.data?.transactions ?? []).length).toBe(0);
+  });
+
+  it('recovers partial data when some chunks fail', async () => {
+    const longLine = 'Transaction data line with sufficient content to build up character count for threshold testing';
+    const longText = Array.from({ length: 250 }, (_, i) => `${longLine} #${i + 1}`).join('\n');
+
+    const brokenResponse = 'BROKEN JSON }}}';
+    const chunk1Txns = [
+      { date: '2024-01-10', description: 'Surviving Txn', amount: 45.50, type: 'debit' },
+    ];
+
+    mockFetch
+      .mockResolvedValueOnce(ollamaJson(bankSummaryJson()))
+      // Chunk 1 succeeds
+      .mockResolvedValueOnce(ollamaJson(transactionsJson(chunk1Txns)))
+      // Chunk 2: 3 failed retries
+      .mockResolvedValueOnce(ollamaJson(brokenResponse))
+      .mockResolvedValueOnce(ollamaJson(brokenResponse))
+      .mockResolvedValueOnce(ollamaJson(brokenResponse));
+
+    const result = await processStatement(longText, {
+      ...defaultOptions,
+      statementType: 'bank',
+    });
+
+    // hasUsableData=true (1 txn survived), so success=true with chunk errors as warnings
+    expect(result.success).toBe(true);
+    expect(result.data?.transactions).toHaveLength(1);
+    expect(result.data?.transactions[0].description).toBe('Surviving Txn');
+    // Chunk 2 failures should appear in warnings (moved from errors)
+    expect(result.warnings.length).toBeGreaterThan(0);
+  });
+});
+
+describe('processStatement — credit card never chunks', () => {
+  it('never chunks credit card statements regardless of text length', async () => {
+    // Build text exceeding both thresholds, including rewards keywords to trigger full CC path
+    const longLine = 'Credit card transaction data with cashback rewards points earned';
+    const longText = Array.from({ length: 300 }, (_, i) => `${longLine} #${i + 1}`).join('\n');
+    expect(longText.length).toBeGreaterThan(12000);
+
+    // CC path: summary + transactions + rewards
+    mockFetch
+      .mockResolvedValueOnce(ollamaJson(ccSummaryJson()))
+      .mockResolvedValueOnce(ollamaJson(transactionsJson()))
+      .mockResolvedValueOnce(ollamaJson(JSON.stringify({ rewards: [] })));
+
+    const result = await processStatement(longText, {
+      ...defaultOptions,
+      statementType: 'credit_card',
+    });
+
+    expect(result.success).toBe(true);
+    // CC path: summary + transactions + rewards = 3 calls, NOT chunked (which would be 4+)
+    expect(mockFetch).toHaveBeenCalledTimes(3);
+  });
 });
 
 describe('processStatement — type detection bankName forwarding', () => {

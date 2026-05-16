@@ -135,6 +135,89 @@ describe('createTransactionChunkPlan', () => {
     expect(plan.chunks[0].startLine).toBe(0);
     expect(plan.chunks[plan.chunks.length - 1].endLine).toBe(plan.normalizedLineCount - 1);
   });
+
+  it('does NOT chunk text at exactly the char threshold (12000)', () => {
+    // Code uses > not >=, so exactly 12000 chars is single_shot
+    const text = 'a'.repeat(12000);
+    const plan = createTransactionChunkPlan(text);
+
+    expect(plan.chunkingUsed).toBe(false);
+    expect(plan.chunkTriggerReason).toBe('single_shot');
+  });
+
+  it('does NOT chunk text at exactly the line threshold (250)', () => {
+    // 250 lines means normalizedLineCount = 250, which is NOT > 250
+    const text = makeLines(250);
+    const plan = createTransactionChunkPlan(text);
+
+    expect(plan.chunkingUsed).toBe(false);
+    expect(plan.chunkTriggerReason).toBe('single_shot');
+  });
+
+  it('chunks text at 12001 chars', () => {
+    const text = 'a'.repeat(12001);
+    const plan = createTransactionChunkPlan(text);
+
+    expect(plan.chunkingUsed).toBe(true);
+  });
+
+  it('chunks text at 251 lines', () => {
+    const text = makeLines(251);
+    const plan = createTransactionChunkPlan(text);
+
+    expect(plan.chunkingUsed).toBe(true);
+  });
+
+  it('produces minimal second chunk for 181 lines with char threshold', () => {
+    // 181 lines with long-enough lines to exceed 12000 chars triggers chunking
+    // 180 lines = exactly 1 chunk. 181 lines = 2 chunks:
+    // chunk 0: [0..179], chunk 1: [168..180] (12-line overlap + 13 new lines)
+    const text = makeLines(181, 'x'.repeat(80)); // 181 * ~85 chars = ~15385 > 12000
+    const plan = createTransactionChunkPlan(text);
+
+    expect(plan.chunkingUsed).toBe(true);
+    expect(plan.chunks).toHaveLength(2);
+    expect(plan.chunks[0].startLine).toBe(0);
+    expect(plan.chunks[0].endLine).toBe(179);
+    expect(plan.chunks[1].startLine).toBe(168);
+    expect(plan.chunks[1].endLine).toBe(180);
+    expect(plan.chunks[1].lineCount).toBe(13); // 181 - 168 = 13
+  });
+
+  it('assigns correct index values to each chunk', () => {
+    const text = makeLines(400);
+    const plan = createTransactionChunkPlan(text);
+
+    plan.chunks.forEach((chunk, i) => {
+      expect(chunk.index).toBe(i);
+    });
+    expect(plan.chunks[plan.chunks.length - 1].index).toBe(plan.chunks.length - 1);
+  });
+
+  it('handles text with trailing newlines', () => {
+    // Trailing \n creates an empty final element from split('\n')
+    const text = makeLines(300) + '\n\n';
+    const plan = createTransactionChunkPlan(text);
+
+    // 300 lines + 2 empty trailing = 302 lines, still triggers line_threshold
+    expect(plan.normalizedLineCount).toBe(302);
+    expect(plan.chunkingUsed).toBe(true);
+    // Last chunk's endLine should cover all lines including trailing empties
+    expect(plan.chunks[plan.chunks.length - 1].endLine).toBe(plan.normalizedLineCount - 1);
+  });
+
+  it('handles very long single line exceeding char threshold', () => {
+    // One massive line with no newlines, exceeding 12000 chars
+    const text = 'x'.repeat(15000);
+    const plan = createTransactionChunkPlan(text);
+
+    expect(plan.chunkingUsed).toBe(true);
+    expect(plan.chunkTriggerReason).toBe('char_threshold');
+    expect(plan.normalizedLineCount).toBe(1);
+    // Single line but char-threshold triggered: produces 1 chunk containing the whole text
+    expect(plan.chunks).toHaveLength(1);
+    expect(plan.chunks[0].text).toBe(text);
+  });
 });
 
 describe('mergeChunkTransactions', () => {
@@ -232,6 +315,59 @@ describe('mergeChunkTransactions', () => {
     const txB = makeTx({ date: '2024-01-15', description: 'Hotel', amount: 150, type: 'debit', originalCurrency: 'GBP', originalAmount: 140 });
 
     expect(mergeChunkTransactions([txA, txB]).transactions).toHaveLength(2);
+  });
+
+  it('treats originalAmount:0 as distinct from missing originalAmount', () => {
+    // Signature includes originalAmount: String(0) = '0' vs missing = ''
+    const txA = makeTx({ date: '2024-01-15', description: 'Hotel', amount: 150, type: 'debit', originalAmount: 0 });
+    const txB = makeTx({ date: '2024-01-15', description: 'Hotel', amount: 150, type: 'debit' });
+
+    expect(mergeChunkTransactions([txA, txB]).transactions).toHaveLength(2);
+  });
+
+  it('deduplicates transactions with same originalAmount', () => {
+    const txA = makeTx({ date: '2024-01-15', description: 'Hotel', amount: 150, type: 'debit', originalAmount: 140 });
+    const txB = makeTx({ date: '2024-01-15', description: 'Hotel', amount: 150, type: 'debit', originalAmount: 140, confidence: 0.9 });
+
+    const result = mergeChunkTransactions([txA, txB]);
+    expect(result.transactions).toHaveLength(1);
+    expect(result.duplicatesRemoved).toBe(1);
+    expect(result.transactions[0].confidence).toBe(0.9);
+  });
+
+  it('normalizes tabs in descriptions', () => {
+    const txA = makeTx({ date: '2024-01-15', description: 'AMAZON\t\tMARKETPLACE', amount: 99.99, type: 'debit' });
+    const txB = makeTx({ date: '2024-01-15', description: 'amazon marketplace', amount: 99.99, type: 'debit' });
+
+    expect(mergeChunkTransactions([txA, txB]).duplicatesRemoved).toBe(1);
+  });
+
+  it('normalizes non-breaking spaces in descriptions', () => {
+    const txA = makeTx({ date: '2024-01-15', description: 'AMAZON  MARKETPLACE', amount: 99.99, type: 'debit' });
+    const txB = makeTx({ date: '2024-01-15', description: 'amazon marketplace', amount: 99.99, type: 'debit' });
+
+    expect(mergeChunkTransactions([txA, txB]).duplicatesRemoved).toBe(1);
+  });
+
+  it('handles transactions with amount 0', () => {
+    const txA = makeTx({ date: '2024-01-15', description: 'Zero Txn', amount: 0, type: 'debit' });
+    const txB = makeTx({ date: '2024-01-15', description: 'Zero Txn', amount: 0, type: 'debit', confidence: 0.8 });
+
+    const result = mergeChunkTransactions([txA, txB]);
+    expect(result.transactions).toHaveLength(1);
+    expect(result.duplicatesRemoved).toBe(1);
+  });
+
+  it('preserves insertion order for unique transactions', () => {
+    const txns = [
+      makeTx({ date: '2024-01-01', description: 'First', amount: 10, type: 'debit' }),
+      makeTx({ date: '2024-01-02', description: 'Second', amount: 20, type: 'debit' }),
+      makeTx({ date: '2024-01-03', description: 'Third', amount: 30, type: 'debit' }),
+    ];
+
+    const result = mergeChunkTransactions(txns);
+    const descs = result.transactions.map(t => t.description);
+    expect(descs).toEqual(['First', 'Second', 'Third']);
   });
 });
 

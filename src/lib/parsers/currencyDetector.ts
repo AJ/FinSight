@@ -405,7 +405,7 @@ export function detectCurrencyFromText(text: string): Currency | null {
  * Get the locale string for a currency code.
  */
 export function getLocaleForCurrency(code: string): string {
-  const entry = CURRENCY_DB.find((c) => c.code === code);
+  const entry = CURRENCY_DB.find((c) => c.code === code.toUpperCase());
   return entry?.locale || "en-US";
 }
 

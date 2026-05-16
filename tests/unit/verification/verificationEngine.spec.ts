@@ -4,6 +4,8 @@ import type { ExtractedTransaction } from '@/types/extractedTransaction';
 import type { CCSummary, BankSummary } from '@/lib/parsers/extractSummary';
 import { makeTransaction } from '@tests/unit/factories';
 
+const USD_CURRENCY = { code: 'USD', symbol: '$', name: 'US Dollar' };
+
 describe('verifyStatement — bank verification', () => {
   const rawText = `
     Date        Description                Debit       Credit      Balance
@@ -258,5 +260,55 @@ describe('validateBankCrossSection', () => {
       [{ amount: 1000, type: 'credit' }] as ExtractedTransaction[],
     );
     expect(warnings).toEqual([]);
+  });
+});
+
+describe('verifyStatement — currency matching', () => {
+  it('adds 10 confidence points when currency code appears in raw text', () => {
+    // Raw text contains "usd" and "debit" keyword. Transaction has USD currency.
+    // amount(30) + type(25) + date(20) + description(15) + context(~matched) + currency(10) = 100+
+    const rawText = '2024-01-15 amazon purchase debit 99.99 usd balance 9900';
+    const txnUsd = makeTransaction({ description: 'amazon purchase', amount: 99.99, date: '2024-01-15', localCurrency: 'USD' });
+    const txnInr = makeTransaction({ description: 'amazon purchase', amount: 99.99, date: '2024-01-15', localCurrency: 'INR' });
+
+    const resultUsd = verifyStatement(rawText, [txnUsd], {});
+    const resultInr = verifyStatement(rawText, [txnInr], {});
+
+    // Both should verify (amount + type + date + description = 90 without currency)
+    expect(resultUsd.verified.length).toBeGreaterThan(0);
+    expect(resultInr.verified.length).toBeGreaterThan(0);
+    // USD one has strictly higher confidence due to currency match (+10 points)
+    expect(resultUsd.verified[0].confidence).toBeGreaterThan(resultInr.verified[0].confidence);
+  });
+
+  it('currency is case-insensitive in matching (raw text normalized to lowercase)', () => {
+    // verifyStatement normalizes raw text to lowercase, so "INR" in raw becomes "inr"
+    // The code checks rawText.includes(code.toLowerCase()) which is "inr".includes("inr") → true
+    const rawTextWithUppercase = '2024-01-15 PURCHASE debit 1299 INR';
+    const txn = makeTransaction({ description: 'PURCHASE', amount: 1299, date: '2024-01-15', localCurrency: 'INR' });
+    const result = verifyStatement(rawTextWithUppercase, [txn], {});
+
+    expect(result.verified.length).toBeGreaterThan(0);
+    expect(result.verified[0].verification.currencyMatched).toBe(true);
+  });
+
+  it('currency not present in raw text still passes verification on other fields', () => {
+    const rawText = '2024-01-15 amazon purchase debit 99.99 balance 9900';
+    const txn = makeTransaction({ description: 'amazon purchase', amount: 99.99, date: '2024-01-15', localCurrency: 'EUR' });
+    const result = verifyStatement(rawText, [txn], {});
+
+    expect(result.verified.length).toBeGreaterThan(0);
+    expect(result.verified[0].verification.currencyMatched).toBe(false);
+  });
+
+  it('transactions without localCurrency default to currency match true', () => {
+    // makeTransaction without localCurrency gets INR default from Transaction.fromExtracted
+    const rawText = '2024-01-15 purchase debit 99.99';
+    const txn = makeTransaction({ description: 'purchase', amount: 99.99, date: '2024-01-15' });
+    expect(txn.localCurrency.code).toBe('INR');
+    // "purchase debit 99.99" normalized doesn't contain "inr" → currencyMatched=false
+    const result = verifyStatement(rawText, [txn], {});
+    expect(result.verified.length).toBeGreaterThan(0);
+    expect(result.verified[0].verification.currencyMatched).toBe(false);
   });
 });

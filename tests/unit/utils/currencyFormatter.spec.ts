@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { formatCurrency, getCurrencyByCode, parseCurrencyAmount, formatSignedAmount, formatTransactionAmount } from '@/lib/currencyFormatter';
+import { getLocaleForCurrency } from '@/lib/parsers/currencyDetector';
 
 const INR = { code: 'INR', symbol: '₹', name: 'Indian Rupee' };
 const USD = { code: 'USD', symbol: '$', name: 'US Dollar' };
@@ -130,5 +131,30 @@ describe('formatTransactionAmount', () => {
       localCurrency: INR,
     });
     expect(result).toBe('₹100');
+  });
+});
+
+describe('formatCurrency — casing consistency', () => {
+  it('formats correctly with lowercase currency code via getCurrencyByCode', () => {
+    // Simulate what Transaction.fromExtracted does: normalize to uppercase first
+    const normalized = getCurrencyByCode('usd')!;
+    expect(normalized.code).toBe('USD');
+    const result = formatCurrency(100, normalized);
+    expect(result).toBe('$100');
+  });
+
+  it('getLocaleForCurrency resolves lowercase code correctly', () => {
+    // This is the path formatCurrency takes internally via getLocaleForCurrency
+    expect(getLocaleForCurrency('jpy')).not.toBe('en-US');
+    expect(getLocaleForCurrency('jpy')).toBe(getLocaleForCurrency('JPY'));
+  });
+
+  it('noDecimalCurrencies check works after normalization', () => {
+    // formatCurrency checks noDecimalCurrencies.includes(currency.code)
+    // After normalization through getCurrencyByCode, code is always uppercase
+    const jpy = getCurrencyByCode('jpy')!;
+    const result = formatCurrency(1500.99, jpy);
+    expect(result).toContain('1,501');
+    expect(result).not.toContain('1,501.');
   });
 });

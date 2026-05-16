@@ -106,6 +106,32 @@ describe('Transaction.fromExtracted', () => {
     expect(txn.localCurrency).toEqual(inrCurrency);
   });
 
+  it('normalizes lowercase currency code to uppercase', () => {
+    const txn = Transaction.fromExtracted({
+      date: '2024-01-15', description: 'Test', amount: 100, type: 'debit',
+      balance: null, localCurrency: 'usd', confidence: 0.9,
+    }, inrCurrency, SourceType.Bank);
+    expect(txn.localCurrency.code).toBe('USD');
+    expect(txn.localCurrency.symbol).toBe('$');
+  });
+
+  it('normalizes mixed-case currency code to uppercase', () => {
+    const txn = Transaction.fromExtracted({
+      date: '2024-01-15', description: 'Test', amount: 100, type: 'debit',
+      balance: null, localCurrency: 'GbP', confidence: 0.9,
+    }, inrCurrency, SourceType.Bank);
+    expect(txn.localCurrency.code).toBe('GBP');
+  });
+
+  it('preserves uppercase normalization for originalCurrency too', () => {
+    const txn = Transaction.fromExtracted({
+      date: '2024-01-15', description: 'Test', amount: 100, type: 'debit',
+      balance: null, localCurrency: 'INR', originalCurrency: 'eur', originalAmount: 1.20,
+      confidence: 0.9,
+    }, inrCurrency, SourceType.Bank);
+    expect(txn.originalCurrency?.code).toBe('EUR');
+  });
+
   it('stores originalAmount for international transactions', () => {
     const txn = Transaction.fromExtracted({
       date: '2024-01-15', description: 'Test', amount: 100, type: 'debit',
