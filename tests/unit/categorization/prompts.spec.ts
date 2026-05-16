@@ -37,6 +37,58 @@ describe('buildCategorizationPrompt', () => {
     expect(result).toContain('"dining"');
     expect(result).toContain('"shopping"');
   });
+
+  it('includes sourceType in payload when present', () => {
+    const transactions = [
+      { id: '1', description: 'AMAZON', amount: 100, type: 'debit' as const, sourceType: 'bank' },
+    ];
+    const result = buildCategorizationPrompt(transactions);
+    expect(result).toContain('"sourceType":"bank"');
+  });
+
+  it('includes transactionSubType in payload when present', () => {
+    const transactions = [
+      { id: '1', description: 'NETFLIX', amount: 15, type: 'debit' as const, transactionSubType: 'recurring' },
+    ];
+    const result = buildCategorizationPrompt(transactions);
+    expect(result).toContain('"transactionSubType":"recurring"');
+  });
+
+  it('omits sourceType from transaction payload when not provided', () => {
+    const transactions = [
+      { id: '1', description: 'AMAZON', amount: 100, type: 'debit' as const },
+    ];
+    const result = buildCategorizationPrompt(transactions);
+    // The system prompt mentions "sourceType" in its rules, so we only check the JSON payload portion
+    const payloadMatch = result.match(/\{[^}]*"id":"1"[^}]*\}/);
+    expect(payloadMatch).toBeTruthy();
+    expect(payloadMatch![0]).not.toContain('sourceType');
+  });
+
+  it('falls back to normalized description when merchant is empty', () => {
+    const transactions = [
+      { id: '1', description: 'NETFLIX SUBSCRIPTION', amount: 15, type: 'debit' as const, merchant: '' },
+    ];
+    const result = buildCategorizationPrompt(transactions);
+    // merchant is empty string → fallback to normalizeMerchantName(description) = "Netflix"
+    expect(result).toContain('"merchant":"Netflix"');
+  });
+
+  it('handles empty transaction array', () => {
+    const result = buildCategorizationPrompt([]);
+    // Empty array produces "[\n  \n]" not "[]", so check the prompt is valid and has an empty list
+    expect(result).toContain('Categorize these transactions');
+    expect(result).toBeDefined();
+  });
+
+  it('normalizes direction using normalizeTransactionType', () => {
+    const transactions = [
+      { id: '1', description: 'SALARY', amount: 50000, type: 'income' as const },
+    ];
+    const result = buildCategorizationPrompt(transactions);
+    // 'income' should be normalized to 'credit' direction
+    expect(result).toContain('"direction":"credit"');
+  });
 });
 
 describe('parseCategorizationResponse', () => {
@@ -120,5 +172,35 @@ describe('normalizeCategoryId', () => {
 
   it('normalizes underscores and hyphens', () => {
     expect(normalizeCategoryId('bill-pay')).toBe('bills');
+  });
+
+  it('"bill" maps via partial alias match', () => {
+    // "bill_payment".includes("bill") is true → maps to "bills"
+    const result = normalizeCategoryId('bill');
+    expect(result).toBe('bills');
+  });
+
+  it('"bill-payment" maps to "bills" via partial match', () => {
+    // "bill-payment".includes("bill-pay") is true
+    const result = normalizeCategoryId('bill-payment');
+    expect(result).toBe('bills');
+  });
+
+  it('"transfer_in" returns "other" when no partial alias matches', () => {
+    const result = normalizeCategoryId('transfer_in');
+    expect(result).toBe('other');
+  });
+
+  it('"bank" maps via partial match to first matching alias', () => {
+    // Object.entries insertion order: "bank_transfer" (line 249) before "bank_interest" (line 269).
+    // "bank_transfer".includes("bank") → true, so result is always "transfer".
+    const result = normalizeCategoryId('bank');
+    expect(result).toBe('transfer');
+  });
+
+  it('category with spaces converts to underscores before matching', () => {
+    // "bill payment" → "bill_payment" → exact alias match → "bills"
+    const result = normalizeCategoryId('bill payment');
+    expect(result).toBe('bills');
   });
 });

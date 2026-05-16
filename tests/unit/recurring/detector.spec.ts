@@ -12,8 +12,9 @@ import {
   groupTransactionsByMerchant,
   predictNextDate,
 } from '@/lib/recurring/detector';
-import { TransactionType } from '@/types';
+import { TransactionType, CategoryType } from '@/types';
 import type { RecurringPayment, DetectionConfig, Frequency } from '@/lib/recurring/types';
+import { DEFAULT_DETECTION_CONFIG } from '@/lib/recurring/types';
 import { makeTransaction, makeCategory } from '@tests/unit/factories';
 
 describe('normalizeMerchantName', () => {
@@ -212,6 +213,189 @@ describe('detectRecurringPayments', () => {
     expect(result[0].frequency).toBe('monthly');
     expect(result[0].confidence).toBeGreaterThanOrEqual(0.7);
   });
+
+  it('marks payments as inactive when last seen exceeds grace period', () => {
+    const txns = Array.from({ length: 6 }, (_, i) =>
+      makeTransaction({
+        id: `old${i}`,
+        description: 'OLD SUBSCRIPTION',
+        amount: 500,
+        type: TransactionType.Debit,
+        date: new Date(2023, i, 1), // 2023 — well over 90 days ago
+        category: makeCategory('entertainment'),
+      })
+    );
+    const result = detectRecurringPayments(txns);
+    expect(result.length).toBeGreaterThan(0);
+    expect(result[0].isActive).toBe(false);
+  });
+
+  it('does not set nextExpectedDate for inactive payments', () => {
+    const txns = Array.from({ length: 6 }, (_, i) =>
+      makeTransaction({
+        id: `old${i}`,
+        description: 'OLD SERVICE',
+        amount: 500,
+        type: TransactionType.Debit,
+        date: new Date(2023, i, 1),
+        category: makeCategory('entertainment'),
+      })
+    );
+    const result = detectRecurringPayments(txns);
+    const payment = result.find(r => !r.isActive);
+    expect(payment).toBeDefined();
+    expect(payment!.nextExpectedDate).toBeUndefined();
+  });
+
+  it('sorts active payments before inactive, then by amount descending', () => {
+    const activeTxns = Array.from({ length: 3 }, (_, i) =>
+      makeTransaction({
+        id: `active${i}`,
+        description: 'ACTIVE SMALL',
+        amount: 100,
+        type: TransactionType.Debit,
+        date: new Date(2026, i, 1),
+        category: makeCategory('entertainment'),
+      })
+    );
+    const inactiveTxns = Array.from({ length: 3 }, (_, i) =>
+      makeTransaction({
+        id: `inactive${i}`,
+        description: 'INACTIVE LARGE',
+        amount: 999,
+        type: TransactionType.Debit,
+        date: new Date(2023, i, 1),
+        category: makeCategory('entertainment'),
+      })
+    );
+    const result = detectRecurringPayments([...activeTxns, ...inactiveTxns]);
+    expect(result.length).toBeGreaterThanOrEqual(2);
+    const activeOnes = result.filter(r => r.isActive);
+    const inactiveOnes = result.filter(r => !r.isActive);
+    expect(activeOnes.length).toBeGreaterThan(0);
+    expect(inactiveOnes.length).toBeGreaterThan(0);
+    // Active comes before inactive in the sorted result
+    const firstInactiveIdx = result.findIndex(r => !r.isActive);
+    const lastActiveIdx = result.length - 1 - [...result].reverse().findIndex(r => r.isActive);
+    expect(firstInactiveIdx).toBeGreaterThan(lastActiveIdx);
+  });
+
+  it('skips groups below minOccurrences', () => {
+    const txns = [
+      makeTransaction({
+        id: 'single',
+        description: 'LONE TRANSACTION',
+        amount: 100,
+        type: TransactionType.Debit,
+        date: new Date(2024, 0, 1),
+        category: makeCategory('other'),
+      }),
+    ];
+    const result = detectRecurringPayments(txns);
+    expect(result).toHaveLength(0);
+  });
+
+  it('skips groups where confidence is below threshold', () => {
+    const txns = [
+      makeTransaction({ id: '1', description: 'VARIABLE', amount: 100, type: TransactionType.Debit, date: new Date(2024, 0, 1), category: makeCategory('other') }),
+      makeTransaction({ id: '2', description: 'VARIABLE', amount: 999, type: TransactionType.Debit, date: new Date(2024, 1, 1), category: makeCategory('other') }),
+      makeTransaction({ id: '3', description: 'VARIABLE', amount: 50, type: TransactionType.Debit, date: new Date(2024, 2, 1), category: makeCategory('other') }),
+      makeTransaction({ id: '4', description: 'VARIABLE', amount: 750, type: TransactionType.Debit, date: new Date(2024, 3, 1), category: makeCategory('other') }),
+      makeTransaction({ id: '5', description: 'VARIABLE', amount: 200, type: TransactionType.Debit, date: new Date(2024, 4, 1), category: makeCategory('other') }),
+      makeTransaction({ id: '6', description: 'VARIABLE', amount: 880, type: TransactionType.Debit, date: new Date(2024, 5, 1), category: makeCategory('other') }),
+    ];
+    const result = detectRecurringPayments(txns, { ...DEFAULT_DETECTION_CONFIG, excludeVariableAmounts: true });
+    expect(result).toHaveLength(0);
+  });
+
+  it('skips groups where no frequency is detected', () => {
+    const txns = [
+      makeTransaction({ id: '1', description: 'ERRATIC', amount: 100, type: TransactionType.Debit, date: new Date(2024, 0, 1), category: makeCategory('other') }),
+      makeTransaction({ id: '2', description: 'ERRATIC', amount: 100, type: TransactionType.Debit, date: new Date(2024, 0, 3), category: makeCategory('other') }),
+      makeTransaction({ id: '3', description: 'ERRATIC', amount: 100, type: TransactionType.Debit, date: new Date(2024, 1, 15), category: makeCategory('other') }),
+      makeTransaction({ id: '4', description: 'ERRATIC', amount: 100, type: TransactionType.Debit, date: new Date(2024, 3, 5), category: makeCategory('other') }),
+    ];
+    const result = detectRecurringPayments(txns);
+    expect(result).toHaveLength(0);
+  });
+
+  it('uses latest amount for amount field, average for averageAmount', () => {
+    const txns = [
+      makeTransaction({ id: '1', description: 'VARYING', amount: 100, type: TransactionType.Debit, date: new Date(2024, 0, 1), category: makeCategory('other') }),
+      makeTransaction({ id: '2', description: 'VARYING', amount: 100, type: TransactionType.Debit, date: new Date(2024, 1, 1), category: makeCategory('other') }),
+      makeTransaction({ id: '3', description: 'VARYING', amount: 200, type: TransactionType.Debit, date: new Date(2024, 2, 1), category: makeCategory('other') }),
+      makeTransaction({ id: '4', description: 'VARYING', amount: 200, type: TransactionType.Debit, date: new Date(2024, 3, 1), category: makeCategory('other') }),
+    ];
+    const result = detectRecurringPayments(txns, { ...DEFAULT_DETECTION_CONFIG, excludeVariableAmounts: false });
+    expect(result.length).toBeGreaterThan(0);
+    expect(result[0].amount).toBe(200); // latest
+    expect(result[0].averageAmount).toBe(150); // (100+100+200+200)/4
+  });
+
+  it('extracts category from first transaction', () => {
+    const txns = Array.from({ length: 4 }, (_, i) =>
+      makeTransaction({
+        id: `cat${i}`,
+        description: 'CATEGORIZED',
+        amount: 100,
+        type: TransactionType.Debit,
+        date: new Date(2024, i, 1),
+        category: makeCategory('entertainment'),
+      })
+    );
+    const result = detectRecurringPayments(txns);
+    expect(result.length).toBeGreaterThan(0);
+    expect(result[0].category).toBe('entertainment');
+  });
+
+  it('falls back to uncategorized when category is missing', () => {
+    const txns = Array.from({ length: 4 }, (_, i) =>
+      makeTransaction({
+        id: `nocat${i}`,
+        description: 'NO CATEGORY',
+        amount: 100,
+        type: TransactionType.Debit,
+        date: new Date(2024, i, 1),
+        category: makeCategory(''), // empty id triggers fallback in detector
+      })
+    );
+    const result = detectRecurringPayments(txns);
+    expect(result.length).toBeGreaterThan(0);
+    expect(result[0].category).toBe('uncategorized');
+  });
+
+  it('only considers expense transactions for recurring detection', () => {
+    // Same merchant, same amounts, but mix of expense (debit) and income (credit).
+    // groupTransactionsByMerchant filters to isExpense, so credit transactions
+    // should not inflate the group or create a recurring payment from income.
+    const txns = [
+      ...Array.from({ length: 3 }, (_, i) =>
+        makeTransaction({
+          id: `exp${i}`,
+          description: 'NETFLIX SUBSCRIPTION',
+          amount: 499,
+          type: TransactionType.Debit,
+          date: new Date(2024, i, 5),
+          category: makeCategory('entertainment'),
+        })
+      ),
+      ...Array.from({ length: 3 }, (_, i) =>
+        makeTransaction({
+          id: `inc${i}`,
+          description: 'NETFLIX SUBSCRIPTION',
+          amount: 499,
+          type: TransactionType.Credit,
+          date: new Date(2024, i, 15),
+          category: makeCategory('entertainment', CategoryType.Income),
+        })
+      ),
+    ];
+    const result = detectRecurringPayments(txns);
+    // Only the 3 expense transactions form a group; 3 occurrences meet minOccurrences.
+    expect(result.length).toBe(1);
+    // Verify it only counted expense transactions by checking the amount list
+    expect(result[0].occurrenceCount).toBe(3);
+  });
 });
 
 describe('getMonthlyAmount', () => {
@@ -273,5 +457,52 @@ describe('predictNextDate', () => {
     const lastSeen = new Date(2024, 5, 15); // Jun 15
     const result = predictNextDate(lastSeen, 'yearly');
     expect(result).toEqual(new Date(2025, 5, 15)); // Jun 15 next year
+  });
+
+  it('handles month-end overflow for Jan 31 + 1 month (leap year)', () => {
+    const lastSeen = new Date(2024, 0, 31); // Jan 31, 2024 (leap year)
+    const result = predictNextDate(lastSeen, 'monthly');
+    // JS Date: Jan 31 + setMonth(1) = Mar 2 (Feb has 29 days in 2024)
+    expect(result).toEqual(new Date(2024, 2, 2));
+  });
+
+  it('handles month-end overflow for Mar 31 + 1 month', () => {
+    const lastSeen = new Date(2024, 2, 31); // Mar 31
+    const result = predictNextDate(lastSeen, 'monthly');
+    // JS Date: Mar 31 + setMonth(3) = May 1 (Apr has 30 days)
+    expect(result).toEqual(new Date(2024, 4, 1));
+  });
+
+  it('handles year boundary Dec 31 + 1 month', () => {
+    const lastSeen = new Date(2024, 11, 31); // Dec 31, 2024
+    const result = predictNextDate(lastSeen, 'monthly');
+    expect(result).toEqual(new Date(2025, 0, 31)); // Jan 31, 2025
+  });
+
+  it('handles leap year Feb 29 + 1 year (non-leap result)', () => {
+    const lastSeen = new Date(2024, 1, 29); // Feb 29, 2024 (leap year)
+    const result = predictNextDate(lastSeen, 'yearly');
+    // JS Date: setFullYear(2025) on Feb 29 = Mar 1, 2025 (2025 not a leap year)
+    expect(result).toEqual(new Date(2025, 2, 1));
+  });
+
+  it('handles leap year Feb 29 + 1 month', () => {
+    const lastSeen = new Date(2024, 1, 29); // Feb 29
+    const result = predictNextDate(lastSeen, 'monthly');
+    expect(result).toEqual(new Date(2024, 2, 29)); // Mar 29
+  });
+
+  it('accepts string date input', () => {
+    const result = predictNextDate('2024-01-15', 'monthly');
+    expect(result.getFullYear()).toBe(2024);
+    expect(result.getMonth()).toBe(1); // February
+    expect(result.getDate()).toBe(15);
+  });
+
+  it('quarterly from Nov 30 rolls correctly', () => {
+    const lastSeen = new Date(2024, 10, 30); // Nov 30, 2024
+    const result = predictNextDate(lastSeen, 'quarterly');
+    // Nov 30 + 3 months = Feb 30 → Mar 2 (Feb has 28 days in 2025)
+    expect(result).toEqual(new Date(2025, 2, 2));
   });
 });

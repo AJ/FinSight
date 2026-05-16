@@ -263,6 +263,10 @@ describe('applyMerchantRuleDecision', () => {
   });
 });
 
+function makeCategory(id: string): Category {
+  return Category.fromId(id)!;
+}
+
 function makeRule(overrides: Partial<MerchantRule>): MerchantRule {
   return {
     merchantKey: 'AMAZON',
@@ -344,6 +348,54 @@ describe('getMerchantRuleDecision', () => {
     expect(decision).not.toBeNull();
     expect(decision!.categoryId).toBe('shopping');
     expect(decision!.sampleDescription).toBe('AMAZON PURCHASE');
+  });
+
+  it('returns null when merchant key normalizes to empty', () => {
+    const result = getMerchantRuleDecision({
+      description: 'UPI 1234567890',
+      merchant: 'UPI 1234567890',
+      type: TransactionType.Debit,
+      sourceType: 'bank',
+      category: makeCategory('other'),
+    });
+    // buildMerchantKey strips "UPI" prefix and 6+ digit numbers, leaving empty
+    expect(result).toBeNull();
+  });
+
+  it('falls back to description when merchant is undefined', () => {
+    const result = getMerchantRuleDecision({
+      description: 'AMAZON INDIA',
+      merchant: undefined,
+      type: TransactionType.Debit,
+      sourceType: 'bank',
+      category: makeCategory('shopping'),
+    });
+    expect(result).not.toBeNull();
+    expect(result!.merchantKey).toContain('AMAZON');
+  });
+
+  it('defaults sourceType to "any" when undefined', () => {
+    const result = getMerchantRuleDecision({
+      description: 'NETFLIX',
+      merchant: 'NETFLIX',
+      type: TransactionType.Debit,
+      sourceType: undefined,
+      category: makeCategory('entertainment'),
+    });
+    expect(result).not.toBeNull();
+    expect(result!.sourceType).toBe('any');
+  });
+
+  it('preserves raw description in sampleDescription', () => {
+    const result = getMerchantRuleDecision({
+      description: 'NETFLIX SUBSCRIPTION PAYMENT',
+      merchant: 'NETFLIX',
+      type: TransactionType.Debit,
+      sourceType: 'bank',
+      category: makeCategory('entertainment'),
+    });
+    expect(result).not.toBeNull();
+    expect(result!.sampleDescription).toBe('NETFLIX SUBSCRIPTION PAYMENT');
   });
 });
 
