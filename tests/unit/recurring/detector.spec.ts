@@ -13,7 +13,7 @@ import {
   predictNextDate,
 } from '@/lib/recurring/detector';
 import { TransactionType, CategoryType } from '@/types';
-import type { RecurringPayment, DetectionConfig, Frequency } from '@/lib/recurring/types';
+import type { RecurringPayment, DetectionConfig } from '@/lib/recurring/types';
 import { DEFAULT_DETECTION_CONFIG } from '@/lib/recurring/types';
 import { makeTransaction, makeCategory } from '@tests/unit/factories';
 
@@ -492,8 +492,8 @@ describe('predictNextDate', () => {
     expect(result).toEqual(new Date(2024, 2, 29)); // Mar 29
   });
 
-  it('accepts string date input', () => {
-    const result = predictNextDate('2024-01-15', 'monthly');
+  it('predicts monthly from a mid-month date', () => {
+    const result = predictNextDate(new Date(2024, 0, 15), 'monthly');
     expect(result.getFullYear()).toBe(2024);
     expect(result.getMonth()).toBe(1); // February
     expect(result.getDate()).toBe(15);

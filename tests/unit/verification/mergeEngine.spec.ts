@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { mergeOutputs } from '@/lib/verification/mergeEngine';
+import { mergeChunkTransactions } from '@/lib/parsers/transactionChunking';
 import type { BankSummary, CCSummary } from '@/lib/parsers/extractSummary';
 import { makeExtractedTransaction as makeTxn } from '@tests/unit/factories';
 
@@ -305,5 +306,93 @@ describe('mergeOutputs — derived totals computation', () => {
     expect(result.derived.totalDebit).toBe(0);
     expect(result.derived.totalCredit).toBe(0);
     expect(result.derived.transactionCount).toBe(0);
+  });
+});
+
+describe('mergeOutputs — chunk overlap amount conflicts', () => {
+  it('mergeEngine does not flag amount-conflicting transactions as near-duplicates', () => {
+    // Tests mergeEngine's near-duplicate detection specifically — it uses <0.01 tolerance.
+    // Amount conflicts are now resolved upstream by mergeChunkTransactions,
+    // but if they reach mergeEngine directly, they should not be conflated.
+    const txn1 = makeTxn({ description: 'AMAZON RETAIL', amount: 1299, type: 'debit', date: '2024-01-15' });
+    const txn2 = makeTxn({ description: 'AMAZON RETAIL', amount: 1399, type: 'debit', date: '2024-01-15' });
+
+    const result = mergeOutputs('bank', null, { transactions: [txn1, txn2] }, null, []);
+
+    // mergeEngine's near-duplicate uses <0.01 amount tolerance → 100 diff → not flagged
+    expect(result.transactions).toHaveLength(2);
+    expect(result.meta.warnings.some(w => w.includes('potential duplicate'))).toBe(false);
+  });
+
+  it('flags near-duplicate when amounts differ by less than 0.01', () => {
+    // 1299.00 vs 1299.009 → diff = 0.009 < 0.01 threshold
+    const txn1 = makeTxn({ description: 'AMAZON RETAIL', amount: 1299.00, type: 'debit', date: '2024-01-15' });
+    const txn2 = makeTxn({ description: 'AMAZON RETAIL', amount: 1299.009, type: 'debit', date: '2024-01-15' });
+
+    const result = mergeOutputs('bank', null, { transactions: [txn1, txn2] }, null, []);
+
+    expect(result.transactions).toHaveLength(2); // kept all
+    expect(result.meta.warnings.some(w => w.includes('potential duplicate'))).toBe(true);
+  });
+
+  it('amounts clearly above 0.01 threshold are not near-duplicates', () => {
+    // 1299 vs 1300 → diff = 1.0, clearly above the 0.01 threshold
+    // Note: exact 0.01 boundary is unreliable due to IEEE 754 floating point
+    // (1299.01 - 1299.00 can evaluate to < 0.01 in JS)
+    const txn1 = makeTxn({ description: 'AMAZON RETAIL', amount: 1299, type: 'debit', date: '2024-01-15' });
+    const txn2 = makeTxn({ description: 'AMAZON RETAIL', amount: 1300, type: 'debit', date: '2024-01-15' });
+
+    const result = mergeOutputs('bank', null, { transactions: [txn1, txn2] }, null, []);
+
+    expect(result.transactions).toHaveLength(2);
+    expect(result.meta.warnings.some(w => w.includes('potential duplicate'))).toBe(false);
+  });
+
+  it('chunk overlap amount conflict is resolved at chunk merge layer', () => {
+    // Full pipeline: chunk merge → mergeOutputs
+    const chunk1Results = [
+      makeTxn({ description: 'AMAZON RETAIL', amount: 1299, type: 'debit', date: '2024-01-15', confidence: 0.7 }),
+    ];
+    const chunk2Results = [
+      makeTxn({ description: 'AMAZON RETAIL', amount: 1399, type: 'debit', date: '2024-01-15', confidence: 0.9 }),
+    ];
+
+    // Layer 1: mergeChunkTransactions resolves the amount conflict
+    const merged = mergeChunkTransactions([...chunk1Results, ...chunk2Results]);
+    expect(merged.transactions).toHaveLength(1);
+    expect(merged.conflictsResolved).toBe(1);
+    expect(merged.transactions[0].amount).toBe(1399); // higher confidence wins
+    expect(merged.transactions[0].confidence).toBe(0.9);
+
+    // Layer 2: mergeOutputs sees a single clean transaction
+    const result = mergeOutputs('bank', null, { transactions: merged.transactions }, null, []);
+    expect(result.transactions).toHaveLength(1);
+    expect(result.meta.warnings.some(w => w.includes('potential duplicate'))).toBe(false);
+  });
+
+  it('identical overlap transactions are deduped at chunk level', () => {
+    // When both chunks agree on amount, chunk merge deduplicates correctly
+    const chunk1Results = [
+      makeTxn({ description: 'AMAZON RETAIL', amount: 1299, type: 'debit', date: '2024-01-15', confidence: 0.7 }),
+    ];
+    const chunk2Results = [
+      makeTxn({ description: 'AMAZON RETAIL', amount: 1299, type: 'debit', date: '2024-01-15', confidence: 0.9 }),
+    ];
+
+    const merged = mergeChunkTransactions([...chunk1Results, ...chunk2Results]);
+    expect(merged.transactions).toHaveLength(1);
+    expect(merged.duplicatesRemoved).toBe(1);
+    expect(merged.transactions[0].confidence).toBe(0.9); // kept higher confidence
+  });
+
+  it('description similarity alone is insufficient without amount match', () => {
+    // Identical description + same date, but different amounts → no near-duplicate flag
+    const txn1 = makeTxn({ description: 'SWIGGY ORDER #12345', amount: 450, type: 'debit', date: '2024-01-15' });
+    const txn2 = makeTxn({ description: 'SWIGGY ORDER #12345', amount: 550, type: 'debit', date: '2024-01-15' });
+
+    const result = mergeOutputs('bank', null, { transactions: [txn1, txn2] }, null, []);
+
+    expect(result.transactions).toHaveLength(2);
+    expect(result.meta.warnings.some(w => w.includes('potential duplicate'))).toBe(false);
   });
 });

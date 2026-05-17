@@ -110,7 +110,7 @@ test.describe('Cross-file Duplicate Detection', () => {
       localCurrency: { code: 'INR', symbol: '₹', name: 'Indian Rupee' },
     };
 
-    await context.addInitScript(({ hash, txn }: { hash: string; txn: object }) => {
+    await context.addInitScript(({ txn }: { hash: string; txn: object }) => {
       const storage = {
         state: {
           transactions: [txn],

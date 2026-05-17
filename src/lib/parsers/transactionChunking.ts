@@ -1,4 +1,5 @@
 import type { ExtractedTransaction } from '@/types/extractedTransaction';
+import { debugLog } from '@/lib/utils/debug';
 
 const CHUNK_TRIGGER_CHAR_THRESHOLD = 12000;
 const CHUNK_TRIGGER_LINE_THRESHOLD = 250;
@@ -41,6 +42,7 @@ export interface ChunkRunDiagnostics {
 export interface MergedChunkTransactions {
   transactions: ExtractedTransaction[];
   duplicatesRemoved: number;
+  conflictsResolved: number;
 }
 
 export function createTransactionChunkPlan(normalizedText: string): TransactionChunkPlan {
@@ -145,7 +147,17 @@ function getConfidence(tx: ExtractedTransaction): number {
   return typeof tx.confidence === 'number' ? tx.confidence : -1;
 }
 
+function buildConflictKey(tx: ExtractedTransaction): string {
+  return [
+    tx.date ?? '',
+    tx.type ?? '',
+    normalizeDescription(tx.description),
+    tx.originalCurrency ?? '',
+  ].join('|');
+}
+
 export function mergeChunkTransactions(transactions: ExtractedTransaction[]): MergedChunkTransactions {
+  // Pass 1: Exact signature dedup
   const bySignature = new Map<string, ExtractedTransaction>();
   let duplicatesRemoved = 0;
 
@@ -159,14 +171,56 @@ export function mergeChunkTransactions(transactions: ExtractedTransaction[]): Me
     }
 
     duplicatesRemoved++;
+    const kept = getConfidence(tx) > getConfidence(existing) ? tx : existing;
+    const dropped = kept === tx ? existing : tx;
+    debugLog('chunkMerge', [
+      'Duplicate from chunk overlap: same transaction extracted by multiple chunks',
+      `  Kept:    ${kept.date} | ${kept.description} | ${kept.amount} ${kept.type} | confidence ${getConfidence(kept)}`,
+      `  Dropped: ${dropped.date} | ${dropped.description} | ${dropped.amount} ${dropped.type} | confidence ${getConfidence(dropped)}`,
+    ].join('\n'));
     if (getConfidence(tx) > getConfidence(existing)) {
       bySignature.set(signature, tx);
     }
   }
 
+  // Pass 2: Conflict resolution for chunk overlap.
+  // Same date + type + description but different amount means the LLM
+  // extracted the same overlap-zone transaction inconsistently across chunks.
+  // Keep the higher-confidence extraction.
+  const byConflictKey = new Map<string, ExtractedTransaction[]>();
+  for (const tx of bySignature.values()) {
+    const key = buildConflictKey(tx);
+    const group = byConflictKey.get(key) ?? [];
+    group.push(tx);
+    byConflictKey.set(key, group);
+  }
+
+  const result: ExtractedTransaction[] = [];
+  let conflictsResolved = 0;
+
+  for (const group of byConflictKey.values()) {
+    if (group.length === 1) {
+      result.push(group[0]);
+      continue;
+    }
+
+    conflictsResolved += group.length - 1;
+    const winner = group.reduce((best, tx) =>
+      getConfidence(tx) > getConfidence(best) ? tx : best,
+    );
+    const losers = group.filter(tx => tx !== winner);
+    debugLog('chunkMerge', [
+      'Amount conflict from chunk overlap: same transaction extracted with different amounts',
+      `  Kept:    ${winner.date} | ${winner.description} | ${winner.amount} ${winner.type} | confidence ${getConfidence(winner)}`,
+      ...losers.map(t => `  Dropped: ${t.date} | ${t.description} | ${t.amount} ${t.type} | confidence ${getConfidence(t)}`),
+    ].join('\n'));
+    result.push(winner);
+  }
+
   return {
-    transactions: [...bySignature.values()],
+    transactions: result,
     duplicatesRemoved,
+    conflictsResolved,
   };
 }
 

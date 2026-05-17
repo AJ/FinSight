@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState, useEffect } from "react";
+import { useMemo, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Slider } from "@/components/ui/slider";
@@ -134,10 +134,14 @@ interface CardProjectionProps {
 
 function CardProjection({ projection, currency, isExpanded, onToggle }: CardProjectionProps) {
   const [selectedPayment, setSelectedPayment] = useState(projection.minimumDue);
+  const [prevMinimumDue, setPrevMinimumDue] = useState(projection.minimumDue);
 
-  useEffect(() => {
+  // Sync local state when projection changes (e.g., user edits statement data)
+  // https://react.dev/learn/you-might-not-need-an-effect#adjusting-some-state-when-a-prop-changes
+  if (prevMinimumDue !== projection.minimumDue) {
+    setPrevMinimumDue(projection.minimumDue);
     setSelectedPayment(projection.minimumDue);
-  }, [projection.minimumDue]);
+  }
 
   const formatAPR = (apr: number) => `${(apr * 100).toFixed(1)}% APR`;
 

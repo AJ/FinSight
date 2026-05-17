@@ -355,7 +355,7 @@ describe('getMerchantRuleDecision', () => {
       description: 'UPI 1234567890',
       merchant: 'UPI 1234567890',
       type: TransactionType.Debit,
-      sourceType: 'bank',
+      sourceType: SourceType.Bank,
       category: makeCategory('other'),
     });
     // buildMerchantKey strips "UPI" prefix and 6+ digit numbers, leaving empty
@@ -367,7 +367,7 @@ describe('getMerchantRuleDecision', () => {
       description: 'AMAZON INDIA',
       merchant: undefined,
       type: TransactionType.Debit,
-      sourceType: 'bank',
+      sourceType: SourceType.Bank,
       category: makeCategory('shopping'),
     });
     expect(result).not.toBeNull();
@@ -391,7 +391,7 @@ describe('getMerchantRuleDecision', () => {
       description: 'NETFLIX SUBSCRIPTION PAYMENT',
       merchant: 'NETFLIX',
       type: TransactionType.Debit,
-      sourceType: 'bank',
+      sourceType: SourceType.Bank,
       category: makeCategory('entertainment'),
     });
     expect(result).not.toBeNull();

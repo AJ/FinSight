@@ -4,6 +4,7 @@ import {
   parseCategorizationResponse,
   normalizeCategoryId,
 } from '@/lib/categorization/prompts';
+import { SourceType } from '@/types';
 
 describe('buildCategorizationPrompt', () => {
   it('includes all transaction descriptions', () => {
@@ -40,7 +41,7 @@ describe('buildCategorizationPrompt', () => {
 
   it('includes sourceType in payload when present', () => {
     const transactions = [
-      { id: '1', description: 'AMAZON', amount: 100, type: 'debit' as const, sourceType: 'bank' },
+      { id: '1', description: 'AMAZON', amount: 100, type: 'debit' as const, sourceType: SourceType.Bank },
     ];
     const result = buildCategorizationPrompt(transactions);
     expect(result).toContain('"sourceType":"bank"');
@@ -48,10 +49,10 @@ describe('buildCategorizationPrompt', () => {
 
   it('includes transactionSubType in payload when present', () => {
     const transactions = [
-      { id: '1', description: 'NETFLIX', amount: 15, type: 'debit' as const, transactionSubType: 'recurring' },
+      { id: '1', description: 'NETFLIX', amount: 15, type: 'debit' as const, transactionSubType: 'bill_payment' as const },
     ];
     const result = buildCategorizationPrompt(transactions);
-    expect(result).toContain('"transactionSubType":"recurring"');
+    expect(result).toContain('"transactionSubType":"bill_payment"');
   });
 
   it('omits sourceType from transaction payload when not provided', () => {

@@ -278,13 +278,16 @@ describe('mergeChunkTransactions', () => {
     expect(mergeChunkTransactions(txns).transactions).toHaveLength(2);
   });
 
-  it('treats different amounts as distinct', () => {
-    const txns = [
-      makeTx({ date: '2024-01-15', description: 'Amazon', amount: 50, type: 'debit' }),
-      makeTx({ date: '2024-01-15', description: 'Amazon', amount: 75, type: 'debit' }),
-    ];
+  it('resolves amount conflicts from chunk overlap (same date/type/description, different amount)', () => {
+    const txLow = makeTx({ date: '2024-01-15', description: 'Amazon', amount: 50, type: 'debit', confidence: 0.7 });
+    const txHigh = makeTx({ date: '2024-01-15', description: 'Amazon', amount: 75, type: 'debit', confidence: 0.95 });
 
-    expect(mergeChunkTransactions(txns).transactions).toHaveLength(2);
+    const result = mergeChunkTransactions([txLow, txHigh]);
+
+    expect(result.transactions).toHaveLength(1);
+    expect(result.transactions[0].amount).toBe(75);
+    expect(result.conflictsResolved).toBe(1);
+    expect(result.duplicatesRemoved).toBe(0);
   });
 
   it('normalizes description whitespace and case', () => {
@@ -317,12 +320,27 @@ describe('mergeChunkTransactions', () => {
     expect(mergeChunkTransactions([txA, txB]).transactions).toHaveLength(2);
   });
 
-  it('treats originalAmount:0 as distinct from missing originalAmount', () => {
-    // Signature includes originalAmount: String(0) = '0' vs missing = ''
-    const txA = makeTx({ date: '2024-01-15', description: 'Hotel', amount: 150, type: 'debit', originalAmount: 0 });
-    const txB = makeTx({ date: '2024-01-15', description: 'Hotel', amount: 150, type: 'debit' });
+  it('resolves amount conflict when both transactions have same explicit originalCurrency', () => {
+    const txA = makeTx({ date: '2024-01-15', description: 'Hotel Paris', amount: 150, type: 'debit', originalCurrency: 'USD', originalAmount: 180, confidence: 0.6 });
+    const txB = makeTx({ date: '2024-01-15', description: 'Hotel Paris', amount: 175, type: 'debit', originalCurrency: 'USD', originalAmount: 210, confidence: 0.9 });
 
-    expect(mergeChunkTransactions([txA, txB]).transactions).toHaveLength(2);
+    const result = mergeChunkTransactions([txA, txB]);
+    expect(result.transactions).toHaveLength(1);
+    expect(result.conflictsResolved).toBe(1);
+    expect(result.transactions[0].amount).toBe(175);
+    expect(result.transactions[0].originalCurrency).toBe('USD');
+  });
+
+  it('resolves originalAmount:0 vs missing as overlap conflict (same amount, different originalAmount)', () => {
+    // Exact signatures differ (originalAmount: '0' vs ''), but conflict key matches
+    // — the LLM disagreed on originalAmount for the same overlap-zone transaction
+    const txA = makeTx({ date: '2024-01-15', description: 'Hotel', amount: 150, type: 'debit', originalAmount: 0, confidence: 0.7 });
+    const txB = makeTx({ date: '2024-01-15', description: 'Hotel', amount: 150, type: 'debit', confidence: 0.9 });
+
+    const result = mergeChunkTransactions([txA, txB]);
+    expect(result.transactions).toHaveLength(1);
+    expect(result.conflictsResolved).toBe(1);
+    expect(result.transactions[0].confidence).toBe(0.9);
   });
 
   it('deduplicates transactions with same originalAmount', () => {

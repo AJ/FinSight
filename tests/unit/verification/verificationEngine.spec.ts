@@ -4,8 +4,6 @@ import type { ExtractedTransaction } from '@/types/extractedTransaction';
 import type { CCSummary, BankSummary } from '@/lib/parsers/extractSummary';
 import { makeTransaction } from '@tests/unit/factories';
 
-const USD_CURRENCY = { code: 'USD', symbol: '$', name: 'US Dollar' };
-
 describe('verifyStatement — bank verification', () => {
   const rawText = `
     Date        Description                Debit       Credit      Balance

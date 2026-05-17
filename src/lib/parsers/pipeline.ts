@@ -428,6 +428,7 @@ async function runTransactionExtraction(
     extractedBeforeDedupe: allTransactions.length,
     extractedAfterDedupe: mergedTransactions.transactions.length,
     duplicatesRemoved: mergedTransactions.duplicatesRemoved,
+    conflictsResolved: mergedTransactions.conflictsResolved,
     diagnostics,
   });
 
@@ -446,6 +447,12 @@ async function runTransactionExtraction(
     mergedWarnings.push(...mergedValidation.errors);
   }
 
+  if (mergedTransactions.conflictsResolved > 0) {
+    mergedWarnings.push(
+      `Chunk overlap: resolved ${mergedTransactions.conflictsResolved} amount conflict(s) — same transaction extracted with different amounts across chunks, kept higher-confidence extraction`,
+    );
+  }
+
   return {
     success: hasUsableData || mergedErrors.length === 0,
     data: mergedValidation.data,
@@ -461,6 +468,7 @@ async function runTransactionExtraction(
       extractedBeforeDedupe: allTransactions.length,
       extractedAfterDedupe: mergedTransactions.transactions.length,
       duplicatesRemoved: mergedTransactions.duplicatesRemoved,
+      conflictsResolved: mergedTransactions.conflictsResolved,
       diagnostics,
     },
   };
