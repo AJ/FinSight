@@ -218,6 +218,60 @@ describe('createTransactionChunkPlan', () => {
     expect(plan.chunks).toHaveLength(1);
     expect(plan.chunks[0].text).toBe(text);
   });
+
+  describe('dynamic thresholds from contextWindowTokens', () => {
+    it('uses dynamic thresholds when contextWindowTokens provided', () => {
+      // 16K context: budgetTokens = (16000 - 2000) / 2.5 = 5600
+      // budgetChars = 5600 * 3.5 = 19600
+      // budgetLines = 19600 / 55 ≈ 356
+      const text = makeLines(360, 'y'.repeat(60));
+      const plan = createTransactionChunkPlan(text, 16000);
+
+      expect(plan.chunkingUsed).toBe(true);
+      expect(plan.contextWindowTokens).toBe(16000);
+    });
+
+    it('falls back to static thresholds when contextWindowTokens undefined', () => {
+      const text = makeLines(260);
+      const plan = createTransactionChunkPlan(text);
+
+      expect(plan.chunkingUsed).toBe(true);
+      expect(plan.chunkTriggerReason).toBe('line_threshold');
+      expect(plan.contextWindowTokens).toBeUndefined();
+    });
+
+    it('clamps minimum budget for very small context windows', () => {
+      // 4K context: budgetTokens = max((4096 - 2000) / 2.5, 500) = max(838, 500) = 838
+      // budgetChars = 838 * 3.5 = 2933
+      // budgetLines = 2933 / 55 ≈ 53
+      // Need text exceeding 53 lines or 2933 chars
+      const text = makeLines(60, 'z'.repeat(55));
+      const plan = createTransactionChunkPlan(text, 4096);
+
+      expect(plan.chunkingUsed).toBe(true);
+      expect(plan.contextWindowTokens).toBe(4096);
+    });
+
+    it('sizes chunks using dynamic target line count', () => {
+      // 16K context: target ≈ 356 lines
+      // 400 lines with overlap 12 → 2 chunks
+      const text = makeLines(400, 'a'.repeat(60));
+      const plan = createTransactionChunkPlan(text, 16000);
+
+      expect(plan.chunkingUsed).toBe(true);
+      expect(plan.chunks.length).toBeGreaterThanOrEqual(2);
+    });
+
+    it('stays single-shot when dynamic thresholds are not exceeded', () => {
+      // 128K context: huge budget, text is tiny
+      const text = makeLines(50);
+      const plan = createTransactionChunkPlan(text, 128000);
+
+      expect(plan.chunkingUsed).toBe(false);
+      expect(plan.chunkTriggerReason).toBe('single_shot');
+      expect(plan.contextWindowTokens).toBe(128000);
+    });
+  });
 });
 
 describe('mergeChunkTransactions', () => {

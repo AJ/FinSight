@@ -67,8 +67,16 @@ async function fetchModelContextLength(
 
 export const ollamaAdapter: LLMAdapter = {
   async generate(baseUrl, model, prompt, options) {
-    const numPredict = options.maxTokens ?? 4096;
     const { num_ctx: numCtx = 8192, keep_alive: keepAlive = '10m', top_p: topP } = extractOllamaExtra(options.extra);
+
+    const ollamaOptions: Record<string, unknown> = {
+      num_ctx: numCtx,
+      temperature: options.temperature,
+      ...(topP != null ? { top_p: topP } : {}),
+    };
+    if (options.maxTokens !== undefined) {
+      ollamaOptions.num_predict = options.maxTokens;
+    }
 
     const res = await fetch(`${baseUrl}/api/generate`, {
       method: 'POST',
@@ -80,12 +88,7 @@ export const ollamaAdapter: LLMAdapter = {
         stream: false,
         format: 'json',
         keep_alive: keepAlive,
-        options: {
-          num_ctx: numCtx,
-          num_predict: numPredict,
-          temperature: options.temperature,
-          ...(topP != null ? { top_p: topP } : {}),
-        },
+        options: ollamaOptions,
       }),
     });
 

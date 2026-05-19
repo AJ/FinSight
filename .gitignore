@@ -71,3 +71,5 @@ test-results/
 next-env.d.ts
 .github/
 .playwright-mcp/
+tests\fixtures\cc_statement.pdf
+tests/fixtures/cc_statement.pdf

@@ -99,7 +99,6 @@ describe('ollamaAdapter.generate', () => {
       keep_alive: '10m',
       options: {
         num_ctx: 8192,
-        num_predict: 4096,
         temperature: 0,
       },
     });
@@ -119,13 +118,13 @@ describe('ollamaAdapter.generate', () => {
     expect(body.options.num_predict).toBe(2048);
   });
 
-  it('defaults num_predict to 4096 when maxTokens absent', async () => {
+  it('omits num_predict when maxTokens not provided', async () => {
     mockFetch.mockResolvedValueOnce(okResponse({ response: 'ok' }));
 
     await ollamaAdapter.generate(baseUrl, model, 'prompt', defaultOptions());
 
     const body = JSON.parse(mockFetch.mock.calls[0][1].body);
-    expect(body.options.num_predict).toBe(4096);
+    expect(body.options.num_predict).toBeUndefined();
   });
 
   it('uses num_ctx from options.extra, defaults to 8192', async () => {

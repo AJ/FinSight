@@ -92,7 +92,7 @@ export function createClient(provider: LLMProvider): LLMClient {
   return {
     async generate(baseUrl, model, prompt, options?: LLMCallOptions): Promise<string> {
       const temperature = options?.temperature ?? 0;
-      const maxTokens = options?.maxTokens ?? 4096;
+      const maxTokens = options?.maxTokens;
       const stage = options?.stage ?? 'unknown';
       const fullPrompt = `${SYSTEM_PROMPT}\n\n${prompt}`;
 

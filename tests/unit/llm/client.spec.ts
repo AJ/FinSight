@@ -91,13 +91,13 @@ describe('createClient.generate', () => {
     expect(body.options.temperature).toBe(0.5);
   });
 
-  it('defaults maxTokens to 4096', async () => {
+  it('does not set maxTokens by default', async () => {
     mockFetch.mockResolvedValue(ollamaGenerateResponse('response'));
 
     await client.generate('http://localhost:11434', 'llama3', 'prompt');
 
     const body = JSON.parse(mockFetch.mock.calls[0][1].body);
-    expect(body.options.num_predict).toBe(4096);
+    expect(body.options.num_predict).toBeUndefined();
   });
 
   it('passes maxTokens from options', async () => {

@@ -6,11 +6,18 @@ const CHUNK_TRIGGER_LINE_THRESHOLD = 250;
 const CHUNK_TARGET_LINE_COUNT = 180;
 const CHUNK_OVERLAP_LINE_COUNT = 12;
 
+// Dynamic sizing constants — used when contextWindowTokens is provided
+const PROMPT_OVERHEAD_TOKENS = 2000;
+const CHUNK_SIZE_DIVISOR = 2.5;
+const CHARS_PER_TOKEN = 3.5;
+const AVG_CHARS_PER_LINE = 55;
+
 export interface TransactionChunkPlan {
   chunkingUsed: boolean;
   chunkTriggerReason: 'single_shot' | 'char_threshold' | 'line_threshold' | 'char_and_line_threshold';
   normalizedTextLength: number;
   normalizedLineCount: number;
+  contextWindowTokens?: number;
   chunks: TransactionChunk[];
 }
 
@@ -45,12 +52,33 @@ export interface MergedChunkTransactions {
   conflictsResolved: number;
 }
 
-export function createTransactionChunkPlan(normalizedText: string): TransactionChunkPlan {
+export function createTransactionChunkPlan(normalizedText: string, contextWindowTokens?: number): TransactionChunkPlan {
   const lines = normalizedText.split('\n');
   const normalizedTextLength = normalizedText.length;
   const normalizedLineCount = lines.length;
-  const exceedsCharThreshold = normalizedTextLength > CHUNK_TRIGGER_CHAR_THRESHOLD;
-  const exceedsLineThreshold = normalizedLineCount > CHUNK_TRIGGER_LINE_THRESHOLD;
+
+  let charThreshold: number;
+  let lineThreshold: number;
+  let targetLineCount: number;
+
+  if (contextWindowTokens) {
+    const budgetTokens = Math.max(
+      Math.floor((contextWindowTokens - PROMPT_OVERHEAD_TOKENS) / CHUNK_SIZE_DIVISOR),
+      500,
+    );
+    const budgetChars = Math.floor(budgetTokens * CHARS_PER_TOKEN);
+    const budgetLines = Math.floor(budgetChars / AVG_CHARS_PER_LINE);
+    charThreshold = budgetChars;
+    lineThreshold = budgetLines;
+    targetLineCount = budgetLines;
+  } else {
+    charThreshold = CHUNK_TRIGGER_CHAR_THRESHOLD;
+    lineThreshold = CHUNK_TRIGGER_LINE_THRESHOLD;
+    targetLineCount = CHUNK_TARGET_LINE_COUNT;
+  }
+
+  const exceedsCharThreshold = normalizedTextLength > charThreshold;
+  const exceedsLineThreshold = normalizedLineCount > lineThreshold;
 
   let chunkTriggerReason: TransactionChunkPlan['chunkTriggerReason'] = 'single_shot';
   if (exceedsCharThreshold && exceedsLineThreshold) {
@@ -67,6 +95,7 @@ export function createTransactionChunkPlan(normalizedText: string): TransactionC
       chunkTriggerReason,
       normalizedTextLength,
       normalizedLineCount,
+      contextWindowTokens,
       chunks: [
         {
           index: 0,
@@ -87,7 +116,7 @@ export function createTransactionChunkPlan(normalizedText: string): TransactionC
   let startLine = 0;
 
   while (startLine < lines.length) {
-    const endExclusive = Math.min(startLine + CHUNK_TARGET_LINE_COUNT, lines.length);
+    const endExclusive = Math.min(startLine + targetLineCount, lines.length);
     const chunkLines = lines.slice(startLine, endExclusive);
     const overlapStartLine = startLine === 0 ? null : startLine;
 
@@ -124,6 +153,7 @@ export function createTransactionChunkPlan(normalizedText: string): TransactionC
     chunkTriggerReason,
     normalizedTextLength,
     normalizedLineCount,
+    contextWindowTokens,
     chunks: finalizedChunks,
   };
 }

@@ -14,6 +14,7 @@ export interface RetryConfig {
   maxRetries: number;
   stage: string;
   maxTokens?: number;
+  contextWindowTokens?: number;
   onValidationFailure?: (parsed: unknown, errors: string[]) => void;
   signal?: AbortSignal;
   llmConfig: LLMRuntimeConfig;
@@ -97,7 +98,7 @@ export async function runWithRetry<T>(
         config.llmConfig.baseUrl,
         config.llmConfig.model,
         prompt,
-        { stage: config.stage, maxTokens: config.maxTokens ?? 4096, signal: config.signal },
+        { stage: config.stage, maxTokens: config.maxTokens, signal: config.signal },
       );
       lastRawOutput = rawResponse;
 
@@ -161,7 +162,15 @@ export async function runWithRetry<T>(
         throw extractErr;
       }
       errors.length = 0;
-      errors.push(`LLM call failed: ${extractErr instanceof Error ? extractErr.message : 'Unknown error'}`);
+      const msg = extractErr instanceof Error ? extractErr.message : 'Unknown error';
+      if (msg.toLowerCase().includes('context size')) {
+        const contextHint = config.contextWindowTokens
+          ? ` The model's context window is ${config.contextWindowTokens} tokens. Consider using a model with a larger context window.`
+          : ' Consider using a model with a larger context window.';
+        errors.push(`Statement too large for model context.${contextHint}`);
+      } else {
+        errors.push(`LLM call failed: ${msg}`);
+      }
     }
   }
 

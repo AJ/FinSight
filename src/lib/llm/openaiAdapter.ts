@@ -47,20 +47,30 @@ interface OpenAIModelEntry {
   loaded_instances?: { config?: { context_length?: number } }[];
 }
 
+interface NativeLMStudioModelEntry {
+  key?: string;
+  id?: string;
+  loaded_instances?: { config?: { context_length?: number } }[];
+}
+
 export function createOpenAIAdapter(config: OpenAIAdapterConfig): LLMAdapter {
   return {
     async generate(baseUrl, model, prompt, options) {
+      const body: Record<string, unknown> = {
+        model,
+        messages: [{ role: 'user', content: prompt }],
+        stream: false,
+        temperature: options.temperature,
+      };
+      if (options.maxTokens !== undefined) {
+        body.max_tokens = options.maxTokens;
+      }
+
       const res = await fetch(`${baseUrl}/v1/chat/completions`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         signal: options.signal,
-        body: JSON.stringify({
-          model,
-          messages: [{ role: 'user', content: prompt }],
-          stream: false,
-          temperature: options.temperature,
-          max_tokens: options.maxTokens ?? 4096,
-        }),
+        body: JSON.stringify(body),
       });
 
       if (!res.ok) {
@@ -78,17 +88,21 @@ export function createOpenAIAdapter(config: OpenAIAdapterConfig): LLMAdapter {
     },
 
     async *chatStream(baseUrl, model, messages, options) {
+      const body: Record<string, unknown> = {
+        model,
+        messages,
+        stream: true,
+        temperature: options.temperature,
+      };
+      if (options.maxTokens !== undefined) {
+        body.max_tokens = options.maxTokens;
+      }
+
       const res = await fetch(`${baseUrl}/v1/chat/completions`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         signal: options.signal,
-        body: JSON.stringify({
-          model,
-          messages,
-          stream: true,
-          temperature: options.temperature,
-          max_tokens: options.maxTokens ?? 4096,
-        }),
+        body: JSON.stringify(body),
       });
 
       if (!res.ok) {
@@ -135,6 +149,24 @@ export function createOpenAIAdapter(config: OpenAIAdapterConfig): LLMAdapter {
     },
 
     async listModels(baseUrl, signal) {
+      // Try native LM Studio API for richer model info (context_length)
+      try {
+        const res = await fetch(`${baseUrl}/api/v1/models`, { signal, cache: 'no-store' });
+        if (res.ok) {
+          const data = await res.json();
+          const models = data.models || [];
+          if (models.length > 0) {
+            return models.map((m: NativeLMStudioModelEntry) => ({
+              id: m.key || m.id,
+              contextLength: m.loaded_instances?.[0]?.config?.context_length,
+            }));
+          }
+        }
+      } catch {
+        // Fall through to OpenAI-compatible endpoint
+      }
+
+      // Fallback: OpenAI-compatible endpoint (model IDs only, no context_length)
       try {
         const res = await fetch(`${baseUrl}/v1/models`, { signal, cache: 'no-store' });
         if (!res.ok) return [];
@@ -154,12 +186,7 @@ export function createOpenAIAdapter(config: OpenAIAdapterConfig): LLMAdapter {
         const res = await fetch(`${baseUrl}/v1/models`, { signal, cache: 'no-store' });
         if (!res.ok) return { connected: false, models: [], selectedModel: null };
 
-        const data = await res.json();
-        const models: ModelInfo[] = (data.data || []).map((m: OpenAIModelEntry) => ({
-          id: m.id,
-          contextLength: m.loaded_instances?.[0]?.config?.context_length,
-        }));
-
+        const models = await this.listModels(baseUrl, signal);
         return { connected: true, models, selectedModel: models[0]?.id ?? null };
       } catch {
         return { connected: false, models: [], selectedModel: null };

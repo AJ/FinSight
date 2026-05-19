@@ -6,6 +6,7 @@
  */
 
 import type { LLMRuntimeConfig } from '@/lib/llm/types';
+import { getClient } from '@/lib/llm/index';
 import { debugLog, debugWarn } from '@/lib/utils/debug';
 import type { ExtractedTransaction } from '@/types/extractedTransaction';
 import { Transaction as CanonicalTransaction } from '@/models/Transaction';
@@ -65,6 +66,19 @@ function buildFailedChunks(diagnostics: ChunkRunDiagnostics[]): string[] | undef
   return failedChunks.length > 0 ? failedChunks : undefined;
 }
 
+async function fetchContextWindowTokens(
+  llmConfig: LLMRuntimeConfig,
+): Promise<number | undefined> {
+  try {
+    const client = getClient(llmConfig.provider);
+    const models = await client.listModels(llmConfig.baseUrl);
+    const modelInfo = models.find(m => m.id === llmConfig.model);
+    return modelInfo?.contextLength;
+  } catch {
+    return undefined;
+  }
+}
+
 export async function processStatement(
   rawText: string,
   options: ProcessOptions,
@@ -74,6 +88,8 @@ export async function processStatement(
 
   try {
     const normalized = normalizeStatementText(rawText);
+
+    const contextWindowTokens = await fetchContextWindowTokens(options.llmConfig);
 
     let resolvedStatementType: PipelineStatementType;
     let bankName: string | null = null;
@@ -98,10 +114,10 @@ export async function processStatement(
     }
 
     if (resolvedStatementType === 'credit_card') {
-      return await processCreditCard(normalized, bankName || null, options);
+      return await processCreditCard(normalized, bankName || null, options, contextWindowTokens);
     }
 
-    return await processBank(normalized, bankName || null, options);
+    return await processBank(normalized, bankName || null, options, contextWindowTokens);
   } catch (e: unknown) {
     errors.push(`Pipeline failed: ${e instanceof Error ? e.message : 'Unknown error'}`);
     return {
@@ -117,6 +133,7 @@ async function processCreditCard(
   normalizedText: string,
   bankName: string | null,
   options: ProcessOptions,
+  contextWindowTokens?: number,
 ): Promise<PipelineResult> {
   const warnings: string[] = [];
   const errors: string[] = [];
@@ -129,7 +146,7 @@ async function processCreditCard(
     {
       maxRetries: MAX_RETRIES,
       stage: 'cc_summary',
-      maxTokens: 2048,
+      contextWindowTokens,
       signal: options.signal,
       llmConfig: options.llmConfig,
       onValidationFailure: (parsed) => {
@@ -156,6 +173,7 @@ async function processCreditCard(
     bankName,
     options.llmConfig,
     options.signal,
+    contextWindowTokens,
   );
   warnings.push(...transactionsResult.warnings);
 
@@ -174,7 +192,7 @@ async function processCreditCard(
         {
           maxRetries: MAX_RETRIES,
           stage: 'cc_rewards',
-          maxTokens: 1024,
+          contextWindowTokens,
           signal: options.signal,
           llmConfig: options.llmConfig,
         },
@@ -219,6 +237,7 @@ async function processBank(
   normalizedText: string,
   bankName: string | null,
   options: ProcessOptions,
+  contextWindowTokens?: number,
 ): Promise<PipelineResult> {
   const warnings: string[] = [];
   const errors: string[] = [];
@@ -231,7 +250,7 @@ async function processBank(
     {
       maxRetries: MAX_RETRIES,
       stage: 'bank_summary',
-      maxTokens: 2048,
+      contextWindowTokens,
       signal: options.signal,
       llmConfig: options.llmConfig,
       onValidationFailure: (parsed) => {
@@ -255,6 +274,7 @@ async function processBank(
     bankName,
     options.llmConfig,
     options.signal,
+    contextWindowTokens,
   );
   warnings.push(...transactionsResult.warnings);
 
@@ -300,32 +320,11 @@ async function runTransactionExtraction(
   bankName: string | null,
   llmConfig: LLMRuntimeConfig,
   signal?: AbortSignal,
+  contextWindowTokens?: number,
 ) {
   const stage = statementType === 'credit_card' ? 'cc_transactions' : 'bank_transactions';
 
-  if (statementType === 'credit_card') {
-    const transactionsPrompt = buildTransactionsPrompt(normalizedText, statementType, bankName);
-    return runWithRetry(
-      transactionsPrompt,
-      normalizedText,
-      validateTransactions,
-      {
-        maxRetries: MAX_RETRIES,
-        stage,
-        maxTokens: 12288,
-        signal,
-        llmConfig,
-        onValidationFailure: (parsed) => {
-          const t = parsed as TransactionsOutput;
-          debugLog(stage, 'Validation failed. LLM returned:', {
-            transactionCount: t?.transactions?.length,
-          });
-        },
-      },
-    );
-  }
-
-  const chunkPlan = createTransactionChunkPlan(normalizedText);
+  const chunkPlan = createTransactionChunkPlan(normalizedText, contextWindowTokens);
 
   if (!chunkPlan.chunkingUsed) {
     const transactionsPrompt = buildTransactionsPrompt(normalizedText, statementType, bankName);
@@ -336,7 +335,7 @@ async function runTransactionExtraction(
       {
         maxRetries: MAX_RETRIES,
         stage,
-        maxTokens: 12288,
+        contextWindowTokens,
         signal,
         llmConfig,
         onValidationFailure: (parsed) => {
@@ -353,6 +352,7 @@ async function runTransactionExtraction(
     reason: chunkPlan.chunkTriggerReason,
     normalizedTextLength: chunkPlan.normalizedTextLength,
     normalizedLineCount: chunkPlan.normalizedLineCount,
+    contextWindowTokens: chunkPlan.contextWindowTokens,
     totalChunks: chunkPlan.chunks.length,
   });
 
@@ -372,7 +372,7 @@ async function runTransactionExtraction(
       {
         maxRetries: MAX_RETRIES,
         stage,
-        maxTokens: 12288,
+        contextWindowTokens,
         signal,
         llmConfig,
         onValidationFailure: (parsed) => {

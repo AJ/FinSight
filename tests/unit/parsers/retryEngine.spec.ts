@@ -380,4 +380,59 @@ describe('runWithRetry', () => {
     const callBody = JSON.parse(mockFetch.mock.calls[0][1].body);
     expect(callBody.max_tokens).toBe(2048);
   });
+
+  it('provides context overflow error with context window hint', async () => {
+    // Simulate LM Studio returning "Context size has been exceeded"
+    mockFetch.mockResolvedValue({
+      ok: false,
+      status: 500,
+      statusText: 'Internal Server Error',
+      json: () => Promise.resolve({ error: { message: 'Context size has been exceeded' } }),
+      text: () => Promise.resolve(JSON.stringify({ error: { message: 'Context size has been exceeded' } })),
+    });
+
+    const result = await runWithRetry(
+      '{RAW_TEXT}',
+      'text',
+      vi.fn().mockReturnValue({ valid: true, errors: [], warnings: [], data: null }),
+      {
+        maxRetries: 1,
+        stage: 'test',
+        contextWindowTokens: 16244,
+        llmConfig: { provider: 'lmstudio', baseUrl: 'http://localhost:1234', model: 'test' },
+      },
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.errors).toHaveLength(1);
+    expect(result.errors[0]).toContain('Statement too large for model context');
+    expect(result.errors[0]).toContain('16244');
+    expect(result.errors[0]).toContain('Consider using a model with a larger context window');
+  });
+
+  it('provides context overflow error without context window when unknown', async () => {
+    mockFetch.mockResolvedValue({
+      ok: false,
+      status: 500,
+      statusText: 'Internal Server Error',
+      json: () => Promise.resolve({ error: { message: 'Context size exceeded limit' } }),
+      text: () => Promise.resolve(JSON.stringify({ error: { message: 'Context size exceeded limit' } })),
+    });
+
+    const result = await runWithRetry(
+      '{RAW_TEXT}',
+      'text',
+      vi.fn().mockReturnValue({ valid: true, errors: [], warnings: [], data: null }),
+      {
+        maxRetries: 1,
+        stage: 'test',
+        llmConfig: { provider: 'lmstudio', baseUrl: 'http://localhost:1234', model: 'test' },
+      },
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.errors[0]).toContain('Statement too large for model context');
+    expect(result.errors[0]).not.toContain('16244');
+    expect(result.errors[0]).toContain('Consider using a model with a larger context window');
+  });
 });

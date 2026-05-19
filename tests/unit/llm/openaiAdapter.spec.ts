@@ -78,7 +78,7 @@ describe('createOpenAIAdapter', () => {
       });
     });
 
-    it('defaults max_tokens to 4096 when not provided', async () => {
+    it('omits max_tokens when not provided', async () => {
       mockFetch.mockResolvedValue(okResponse({
         choices: [{ message: { content: 'result' } }],
       }));
@@ -86,7 +86,7 @@ describe('createOpenAIAdapter', () => {
       await adapter.generate(BASE, 'llama3', 'prompt', defaultOptions());
 
       const body = JSON.parse(mockFetch.mock.calls[0][1].body);
-      expect(body.max_tokens).toBe(4096);
+      expect(body.max_tokens).toBeUndefined();
     });
 
     it('returns usage when present', async () => {
@@ -389,11 +389,11 @@ describe('createOpenAIAdapter', () => {
   // ── listModels ─────────────────────────────────────────────────────────
 
   describe('listModels', () => {
-    it('parses model IDs and extracts context length from loaded_instances', async () => {
+    it('parses model IDs from native LM Studio API with context_length', async () => {
       mockFetch.mockResolvedValue(okResponse({
-        data: [
-          { id: 'llama3', loaded_instances: [{ config: { context_length: 8192 } }] },
-          { id: 'mistral', loaded_instances: [{ config: { context_length: 4096 } }] },
+        models: [
+          { key: 'llama3', loaded_instances: [{ config: { context_length: 8192 } }] },
+          { key: 'mistral', loaded_instances: [{ config: { context_length: 4096 } }] },
         ],
       }));
 
@@ -404,24 +404,28 @@ describe('createOpenAIAdapter', () => {
       ]);
     });
 
-    it('handles missing loaded_instances', async () => {
+    it('handles missing loaded_instances in native response', async () => {
       mockFetch.mockResolvedValue(okResponse({
-        data: [{ id: 'llama3' }],
+        models: [{ key: 'llama3' }],
       }));
 
       const models = await adapter.listModels(BASE, new AbortController().signal);
       expect(models).toEqual([{ id: 'llama3', contextLength: undefined }]);
     });
 
-    it('returns empty on non-OK response', async () => {
-      mockFetch.mockResolvedValue(errorResponse(500, 'Error'));
+    it('returns empty on non-OK response from both endpoints', async () => {
+      mockFetch
+        .mockResolvedValueOnce(errorResponse(500, 'Error'))
+        .mockResolvedValueOnce(errorResponse(500, 'Error'));
 
       const models = await adapter.listModels(BASE, new AbortController().signal);
       expect(models).toEqual([]);
     });
 
-    it('returns empty on network error', async () => {
-      mockFetch.mockRejectedValue(new Error('ECONNREFUSED'));
+    it('returns empty on network error from both endpoints', async () => {
+      mockFetch
+        .mockRejectedValueOnce(new Error('ECONNREFUSED'))
+        .mockRejectedValueOnce(new Error('ECONNREFUSED'));
 
       const models = await adapter.listModels(BASE, new AbortController().signal);
       expect(models).toEqual([]);
@@ -431,13 +435,16 @@ describe('createOpenAIAdapter', () => {
   // ── checkStatus ────────────────────────────────────────────────────────
 
   describe('checkStatus', () => {
-    it('returns connected with models on success', async () => {
-      mockFetch.mockResolvedValue(okResponse({
-        data: [
-          { id: 'llama3', loaded_instances: [{ config: { context_length: 8192 } }] },
-          { id: 'mistral' },
-        ],
-      }));
+    it('returns connected with models from native API', async () => {
+      // Connectivity check, then listModels (native endpoint succeeds)
+      mockFetch
+        .mockResolvedValueOnce(okResponse({})) // connectivity check
+        .mockResolvedValueOnce(okResponse({
+          models: [
+            { key: 'llama3', loaded_instances: [{ config: { context_length: 8192 } }] },
+            { key: 'mistral' },
+          ],
+        }));
 
       const result = await adapter.checkStatus(BASE, new AbortController().signal);
       expect(result.connected).toBe(true);
@@ -449,6 +456,7 @@ describe('createOpenAIAdapter', () => {
     });
 
     it('returns null selectedModel when no models available', async () => {
+      // All fetches return empty data — native has no models, fallback also empty
       mockFetch.mockResolvedValue(okResponse({ data: [] }));
 
       const result = await adapter.checkStatus(BASE, new AbortController().signal);
