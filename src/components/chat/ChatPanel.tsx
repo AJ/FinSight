@@ -20,6 +20,7 @@ import { useTransactionStore } from '@/lib/store/transactionStore';
 import { usePersistHydrated } from '@/lib/store/usePersistHydrated';
 import { buildChatContextForQuestion } from '@/lib/chat/contextBuilder';
 import { buildChatOptimizationPlan } from '@/lib/llm/chatOptimization';
+import { getContextWindowInfo } from '@/lib/llm/contextWindow';
 import { ChatMessage } from '@/types';
 import { AbortManager } from '@/lib/utils/AbortManager';
 import {
@@ -82,7 +83,6 @@ export function ChatPanel() {
   const llmProvider = useSettingsStore((state) => state.llmProvider);
   const llmServerUrl = useSettingsStore((state) => state.llmServerUrl);
   const settingsModel = useSettingsStore((state) => state.llmModel);
-  const llmModelContextLength = useSettingsStore((state) => state.llmModelContextLength);
   const currency = useSettingsStore((state) => state.currency);
   const transactions = useTransactionStore((state) => state.transactions);
   const activeModel = settingsModel || chatModel;
@@ -168,14 +168,9 @@ export function ChatPanel() {
 
         // Resolve model
         let selectedModel = activeModel ?? undefined;
-        let contextLength = llmModelContextLength;
         if (!selectedModel) {
           const models = await client.listModels(llmServerUrl);
           selectedModel = models[0]?.id;
-          if (models[0]?.contextLength && !contextLength) {
-            contextLength = models[0].contextLength;
-            useSettingsStore.getState().setModelContextLength(contextLength);
-          }
         }
         if (!selectedModel) {
           updateMessage(
@@ -184,6 +179,9 @@ export function ChatPanel() {
           );
           return;
         }
+
+        const contextInfo = await getContextWindowInfo();
+        const contextLength = contextInfo.contextLength;
 
         const optimizationPlan = buildChatOptimizationPlan(llmProvider, text, messages, {
           modelContextLength: contextLength ?? undefined,
@@ -259,7 +257,6 @@ export function ChatPanel() {
       llmProvider,
       addMessage,
       updateMessage,
-      llmModelContextLength,
     ] as const
   );
 

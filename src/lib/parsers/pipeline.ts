@@ -6,7 +6,7 @@
  */
 
 import type { LLMRuntimeConfig } from '@/lib/llm/types';
-import { getClient } from '@/lib/llm/index';
+import { getContextWindowInfo } from '@/lib/llm/contextWindow';
 import { debugLog, debugWarn } from '@/lib/utils/debug';
 import type { ExtractedTransaction } from '@/types/extractedTransaction';
 import { Transaction as CanonicalTransaction } from '@/models/Transaction';
@@ -66,19 +66,6 @@ function buildFailedChunks(diagnostics: ChunkRunDiagnostics[]): string[] | undef
   return failedChunks.length > 0 ? failedChunks : undefined;
 }
 
-async function fetchContextWindowTokens(
-  llmConfig: LLMRuntimeConfig,
-): Promise<number | undefined> {
-  try {
-    const client = getClient(llmConfig.provider);
-    const models = await client.listModels(llmConfig.baseUrl);
-    const modelInfo = models.find(m => m.id === llmConfig.model);
-    return modelInfo?.contextLength;
-  } catch {
-    return undefined;
-  }
-}
-
 export async function processStatement(
   rawText: string,
   options: ProcessOptions,
@@ -89,7 +76,12 @@ export async function processStatement(
   try {
     const normalized = normalizeStatementText(rawText);
 
-    const contextWindowTokens = await fetchContextWindowTokens(options.llmConfig);
+    const contextInfo = await getContextWindowInfo({
+      provider: options.llmConfig.provider,
+      baseUrl: options.llmConfig.baseUrl,
+      model: options.llmConfig.model,
+    });
+    const contextWindowTokens = contextInfo.contextLength;
 
     let resolvedStatementType: PipelineStatementType;
     let bankName: string | null = null;

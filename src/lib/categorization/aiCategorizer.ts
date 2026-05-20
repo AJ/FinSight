@@ -2,6 +2,7 @@ import { Transaction, CategorizedBy } from "@/types";
 import { Category } from "@/models/Category";
 import { getClient } from "@/lib/llm/index";
 import { LLMProvider } from "@/lib/llm/types";
+import { getContextWindowInfo } from "@/lib/llm/contextWindow";
 import { findMerchantRuleForTransaction } from "@/lib/services/merchantRuleService";
 import type { StatementType } from "@/types/creditCard";
 import {
@@ -18,6 +19,18 @@ import {
 } from "./types";
 
 export type { CategorizationProgress, CategorizationResult } from "./types";
+
+const PROMPT_OVERHEAD_TOKENS = 1500;
+const AVG_TOKENS_PER_TRANSACTION = 60;
+const MAX_BATCH_SIZE = 50;
+const MIN_BATCH_SIZE = 5;
+
+export function deriveBatchSize(contextWindowTokens: number): number {
+  const budget = contextWindowTokens - PROMPT_OVERHEAD_TOKENS;
+  const raw = Math.floor(budget / AVG_TOKENS_PER_TRANSACTION);
+  if (raw <= 0) return 1;
+  return Math.max(MIN_BATCH_SIZE, Math.min(MAX_BATCH_SIZE, raw));
+}
 
 /**
  * Options for categorization.
@@ -89,9 +102,17 @@ export async function categorizeTransactions(
   }
 
   const client = getClient(options.provider);
+  const contextInfo = await getContextWindowInfo({
+    provider: options.provider,
+    baseUrl: options.baseUrl,
+    model: options.model!.trim(),
+  });
+
   const aiResults = await runCategorizationCore(remainingInputs, {
     generate: async (prompt) => {
-      return client.generate(options.baseUrl, options.model!.trim(), prompt);
+      return client.generate(options.baseUrl, options.model!.trim(), prompt, {
+        stage: 'categorize',
+      });
     },
     onProgress: options.onProgress
       ? (progress) =>
@@ -102,6 +123,9 @@ export async function categorizeTransactions(
           })
       : undefined,
     statementType: options.statementType,
+    batchSize: contextInfo.contextLength
+      ? deriveBatchSize(contextInfo.contextLength)
+      : undefined,
   });
 
   return [...ruleResults, ...aiResults];

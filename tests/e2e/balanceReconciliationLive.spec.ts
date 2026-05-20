@@ -16,6 +16,14 @@ interface ReviewSession {
   currency?: Record<string, unknown>;
 }
 
+// ── Timing helpers ──────────────────────────────────────────────────────────────
+
+function elapsedSince(start: number): string {
+  return `${((Date.now() - start) / 1000).toFixed(1)}s`;
+}
+
+// ── Test helpers ────────────────────────────────────────────────────────────────
+
 /**
  * Like waitForUploadCompletion, but fails fast when the pipeline completes
  * without navigating to /review (e.g., wrong PDF password, extraction failure).
@@ -72,24 +80,77 @@ async function setupLiveLLMContext(context: import('@playwright/test').BrowserCo
   }, { url: LIVE_LLM_URL, model: LIVE_LLM_MODEL });
 }
 
-test.describe('Balance Reconciliation — Live LLM E2E', () => {
+function setupConsoleCapture(page: import('@playwright/test').Page): string[] {
+  const consoleLogs: string[] = [];
+  page.on('console', (msg) => {
+    const prefix = msg.type() === 'error' ? 'ERR' : msg.type() === 'warning' ? 'WRN' : 'LOG';
+    consoleLogs.push(`[${prefix}] ${msg.text()}`);
+  });
+  page.on('pageerror', (err) => {
+    consoleLogs.push(`[PAGE_ERROR] ${err.message}\n${err.stack}`);
+  });
+  page.on('requestfailed', (request) => {
+    consoleLogs.push(`[REQUEST_FAILED] ${request.method()} ${request.url()} -- ${request.failure()?.errorText}`);
+  });
+  page.on('response', async (response) => {
+    if (response.status() >= 400 && response.url().includes('/v1/')) {
+      try {
+        const body = await response.text();
+        consoleLogs.push(`[HTTP_${response.status()}] ${response.url()}\n  Body: ${body.slice(0, 2000)}`);
+      } catch {
+        consoleLogs.push(`[HTTP_${response.status()}] ${response.url()} -- could not read body`);
+      }
+    }
+  });
+  return consoleLogs;
+}
+
+function dumpLogsOnFailure(consoleLogs: string[], err: unknown): never {
+  const fsSync = require('fs');
+  const logPath = path.join(FIXTURES_DIR, '..', 'cc-pipeline-debug.log');
+  fsSync.writeFileSync(logPath, consoleLogs.join('\n'));
+  throw new Error(`CC pipeline stalled. Logs written to ${logPath}\n\nLast 20 logs:\n${consoleLogs.slice(-20).join('\n')}\n\n${err}`);
+}
+
+// ── Tests ────────────────────────────────────────────────────────────────────────
+
+test.describe('Balance Reconciliation -- Live LLM E2E', () => {
+  // Run serially to avoid exhausting LM Studio's KV cache.
+  // With 3 workers running bank + CC tests in parallel, GPU VRAM fills up
+  // (8192 MiB limit) and CC tests get "Context size exceeded" errors.
+  // Serial execution ensures previous test slots are released before the next test starts.
+  test.describe.configure({ mode: 'serial' });
+
+  // Playwright test timeout (hard ceiling for the entire test)
   const LLM_TIMEOUT = 300_000;
-  // CC pipeline runs 3 sequential LLM passes (summary + transactions + rewards)
-  // which can take 6-8 minutes on local hardware with small models
   const CC_LLM_TIMEOUT = 600_000;
 
+  // waitForURL timeout — how long we wait for pipeline to complete.
+  // Separate from test timeout so the test fails fast on pipeline errors.
+  const BANK_PIPELINE_TIMEOUT = 240_000;
+  const CC_PIPELINE_TIMEOUT = 540_000;
+
   test.beforeEach(async ({ context }) => {
-    test.skip(!LIVE_LLM_URL, 'LIVE_LLM_URL not set — skipping real LLM tests');
+    test.skip(!LIVE_LLM_URL, 'LIVE_LLM_URL not set -- skipping real LLM tests');
     await clearAllStorage(context);
     await setupLiveLLMContext(context);
   });
 
-  test('bank PDF — full reconciliation flow', async ({ page }) => {
+  // ── Bank tests ───────────────────────────────────────────────────────────────
+
+  test('bank PDF -- full reconciliation flow', async ({ page }) => {
     test.setTimeout(LLM_TIMEOUT);
+    const t0 = Date.now();
+
     await page.goto('/');
+    console.log(`[bank-1] goto: ${elapsedSince(t0)}`);
 
     await uploadFile(page, path.join(FIXTURES_DIR, 'bank_statement_noisy.pdf'));
-    await waitForUploadCompletion(page, LLM_TIMEOUT);
+    console.log(`[bank-1] upload: ${elapsedSince(t0)}`);
+
+    await waitForUploadCompletion(page, BANK_PIPELINE_TIMEOUT);
+    console.log(`[bank-1] pipeline done: ${elapsedSince(t0)}`);
+
     await expect(page).toHaveURL(/\/review/);
 
     const session = await getReviewSession(page);
@@ -127,14 +188,22 @@ test.describe('Balance Reconciliation — Live LLM E2E', () => {
     const firstTxn = session!.transactions[0];
     const description = String(firstTxn.description ?? firstTxn.merchant ?? '');
     await expect(page.getByText(description).first()).toBeVisible({ timeout: 10_000 });
+    console.log(`[bank-1] total: ${elapsedSince(t0)}`);
   });
 
-  test('bank PDF — verification report structure', async ({ page }) => {
+  test('bank PDF -- verification report structure', async ({ page }) => {
     test.setTimeout(LLM_TIMEOUT);
+    const t0 = Date.now();
+
     await page.goto('/');
+    console.log(`[bank-2] goto: ${elapsedSince(t0)}`);
 
     await uploadFile(page, path.join(FIXTURES_DIR, 'bank_statement_noisy.pdf'));
-    await waitForUploadCompletion(page, LLM_TIMEOUT);
+    console.log(`[bank-2] upload: ${elapsedSince(t0)}`);
+
+    await waitForUploadCompletion(page, BANK_PIPELINE_TIMEOUT);
+    console.log(`[bank-2] pipeline done: ${elapsedSince(t0)}`);
+
     await expect(page).toHaveURL(/\/review/);
 
     const session = await getReviewSession(page);
@@ -150,21 +219,26 @@ test.describe('Balance Reconciliation — Live LLM E2E', () => {
 
     const verified = report!.verified as Array<Record<string, unknown>>;
     expect(verified.length).toBeGreaterThan(0);
-    // Note: verified[] items are Transaction instances, so toJSON() strips the
-    // per-transaction verification sub-field during sessionStorage serialization.
-    // We verify the top-level report structure only.
 
     const expectedCount = session!.transactions.length;
     const rowCount = await page.locator('tbody tr').count();
     expect(rowCount).toBe(expectedCount);
+    console.log(`[bank-2] total: ${elapsedSince(t0)}`);
   });
 
-  test('bank PDF — flagged transactions', async ({ page }) => {
+  test('bank PDF -- flagged transactions', async ({ page }) => {
     test.setTimeout(LLM_TIMEOUT);
+    const t0 = Date.now();
+
     await page.goto('/');
+    console.log(`[bank-3] goto: ${elapsedSince(t0)}`);
 
     await uploadFile(page, path.join(FIXTURES_DIR, 'bank_statement_noisy.pdf'));
-    await waitForUploadCompletion(page, LLM_TIMEOUT);
+    console.log(`[bank-3] upload: ${elapsedSince(t0)}`);
+
+    await waitForUploadCompletion(page, BANK_PIPELINE_TIMEOUT);
+    console.log(`[bank-3] pipeline done: ${elapsedSince(t0)}`);
+
     await expect(page).toHaveURL(/\/review/);
 
     const session = await getReviewSession(page);
@@ -173,8 +247,6 @@ test.describe('Balance Reconciliation — Live LLM E2E', () => {
     const report = session!.verificationReport;
     const rejected = report?.rejected as Array<Record<string, unknown>> ?? [];
 
-    // Determine if the verification summary is rendered (it returns null when
-    // passed && confidence >= 80, so the text won't be in the DOM at all).
     const summary = page.locator('text=Verification').first();
     const isSummaryVisible = await summary.isVisible().catch(() => false);
 
@@ -183,61 +255,39 @@ test.describe('Balance Reconciliation — Live LLM E2E', () => {
         await summary.click();
         await expect(page.getByText('Flagged Transactions')).toBeVisible();
       }
-      // If summary is hidden (high-confidence pass), the component intentionally
-      // hides the whole section — but the data still has rejected transactions.
-      // Verify the data level to avoid a silent false pass.
       expect(rejected.length).toBeGreaterThan(0);
     } else {
-      // No rejected transactions — flagged section should never appear
       if (isSummaryVisible) {
         await summary.click();
         await expect(page.getByText('Flagged Transactions')).not.toBeVisible();
       }
     }
+    console.log(`[bank-3] total: ${elapsedSince(t0)}`);
   });
 
-  test('CC PDF — statement totals verification flow', async ({ page }) => {
+  // ── CC tests ─────────────────────────────────────────────────────────────────
+
+  test('CC PDF -- statement totals verification flow', async ({ page }) => {
     test.setTimeout(CC_LLM_TIMEOUT);
 
     const fs = await import('fs');
-    test.skip(!fs.existsSync(CC_PDF_FIXTURE), 'CC PDF fixture not found — skipping');
+    test.skip(!fs.existsSync(CC_PDF_FIXTURE), 'CC PDF fixture not found -- skipping');
 
-    // Capture browser console logs + network errors for debugging pipeline stalls
-    const consoleLogs: string[] = [];
-    page.on('console', (msg) => {
-      const prefix = msg.type() === 'error' ? 'ERR' : msg.type() === 'warning' ? 'WRN' : 'LOG';
-      consoleLogs.push(`[${prefix}] ${msg.text()}`);
-    });
-    page.on('pageerror', (err) => {
-      consoleLogs.push(`[PAGE_ERROR] ${err.message}\n${err.stack}`);
-    });
-    // Capture failed LM Studio requests (400s) with response body
-    page.on('requestfailed', (request) => {
-      consoleLogs.push(`[REQUEST_FAILED] ${request.method()} ${request.url()} — ${request.failure()?.errorText}`);
-    });
-    page.on('response', async (response) => {
-      if (response.status() >= 400 && response.url().includes('/v1/')) {
-        try {
-          const body = await response.text();
-          consoleLogs.push(`[HTTP_${response.status()}] ${response.url()}\n  Body: ${body.slice(0, 2000)}`);
-        } catch {
-          consoleLogs.push(`[HTTP_${response.status()}] ${response.url()} — could not read body`);
-        }
-      }
-    });
+    const consoleLogs = setupConsoleCapture(page);
+    const t0 = Date.now();
 
     await page.goto('/');
+    console.log(`[cc-1] goto: ${elapsedSince(t0)}`);
 
     await uploadFile(page, CC_PDF_FIXTURE, { statementType: 'credit_card', password: CC_PDF_PASSWORD });
+    console.log(`[cc-1] upload+password: ${elapsedSince(t0)}`);
 
-    // Dump logs on timeout for debugging
     try {
-      await waitForUploadOrFailure(page, CC_LLM_TIMEOUT);
+      await waitForUploadOrFailure(page, CC_PIPELINE_TIMEOUT);
     } catch (err) {
-      const logPath = path.join(FIXTURES_DIR, '..', 'cc-pipeline-debug.log');
-      fs.writeFileSync(logPath, consoleLogs.join('\n'));
-      throw new Error(`CC pipeline stalled. Browser console logs written to ${logPath}\n\nLast 20 logs:\n${consoleLogs.slice(-20).join('\n')}\n\n${err}`);
+      dumpLogsOnFailure(consoleLogs, err);
     }
+    console.log(`[cc-1] pipeline done: ${elapsedSince(t0)}`);
 
     await expect(page).toHaveURL(/\/review/);
 
@@ -270,48 +320,31 @@ test.describe('Balance Reconciliation — Live LLM E2E', () => {
     const firstTxn = session!.transactions[0];
     const description = String(firstTxn.description ?? firstTxn.merchant ?? '');
     await expect(page.getByText(description).first()).toBeVisible({ timeout: 10_000 });
+    console.log(`[cc-1] total: ${elapsedSince(t0)}`);
   });
 
-  test('CC PDF — verification report structure', async ({ page }) => {
+  test('CC PDF -- verification report structure', async ({ page }) => {
     test.setTimeout(CC_LLM_TIMEOUT);
 
     const fs = await import('fs');
-    test.skip(!fs.existsSync(CC_PDF_FIXTURE), 'CC PDF fixture not found — skipping');
+    test.skip(!fs.existsSync(CC_PDF_FIXTURE), 'CC PDF fixture not found -- skipping');
 
-    // Capture browser console logs + network errors for debugging pipeline stalls
-    const consoleLogs: string[] = [];
-    page.on('console', (msg) => {
-      const prefix = msg.type() === 'error' ? 'ERR' : msg.type() === 'warning' ? 'WRN' : 'LOG';
-      consoleLogs.push(`[${prefix}] ${msg.text()}`);
-    });
-    page.on('pageerror', (err) => {
-      consoleLogs.push(`[PAGE_ERROR] ${err.message}\n${err.stack}`);
-    });
-    page.on('requestfailed', (request) => {
-      consoleLogs.push(`[REQUEST_FAILED] ${request.method()} ${request.url()} — ${request.failure()?.errorText}`);
-    });
-    page.on('response', async (response) => {
-      if (response.status() >= 400 && response.url().includes('/v1/')) {
-        try {
-          const body = await response.text();
-          consoleLogs.push(`[HTTP_${response.status()}] ${response.url()}\n  Body: ${body.slice(0, 2000)}`);
-        } catch {
-          consoleLogs.push(`[HTTP_${response.status()}] ${response.url()} — could not read body`);
-        }
-      }
-    });
+    const consoleLogs = setupConsoleCapture(page);
+    const t0 = Date.now();
 
     await page.goto('/');
+    console.log(`[cc-2] goto: ${elapsedSince(t0)}`);
 
     await uploadFile(page, CC_PDF_FIXTURE, { statementType: 'credit_card', password: CC_PDF_PASSWORD });
+    console.log(`[cc-2] upload+password: ${elapsedSince(t0)}`);
 
     try {
-      await waitForUploadOrFailure(page, CC_LLM_TIMEOUT);
+      await waitForUploadOrFailure(page, CC_PIPELINE_TIMEOUT);
     } catch (err) {
-      const logPath = path.join(FIXTURES_DIR, '..', 'cc-pipeline-debug.log');
-      fs.writeFileSync(logPath, consoleLogs.join('\n'));
-      throw new Error(`CC pipeline stalled. Browser console logs written to ${logPath}\n\nLast 20 logs:\n${consoleLogs.slice(-20).join('\n')}\n\n${err}`);
+      dumpLogsOnFailure(consoleLogs, err);
     }
+    console.log(`[cc-2] pipeline done: ${elapsedSince(t0)}`);
+
     await expect(page).toHaveURL(/\/review/);
 
     const session = await getReviewSession(page);
@@ -340,5 +373,6 @@ test.describe('Balance Reconciliation — Live LLM E2E', () => {
     const transactions = session!.transactions;
     const rowCount = await page.locator('tbody tr').count();
     expect(rowCount).toBe(transactions.length);
+    console.log(`[cc-2] total: ${elapsedSince(t0)}`);
   });
 });

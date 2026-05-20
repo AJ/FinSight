@@ -29,7 +29,7 @@ export function buildChatOptimizationPlan(
   messages: ChatMessage[],
   options?: { modelContextLength?: number }
 ): ChatOptimizationPlan {
-  const contextLength = options?.modelContextLength ?? 4096;
+  const contextLength = options?.modelContextLength ?? 0;
 
   const questionTokens = estimateTokens(question);
   const historyTokens = estimateHistoryTokens(messages, HISTORY_WINDOW);
@@ -39,7 +39,7 @@ export function buildChatOptimizationPlan(
   const contextMaxChars = contextTokens * 4;
 
   const extra: Record<string, unknown> = provider === 'ollama'
-    ? { num_ctx: contextLength, top_p: 0.9, keep_alive: '15m' }
+    ? { ...(contextLength > 0 ? { num_ctx: contextLength } : {}), top_p: 0.9, keep_alive: '15m' }
     : { top_p: 0.9 };
 
   return {

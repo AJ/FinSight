@@ -7,6 +7,12 @@ import type { TransactionAnalytics } from '@/lib/insights/types';
 const mockFetch = vi.fn();
 vi.stubGlobal('fetch', mockFetch);
 
+// Mock getContextWindowInfo so no listModels fetch call is needed
+const mockGetContextWindowInfo = vi.fn();
+vi.mock('@/lib/llm/contextWindow', () => ({
+  getContextWindowInfo: (...args: unknown[]) => mockGetContextWindowInfo(...args),
+}));
+
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
 const mockAnalytics: TransactionAnalytics = {
@@ -50,6 +56,14 @@ function insightsResponse(insightsJson: object) {
 beforeEach(() => {
   vi.clearAllMocks();
   localStorage.clear();
+
+  // Default: context window unknown — no maxTokens passed to generate
+  mockGetContextWindowInfo.mockResolvedValue({
+    contextLength: undefined,
+    source: 'listModels_fallback',
+    provider: 'ollama',
+    modelId: 'llama3',
+  });
 });
 
 // ── Tests ──────────────────────────────────────────────────────────────────────
@@ -196,5 +210,63 @@ describe('generateInsights', () => {
     mockFetch.mockRejectedValue(new Error('Connection refused'));
 
     await expect(generateInsights(baseOptions)).rejects.toThrow();
+  });
+
+  // ── Context-aware token budgeting ──────────────────────────────────────────
+
+  it('passes correct maxTokens based on context window minus prompt estimate', async () => {
+    mockFetch.mockResolvedValue(insightsResponse({ insights: [] }));
+    mockGetContextWindowInfo.mockResolvedValue({
+      contextLength: 8192,
+      source: 'settings_cache',
+      provider: 'ollama',
+      modelId: 'llama3',
+    });
+
+    await generateInsights(baseOptions);
+
+    const body = JSON.parse(mockFetch.mock.calls[0][1].body);
+    const prompt = body.prompt as string;
+    const estimatedPromptTokens = Math.ceil(prompt.length / 4);
+    const expectedMaxTokens = Math.min(2000, 8192 - estimatedPromptTokens);
+    // Verify the exact formula: min(2000, contextLength - promptTokens)
+    expect(body.options.num_predict).toBe(expectedMaxTokens);
+  });
+
+  it('omits maxTokens when context window is unknown', async () => {
+    mockFetch.mockResolvedValue(insightsResponse({ insights: [] }));
+    // default mock returns contextLength: undefined
+
+    await generateInsights(baseOptions);
+
+    const body = JSON.parse(mockFetch.mock.calls[0][1].body);
+    expect(body.options.num_predict).toBeUndefined();
+  });
+
+  it('omits maxTokens when prompt exceeds context window', async () => {
+    mockFetch.mockResolvedValue(insightsResponse({ insights: [] }));
+    mockGetContextWindowInfo.mockResolvedValue({
+      contextLength: 100, // very small — prompt will exceed it
+      source: 'listModels_fallback',
+      provider: 'ollama',
+      modelId: 'llama3',
+    });
+
+    await generateInsights(baseOptions);
+
+    const body = JSON.parse(mockFetch.mock.calls[0][1].body);
+    expect(body.options.num_predict).toBeUndefined();
+  });
+
+  it('calls getContextWindowInfo with correct parameters', async () => {
+    mockFetch.mockResolvedValue(insightsResponse({ insights: [] }));
+
+    await generateInsights(baseOptions);
+
+    expect(mockGetContextWindowInfo).toHaveBeenCalledWith({
+      provider: 'ollama',
+      baseUrl: 'http://localhost:11434',
+      model: 'llama3',
+    });
   });
 });

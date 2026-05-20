@@ -221,9 +221,9 @@ describe('createTransactionChunkPlan', () => {
 
   describe('dynamic thresholds from contextWindowTokens', () => {
     it('uses dynamic thresholds when contextWindowTokens provided', () => {
-      // 16K context: budgetTokens = (16000 - 2000) / 2.5 = 5600
-      // budgetChars = 5600 * 3.5 = 19600
-      // budgetLines = 19600 / 55 ≈ 356
+      // 16K context: budgetTokens = (16000 - 2500) / 2.5 = 5400
+      // budgetChars = 5400 * 2.3 = 12420
+      // budgetLines = 12420 / 55 ≈ 225
       const text = makeLines(360, 'y'.repeat(60));
       const plan = createTransactionChunkPlan(text, 16000);
 
@@ -241,10 +241,10 @@ describe('createTransactionChunkPlan', () => {
     });
 
     it('clamps minimum budget for very small context windows', () => {
-      // 4K context: budgetTokens = max((4096 - 2000) / 2.5, 500) = max(838, 500) = 838
-      // budgetChars = 838 * 3.5 = 2933
-      // budgetLines = 2933 / 55 ≈ 53
-      // Need text exceeding 53 lines or 2933 chars
+      // 4K context: budgetTokens = max((4096 - 2500) / 2.5, 500) = max(638, 500) = 638
+      // budgetChars = 638 * 2.3 = 1467
+      // budgetLines = 1467 / 55 ≈ 26
+      // Need text exceeding 26 lines or 1467 chars
       const text = makeLines(60, 'z'.repeat(55));
       const plan = createTransactionChunkPlan(text, 4096);
 
@@ -253,7 +253,7 @@ describe('createTransactionChunkPlan', () => {
     });
 
     it('sizes chunks using dynamic target line count', () => {
-      // 16K context: target ≈ 356 lines
+      // 16K context: target ≈ 225 lines
       // 400 lines with overlap 12 → 2 chunks
       const text = makeLines(400, 'a'.repeat(60));
       const plan = createTransactionChunkPlan(text, 16000);

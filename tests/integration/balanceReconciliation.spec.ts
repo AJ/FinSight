@@ -1,24 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { setupTestContext, mockCategorizationAPI } from '../e2e/helpers/e2eHelpers';
-import { clearAllStorage, validateTransactionShape } from '../utils/storageHelpers';
-
-const INR = { code: 'INR', symbol: '₹', name: 'Indian Rupee' };
-
-function makeTxn(overrides: Record<string, unknown>) {
-  return {
-    id: `txn-${Math.random().toString(36).slice(2, 8)}`,
-    date: '2024-01-15',
-    description: 'Test Transaction',
-    amount: 100,
-    type: 'debit',
-    category: 'shopping',
-    merchant: 'Test Merchant',
-    needsReview: false,
-    localCurrency: INR,
-    sourceType: 'bank',
-    ...overrides,
-  };
-}
+import { clearAllStorage } from '../utils/storageHelpers';
 
 test.describe('Review page — balance reconciliation', () => {
   test.beforeEach(async ({ context }) => {

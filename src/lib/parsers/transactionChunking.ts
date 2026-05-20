@@ -7,9 +7,13 @@ const CHUNK_TARGET_LINE_COUNT = 180;
 const CHUNK_OVERLAP_LINE_COUNT = 12;
 
 // Dynamic sizing constants — used when contextWindowTokens is provided
-const PROMPT_OVERHEAD_TOKENS = 2000;
+// PROMPT_OVERHEAD_TOKENS: covers system prompt + transactions template instructions.
+// Measured ~2500 for cc_transactions (worst case) via token budget instrumentation.
+const PROMPT_OVERHEAD_TOKENS = 2500;
 const CHUNK_SIZE_DIVISOR = 2.5;
-const CHARS_PER_TOKEN = 3.5;
+// CHARS_PER_TOKEN: measured ~2.36 for bank statement text (qwen3-4b tokenizer).
+// Using 2.3 for slight conservative overestimate of token count.
+const CHARS_PER_TOKEN = 2.3;
 const AVG_CHARS_PER_LINE = 55;
 
 export interface TransactionChunkPlan {

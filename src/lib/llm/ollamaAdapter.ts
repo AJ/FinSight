@@ -112,6 +112,15 @@ export const ollamaAdapter: LLMAdapter = {
   async *chatStream(baseUrl, model, messages, options) {
     const { num_ctx: numCtx = 8192, keep_alive: keepAlive = '10m', top_p: topP } = extractOllamaExtra(options.extra);
 
+    const ollamaOptions: Record<string, unknown> = {
+      num_ctx: numCtx,
+      temperature: options.temperature,
+      ...(topP != null ? { top_p: topP } : {}),
+    };
+    if (options.maxTokens !== undefined) {
+      ollamaOptions.num_predict = options.maxTokens;
+    }
+
     const res = await fetch(`${baseUrl}/api/chat`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -121,11 +130,7 @@ export const ollamaAdapter: LLMAdapter = {
         messages,
         stream: true,
         keep_alive: keepAlive,
-        options: {
-          num_ctx: numCtx,
-          temperature: options.temperature,
-          ...(topP != null ? { top_p: topP } : {}),
-        },
+        options: ollamaOptions,
       }),
     });
 

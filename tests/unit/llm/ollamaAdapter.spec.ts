@@ -397,6 +397,35 @@ describe('ollamaAdapter.chatStream', () => {
     const body = JSON.parse(mockFetch.mock.calls[0][1].body);
     expect(body.options.top_p).toBe(0.95);
   });
+
+  it('maps maxTokens to num_predict in chatStream', async () => {
+    mockFetch.mockResolvedValueOnce(okResponse({}, ndjsonStream([
+      JSON.stringify({ message: { content: '' }, done: true }),
+    ])));
+
+    for await (const chunk of ollamaAdapter.chatStream(baseUrl, model, messages, {
+      ...defaultOptions(),
+      maxTokens: 800,
+    })) {
+      void chunk;
+    }
+
+    const body = JSON.parse(mockFetch.mock.calls[0][1].body);
+    expect(body.options.num_predict).toBe(800);
+  });
+
+  it('omits num_predict in chatStream when maxTokens not provided', async () => {
+    mockFetch.mockResolvedValueOnce(okResponse({}, ndjsonStream([
+      JSON.stringify({ message: { content: '' }, done: true }),
+    ])));
+
+    for await (const chunk of ollamaAdapter.chatStream(baseUrl, model, messages, defaultOptions())) {
+      void chunk;
+    }
+
+    const body = JSON.parse(mockFetch.mock.calls[0][1].body);
+    expect(body.options.num_predict).toBeUndefined();
+  });
 });
 
 // ── listModels ───────────────────────────────────────────────────────────────

@@ -32,12 +32,11 @@ describe('buildChatOptimizationPlan', () => {
     expect(plan.extra.num_ctx).toBe(8192);
   });
 
-  it('falls back to 4096 when no model context length provided', () => {
+  it('returns zero contextMaxChars when no model context length provided', () => {
     const plan = buildChatOptimizationPlan('ollama', 'What is my spending?', []);
 
-    expect(plan.extra.num_ctx).toBe(4096);
-    expect(plan.contextMaxChars).toBeGreaterThan(10000);
-    expect(plan.contextMaxChars).toBeLessThan(13000);
+    expect(plan.extra.num_ctx).toBeUndefined();
+    expect(plan.contextMaxChars).toBe(0);
   });
 
   it('handles large context models (32K)', () => {
@@ -110,5 +109,6 @@ describe('buildChatOptimizationPlan', () => {
     });
 
     expect(plan.contextMaxChars).toBe(0);
+    expect(plan.extra.num_ctx).toBeUndefined();
   });
 });

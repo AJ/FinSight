@@ -1,5 +1,6 @@
 import { getClient } from '@/lib/llm/index';
 import type { LLMProvider } from '@/lib/llm/types';
+import { getContextWindowInfo } from '@/lib/llm/contextWindow';
 import type { Currency } from '@/types';
 import type { Insight, InsightType, InsightSeverity, TransactionAnalytics } from './types';
 import { buildInsightsPrompt, parseInsightsResponse } from './prompts';
@@ -36,9 +37,25 @@ export async function generateInsights(options: GenerateInsightsOptions): Promis
 
   const prompt = buildInsightsPrompt(analytics, currency);
   const client = getClient(provider);
+
+  const contextInfo = await getContextWindowInfo({
+    provider,
+    baseUrl,
+    model,
+  });
+
+  const estimatedPromptTokens = Math.ceil(prompt.length / 4);
+  // Insights output should be concise — cap at 2000 tokens even though the
+  // pipeline deliberately omits maxTokens to let the server use remaining context.
+  const reserveTokens = 2000;
+  const maxTokens = contextInfo.contextLength
+    ? Math.min(reserveTokens, contextInfo.contextLength - estimatedPromptTokens)
+    : undefined;
+
   const response = await client.generate(baseUrl, model, prompt, {
     temperature: 0.05,
     stage: 'insights',
+    maxTokens: maxTokens && maxTokens > 0 ? maxTokens : undefined,
   });
 
   const parsed = parseInsightsResponse(response);

@@ -1,4 +1,4 @@
-import type { ModelInfo, TokenUsage, ChatChunk, LLMAdapter } from './types';
+import type { TokenUsage, ChatChunk, LLMAdapter } from './types';
 import { createAdapterError } from './types';
 import { debugWarn } from '@/lib/utils/debug';
 

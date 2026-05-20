@@ -7,6 +7,12 @@ import type { LLMRuntimeConfig } from '@/lib/llm/types';
 const mockFetch = vi.fn();
 vi.stubGlobal('fetch', mockFetch);
 
+// Mock getContextWindowInfo so no listModels fetch call is needed
+const mockGetContextWindowInfo = vi.fn();
+vi.mock('@/lib/llm/contextWindow', () => ({
+  getContextWindowInfo: (...args: unknown[]) => mockGetContextWindowInfo(...args),
+}));
+
 const baseConfig: LLMRuntimeConfig = {
   provider: 'ollama',
   baseUrl: 'http://localhost:11434',
@@ -35,14 +41,6 @@ function ollamaJson(llmOutput: string) {
     }),
     text: () => Promise.resolve(JSON.stringify({ response: llmOutput })),
   });
-}
-
-function ollamaEmptyModels() {
-  return {
-    ok: true,
-    status: 200,
-    json: () => Promise.resolve({ models: [] }),
-  };
 }
 
 // ── LLM Payload Builders ───────────────────────────────────────────────────────
@@ -88,15 +86,25 @@ function typeDetectionJson(type: 'bank' | 'credit_card', confidence = 0.95) {
 // ── Scenario Setup Helpers ─────────────────────────────────────────────────────
 
 function setupBankFetch(txns?: Array<Record<string, unknown>>, summary?: string) {
+  mockGetContextWindowInfo.mockResolvedValue({
+    contextLength: undefined,
+    source: 'settings_cache',
+    provider: 'ollama',
+    modelId: 'llama3',
+  });
   mockFetch
-    .mockResolvedValueOnce(ollamaEmptyModels())
     .mockResolvedValueOnce(ollamaJson(summary ?? bankSummaryJson()))
     .mockResolvedValueOnce(ollamaJson(transactionsJson(txns)));
 }
 
 function setupCCFetch(txns?: Array<Record<string, unknown>>, summary?: string) {
+  mockGetContextWindowInfo.mockResolvedValue({
+    contextLength: undefined,
+    source: 'settings_cache',
+    provider: 'ollama',
+    modelId: 'llama3',
+  });
   mockFetch
-    .mockResolvedValueOnce(ollamaEmptyModels())
     .mockResolvedValueOnce(ollamaJson(summary ?? ccSummaryJson()))
     .mockResolvedValueOnce(ollamaJson(transactionsJson(txns)))
     .mockResolvedValueOnce(ollamaJson(JSON.stringify({ rewards: [] })));
@@ -104,6 +112,13 @@ function setupCCFetch(txns?: Array<Record<string, unknown>>, summary?: string) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // Default: no cached context window in settings
+  mockGetContextWindowInfo.mockResolvedValue({
+    contextLength: undefined,
+    source: 'settings_cache',
+    provider: 'ollama',
+    modelId: 'llama3',
+  });
 });
 
 // ── Tests ──────────────────────────────────────────────────────────────────────
@@ -118,12 +133,11 @@ describe('processStatement — routing', () => {
     });
 
     expect(result.success).toBe(true);
-    expect(mockFetch).toHaveBeenCalledTimes(3); // listModels + summary + transactions, no type detection
+    expect(mockFetch).toHaveBeenCalledTimes(2); // summary + transactions, no type detection
   });
 
   it('calls type detection when no explicit type provided', async () => {
     mockFetch
-      .mockResolvedValueOnce(ollamaEmptyModels())
       .mockResolvedValueOnce(ollamaJson(typeDetectionJson('bank', 0.95)))
       .mockResolvedValueOnce(ollamaJson(bankSummaryJson()))
       .mockResolvedValueOnce(ollamaJson(transactionsJson()));
@@ -131,12 +145,11 @@ describe('processStatement — routing', () => {
     const result = await processStatement('raw bank text', defaultOptions);
 
     expect(result.success).toBe(true);
-    expect(mockFetch).toHaveBeenCalledTimes(4); // listModels + type detection + summary + transactions
+    expect(mockFetch).toHaveBeenCalledTimes(3); // type detection + summary + transactions
   });
 
   it('returns failure when type detection confidence is below threshold', async () => {
     mockFetch
-      .mockResolvedValueOnce(ollamaEmptyModels())
       .mockResolvedValueOnce(ollamaJson(typeDetectionJson('bank', 0.5)));
 
     const result = await processStatement('raw text', defaultOptions);
@@ -148,7 +161,7 @@ describe('processStatement — routing', () => {
   });
 
   it('returns pipeline failure on fetch error during type detection', async () => {
-    // All fetch calls reject (listModels + type detection)
+    // All fetch calls reject (type detection)
     mockFetch.mockRejectedValue(new Error('Connection refused'));
 
     const result = await processStatement('raw text', defaultOptions);
@@ -172,7 +185,7 @@ describe('processStatement — credit card path', () => {
     expect(result.data?.transactions).toHaveLength(1);
     expect(result.data?.statementType).toBe('credit_card');
     expect(result.data?.statementSummary).toBeDefined();
-    expect(mockFetch).toHaveBeenCalledTimes(4); // listModels + summary + transactions + rewards
+    expect(mockFetch).toHaveBeenCalledTimes(3); // summary + transactions + rewards
   });
 
   it('does not call rewards prompt for bank type', async () => {
@@ -183,12 +196,11 @@ describe('processStatement — credit card path', () => {
       statementType: 'bank',
     });
 
-    expect(mockFetch).toHaveBeenCalledTimes(3); // listModels + summary + transactions only
+    expect(mockFetch).toHaveBeenCalledTimes(2); // summary + transactions only
   });
 
   it('skips rewards extraction when text has no rewards keywords', async () => {
     mockFetch
-      .mockResolvedValueOnce(ollamaEmptyModels())
       .mockResolvedValueOnce(ollamaJson(ccSummaryJson()))
       .mockResolvedValueOnce(ollamaJson(transactionsJson()));
     // No third mock — buildRewardsPrompt returns '' when text lacks reward/cashback/points
@@ -199,7 +211,7 @@ describe('processStatement — credit card path', () => {
     });
 
     expect(result.success).toBe(true);
-    expect(mockFetch).toHaveBeenCalledTimes(3); // listModels + summary + transactions, no rewards
+    expect(mockFetch).toHaveBeenCalledTimes(2); // summary + transactions, no rewards
   });
 
   it('strips reasoning field from canonical transactions', async () => {
@@ -260,7 +272,6 @@ describe('processStatement — verification inputs', () => {
   it('returns undefined verification inputs when summary lacks openingBalance', async () => {
     const minimalSummary = JSON.stringify({ statementDate: '2024-01-15' });
     mockFetch
-      .mockResolvedValueOnce(ollamaEmptyModels())
       .mockResolvedValueOnce(ollamaJson(minimalSummary))
       .mockResolvedValueOnce(ollamaJson(transactionsJson()));
 
@@ -281,7 +292,6 @@ describe('processStatement — extraction bundle', () => {
     ];
     // Summary succeeds, then transactions fail validation 3 times (retry engine retries)
     mockFetch
-      .mockResolvedValueOnce(ollamaEmptyModels())
       .mockResolvedValueOnce(ollamaJson(bankSummaryJson()))
       .mockResolvedValueOnce(ollamaJson(transactionsJson(invalidTxns)))
       .mockResolvedValueOnce(ollamaJson(transactionsJson(invalidTxns)))
@@ -346,7 +356,6 @@ describe('processStatement — warning branches', () => {
     // Summary: 3 invalid-JSON responses (MAX_RETRIES), then valid transactions + rewards
     const invalidSummaryResponse = 'NOT VALID JSON {{{';
     mockFetch
-      .mockResolvedValueOnce(ollamaEmptyModels())
       .mockResolvedValueOnce(ollamaJson(invalidSummaryResponse))
       .mockResolvedValueOnce(ollamaJson(invalidSummaryResponse))
       .mockResolvedValueOnce(ollamaJson(invalidSummaryResponse))
@@ -366,7 +375,6 @@ describe('processStatement — warning branches', () => {
   it('warns when bank summary extraction fails but transactions succeed', async () => {
     const invalidSummaryResponse = 'NOT VALID JSON {{{';
     mockFetch
-      .mockResolvedValueOnce(ollamaEmptyModels())
       .mockResolvedValueOnce(ollamaJson(invalidSummaryResponse))
       .mockResolvedValueOnce(ollamaJson(invalidSummaryResponse))
       .mockResolvedValueOnce(ollamaJson(invalidSummaryResponse))
@@ -402,7 +410,6 @@ describe('processStatement — warning branches', () => {
 
     // Bank summary + 2 chunk extraction calls
     mockFetch
-      .mockResolvedValueOnce(ollamaEmptyModels())
       .mockResolvedValueOnce(ollamaJson(bankSummaryJson()))
       .mockResolvedValueOnce(ollamaJson(transactionsJson(chunk1Txns)))
       .mockResolvedValueOnce(ollamaJson(transactionsJson(chunk2Txns)));
@@ -421,7 +428,6 @@ describe('processStatement — warning branches', () => {
   it('warns when rewards extraction fails for credit card', async () => {
     const invalidRewardsResponse = 'BROKEN JSON }}}';
     mockFetch
-      .mockResolvedValueOnce(ollamaEmptyModels())
       .mockResolvedValueOnce(ollamaJson(ccSummaryJson()))
       .mockResolvedValueOnce(ollamaJson(transactionsJson()))
       // Rewards: 3 invalid responses (MAX_RETRIES)
@@ -457,7 +463,6 @@ describe('processStatement — bank chunked extraction', () => {
     ];
 
     mockFetch
-      .mockResolvedValueOnce(ollamaEmptyModels())
       .mockResolvedValueOnce(ollamaJson(bankSummaryJson()))
       .mockResolvedValueOnce(ollamaJson(transactionsJson(chunk1Txns)))
       .mockResolvedValueOnce(ollamaJson(transactionsJson(chunk2Txns)));
@@ -482,7 +487,6 @@ describe('processStatement — bank chunked extraction', () => {
 
     const brokenResponse = 'BROKEN JSON }}}';
     mockFetch
-      .mockResolvedValueOnce(ollamaEmptyModels())
       .mockResolvedValueOnce(ollamaJson(bankSummaryJson()))
       // Chunk 1: 3 failed retries
       .mockResolvedValueOnce(ollamaJson(brokenResponse))
@@ -514,7 +518,6 @@ describe('processStatement — bank chunked extraction', () => {
     ];
 
     mockFetch
-      .mockResolvedValueOnce(ollamaEmptyModels())
       .mockResolvedValueOnce(ollamaJson(bankSummaryJson()))
       // Chunk 1 succeeds
       .mockResolvedValueOnce(ollamaJson(transactionsJson(chunk1Txns)))
@@ -544,9 +547,8 @@ describe('processStatement — credit card chunks large statements', () => {
     const longText = Array.from({ length: 300 }, (_, i) => `${longLine} #${i + 1}`).join('\n');
     expect(longText.length).toBeGreaterThan(12000);
 
-    // CC path with chunking: listModels + summary + 2 chunk transactions + rewards = 5 calls
+    // CC path with chunking: summary + 2 chunk transactions + rewards = 4 calls
     mockFetch
-      .mockResolvedValueOnce(ollamaEmptyModels())
       .mockResolvedValueOnce(ollamaJson(ccSummaryJson()))
       .mockResolvedValueOnce(ollamaJson(transactionsJson()))
       .mockResolvedValueOnce(ollamaJson(transactionsJson()))
@@ -558,8 +560,8 @@ describe('processStatement — credit card chunks large statements', () => {
     });
 
     expect(result.success).toBe(true);
-    // CC path: listModels + summary + chunk1 transactions + chunk2 transactions + rewards = 5 calls
-    expect(mockFetch).toHaveBeenCalledTimes(5);
+    // CC path: summary + chunk1 transactions + chunk2 transactions + rewards = 4 calls
+    expect(mockFetch).toHaveBeenCalledTimes(4);
   });
 });
 
@@ -572,7 +574,6 @@ describe('processStatement — type detection bankName forwarding', () => {
     const typeDetectionResponse = JSON.stringify(detectedWithType);
 
     mockFetch
-      .mockResolvedValueOnce(ollamaEmptyModels())
       .mockResolvedValueOnce(ollamaJson(typeDetectionResponse))
       .mockResolvedValueOnce(ollamaJson(bankSummaryJson()))
       .mockResolvedValueOnce(ollamaJson(transactionsJson()));
@@ -580,8 +581,8 @@ describe('processStatement — type detection bankName forwarding', () => {
     const result = await processStatement('raw bank text', defaultOptions);
 
     expect(result.success).toBe(true);
-    // The pipeline succeeded with listModels + type detection + summary + transactions
-    expect(mockFetch).toHaveBeenCalledTimes(4);
+    // The pipeline succeeded with type detection + summary + transactions
+    expect(mockFetch).toHaveBeenCalledTimes(3);
     // bankName is forwarded internally to prompt builders (verified by successful extraction)
     expect(result.data?.statementType).toBe('bank');
     expect(result.data?.transactions).toHaveLength(1);

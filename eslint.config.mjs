@@ -13,6 +13,9 @@ const eslintConfig = defineConfig([
     "build/**",
     "next-env.d.ts",
     "coverage/**",
+    // Test reports (generated Playwright trace assets):
+    "playwright-report/**",
+    "test-results/**",
     // Third-party libraries copied to public:
     "public/pdf.mjs",
     "public/pdf.worker.min.mjs",
