@@ -145,9 +145,18 @@ export async function mockCategorizationAPI(context: BrowserContext): Promise<vo
 export async function uploadFile(page: Page, fixturePath: string, options?: { password?: string; statementType?: 'bank' | 'credit_card' | 'auto' }): Promise<void> {
   await closeAllDialogs(page);
 
-  const uploadBtn = page.getByRole('button', { name: 'Upload Statement', exact: true });
-  await expect(uploadBtn).toBeVisible({ timeout: 5000 });
-  await uploadBtn.click();
+  // The upload trigger button differs by page state:
+  // - Empty state (no transactions): "Upload Statement" button in the hero
+  // - Dashboard (has transactions): "Upload" button in the sidebar
+  const emptyStateBtn = page.getByRole('button', { name: 'Upload Statement', exact: true });
+  const sidebarBtn = page.locator('button').filter({ hasText: /^Upload$/ }).first();
+  const isOnEmptyState = await emptyStateBtn.isVisible().catch(() => false);
+
+  if (isOnEmptyState) {
+    await emptyStateBtn.click();
+  } else {
+    await sidebarBtn.click();
+  }
 
   // Wait for the upload dialog to fully render — React may re-render and replace the file input
   await expect(page.getByText('Upload Your Statement')).toBeVisible({ timeout: 5000 });

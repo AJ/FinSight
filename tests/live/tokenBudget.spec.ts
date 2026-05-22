@@ -151,7 +151,7 @@ async function getContextWindowTokens(): Promise<number | undefined> {
     // Find the model matching LIVE_LLM_MODEL, fall back to first loaded model
     const match = models.find((m: { key?: string; id?: string; loaded_instances?: unknown[] }) =>
       m.key === LIVE_LLM_MODEL || m.id === LIVE_LLM_MODEL
-    ) ?? models.find((m: { loaded_instances?: unknown[] }) => m.loaded_instances?.length > 0) ?? models[0];
+    ) ?? models.find((m: { loaded_instances?: unknown[] }) => (m.loaded_instances?.length ?? 0) > 0) ?? models[0];
     if (!match) return undefined;
     // Prefer loaded instance config (actual context), fall back to max_context_length
     const loaded = (match as { loaded_instances?: Array<{ config?: { context_length?: number } }> }).loaded_instances?.[0];
