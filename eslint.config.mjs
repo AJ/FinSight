@@ -19,6 +19,7 @@ const eslintConfig = defineConfig([
     // Third-party libraries copied to public:
     "public/pdf.mjs",
     "public/pdf.worker.min.mjs",
+    ".claude/**",
   ]),
   {
     rules: {
