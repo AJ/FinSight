@@ -155,21 +155,21 @@ export function parseDate(raw: string, preferredOrder: "DMY" | "MDY" = "DMY"): D
       if (mdy) return mdy;
     }
 
-    // Ambiguous (both <= 12): apply preferred order.
+    // Ambiguous (both <= 12): apply detected date order.
+    // When both values <= 12, the day is always valid for any month (min 28 days),
+    // so the detected interpretation always succeeds — no alternate needed.
     if (a <= 12 && b <= 12) {
-      const preferred = preferredOrder === "MDY" ? makeDate(b, a) : makeDate(a, b);
-      if (preferred) return preferred;
-
-      // Fallback to the alternate interpretation if preferred failed validation.
-      const alternate = preferredOrder === "MDY" ? makeDate(a, b) : makeDate(b, a);
-      if (alternate) return alternate;
+      return preferredOrder === "MDY" ? makeDate(b, a) : makeDate(a, b);
     }
   }
+
+  let anyPatternMatched = false;
 
   for (const pattern of DATE_PATTERNS) {
     const match = cleaned.match(pattern.regex);
     if (!match) continue;
 
+    anyPatternMatched = true;
     const parts = pattern.extract(match);
     if (!parts) continue;
 
@@ -191,7 +191,13 @@ export function parseDate(raw: string, preferredOrder: "DMY" | "MDY" = "DMY"): D
     }
   }
 
-  // Last-resort: try native Date constructor
+  // If any pattern matched but all rejected the date, don't let the native
+  // fallback re-accept it — the native constructor silently rolls over
+  // invalid dates (e.g. "30 Feb 2024" → Feb 29, "2024-02-30" → Mar 1).
+  if (anyPatternMatched) return null;
+
+  // Last-resort: try native Date constructor for formats no pattern covers
+  // (e.g. "2024-Jan-15"). Only reached if no pattern's regex matched at all.
   const native = new Date(cleaned);
   if (
     !isNaN(native.getTime()) &&
