@@ -149,11 +149,9 @@ describe('subscribeToLLMConnection', () => {
   });
 });
 
-// NOTE: The catch block in checkConnection (llmConnectionStore.ts:103) is unreachable
-// through real behavior. Both adapters (ollama/openai) wrap checkStatus in try/catch
-// that returns { connected: false } on any error. The LLMClient further wraps in
-// try/finally. So checkLLMStatus never throws — the store's catch block is defensive
-// coding against programming errors. No test is needed for this path.
+// NOTE: checkLLMStatus never rejects — both adapters (Ollama, OpenAI) wrap their entire
+// checkStatus body in bare try/catch returning { connected: false } on any error. The client
+// layer adds only try/finally. So no .catch() handler is needed on the store's promise chain.
 
 describe('model context-length refresh', () => {
   it('calls setModelContextLength when connected and model has contextLength', async () => {

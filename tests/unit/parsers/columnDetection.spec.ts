@@ -4,11 +4,13 @@ import {
   matchesAny,
   findColumn,
   detectColumns,
+  resolveAmount,
   DATE_KEYWORDS,
   DEBIT_KEYWORDS,
   CREDIT_KEYWORDS,
 } from '@/lib/parsers/columnDetection';
 import type { ColumnMapping } from '@/lib/parsers/columnDetection';
+import { TransactionType } from '@/types';
 
 describe('normalizeHeader', () => {
   it('lowercases input', () => {
@@ -177,5 +179,218 @@ describe('detectColumns', () => {
       typeCol: null,
       balanceCol: null,
     });
+  });
+});
+
+describe('resolveAmount', () => {
+  const rawRow = { Debit: '500', Credit: '', Amount: '500', Type: '' };
+
+  it('returns debit when debit column has value and credit is empty', () => {
+    const result = resolveAmount({
+      debit: 500,
+      credit: null,
+      amount: null,
+      typeValue: '',
+      mapping: { dateCol: null, descriptionCols: [], amountCol: null, debitCol: 'Debit', creditCol: 'Credit', typeCol: null, balanceCol: null },
+      rowIndex: 0,
+      rawRow,
+    });
+    expect(result).toEqual({ ok: true, amount: 500, type: TransactionType.Debit });
+  });
+
+  it('returns credit when credit column has value and debit is empty', () => {
+    const result = resolveAmount({
+      debit: null,
+      credit: 300,
+      amount: null,
+      typeValue: '',
+      mapping: { dateCol: null, descriptionCols: [], amountCol: null, debitCol: 'Debit', creditCol: 'Credit', typeCol: null, balanceCol: null },
+      rowIndex: 0,
+      rawRow,
+    });
+    expect(result).toEqual({ ok: true, amount: 300, type: TransactionType.Credit });
+  });
+
+  it('returns error when both debit and credit are null or zero', () => {
+    const result = resolveAmount({
+      debit: null,
+      credit: 0,
+      amount: null,
+      typeValue: '',
+      mapping: { dateCol: null, descriptionCols: [], amountCol: null, debitCol: 'Debit', creditCol: 'Credit', typeCol: null, balanceCol: null },
+      rowIndex: 3,
+      rawRow,
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.rowIndex).toBe(3);
+      expect(result.error.errorMessage).toContain('both null or zero');
+    }
+  });
+
+  it('returns debit when amount column + type column says "debit"', () => {
+    const result = resolveAmount({
+      debit: null,
+      credit: null,
+      amount: 250,
+      typeValue: 'Debit',
+      mapping: { dateCol: null, descriptionCols: [], amountCol: 'Amount', debitCol: null, creditCol: null, typeCol: 'Type', balanceCol: null },
+      rowIndex: 0,
+      rawRow,
+    });
+    expect(result).toEqual({ ok: true, amount: 250, type: TransactionType.Debit });
+  });
+
+  it('recognizes "dr", "withdrawal", "expense" as debit type values', () => {
+    for (const val of ['dr', 'Withdrawal', 'EXPENSE']) {
+      const result = resolveAmount({
+        debit: null, credit: null, amount: 100, typeValue: val,
+        mapping: { dateCol: null, descriptionCols: [], amountCol: 'Amount', debitCol: null, creditCol: null, typeCol: 'Type', balanceCol: null },
+        rowIndex: 0, rawRow,
+      });
+      expect(result.ok).toBe(true);
+      if (result.ok) expect(result.type).toBe(TransactionType.Debit);
+    }
+  });
+
+  it('recognizes "cr", "deposit", "income" as credit type values', () => {
+    for (const val of ['cr', 'Deposit', 'INCOME']) {
+      const result = resolveAmount({
+        debit: null, credit: null, amount: 100, typeValue: val,
+        mapping: { dateCol: null, descriptionCols: [], amountCol: 'Amount', debitCol: null, creditCol: null, typeCol: 'Type', balanceCol: null },
+        rowIndex: 0, rawRow,
+      });
+      expect(result.ok).toBe(true);
+      if (result.ok) expect(result.type).toBe(TransactionType.Credit);
+    }
+  });
+
+  it('defaults positive amount to Credit when no type column value matches', () => {
+    const result = resolveAmount({
+      debit: null,
+      credit: null,
+      amount: 100,
+      typeValue: '',
+      mapping: { dateCol: null, descriptionCols: [], amountCol: 'Amount', debitCol: null, creditCol: null, typeCol: null, balanceCol: null },
+      rowIndex: 0,
+      rawRow,
+    });
+    expect(result).toEqual({ ok: true, amount: 100, type: TransactionType.Credit });
+  });
+
+  it('defaults negative amount to Debit when no type column value matches', () => {
+    const result = resolveAmount({
+      debit: null,
+      credit: null,
+      amount: -100,
+      typeValue: '',
+      mapping: { dateCol: null, descriptionCols: [], amountCol: 'Amount', debitCol: null, creditCol: null, typeCol: null, balanceCol: null },
+      rowIndex: 0,
+      rawRow,
+    });
+    expect(result).toEqual({ ok: true, amount: 100, type: TransactionType.Debit });
+  });
+
+  it('returns error when amount is null or zero', () => {
+    const result = resolveAmount({
+      debit: null,
+      credit: null,
+      amount: null,
+      typeValue: '',
+      mapping: { dateCol: null, descriptionCols: [], amountCol: 'Amount', debitCol: null, creditCol: null, typeCol: null, balanceCol: null },
+      rowIndex: 5,
+      rawRow,
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.errorMessage).toContain('unparseable amount');
+    }
+  });
+
+  it('returns debit from sole debit column', () => {
+    const result = resolveAmount({
+      debit: 750,
+      credit: null,
+      amount: null,
+      typeValue: '',
+      mapping: { dateCol: null, descriptionCols: [], amountCol: null, debitCol: 'Debit', creditCol: null, typeCol: null, balanceCol: null },
+      rowIndex: 0,
+      rawRow,
+    });
+    expect(result).toEqual({ ok: true, amount: 750, type: TransactionType.Debit });
+  });
+
+  it('returns error when sole debit column is null', () => {
+    const result = resolveAmount({
+      debit: null,
+      credit: null,
+      amount: null,
+      typeValue: '',
+      mapping: { dateCol: null, descriptionCols: [], amountCol: null, debitCol: 'Debit', creditCol: null, typeCol: null, balanceCol: null },
+      rowIndex: 7,
+      rawRow,
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.errorMessage).toContain('unparseable debit');
+    }
+  });
+
+  it('returns credit from sole credit column', () => {
+    const result = resolveAmount({
+      debit: null,
+      credit: 1200,
+      amount: null,
+      typeValue: '',
+      mapping: { dateCol: null, descriptionCols: [], amountCol: null, debitCol: null, creditCol: 'Credit', typeCol: null, balanceCol: null },
+      rowIndex: 0,
+      rawRow,
+    });
+    expect(result).toEqual({ ok: true, amount: 1200, type: TransactionType.Credit });
+  });
+
+  it('returns error when sole credit column is zero', () => {
+    const result = resolveAmount({
+      debit: null,
+      credit: 0,
+      amount: null,
+      typeValue: '',
+      mapping: { dateCol: null, descriptionCols: [], amountCol: null, debitCol: null, creditCol: 'Credit', typeCol: null, balanceCol: null },
+      rowIndex: 9,
+      rawRow,
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.errorMessage).toContain('unparseable credit');
+    }
+  });
+
+  it('returns error when no amount columns exist at all', () => {
+    const result = resolveAmount({
+      debit: null,
+      credit: null,
+      amount: null,
+      typeValue: '',
+      mapping: { dateCol: null, descriptionCols: [], amountCol: null, debitCol: null, creditCol: null, typeCol: null, balanceCol: null },
+      rowIndex: 10,
+      rawRow,
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.errorMessage).toContain('no amount columns available');
+    }
+  });
+
+  it('normalizes amount with Math.abs', () => {
+    const result = resolveAmount({
+      debit: -500,
+      credit: null,
+      amount: null,
+      typeValue: '',
+      mapping: { dateCol: null, descriptionCols: [], amountCol: null, debitCol: 'Debit', creditCol: 'Credit', typeCol: null, balanceCol: null },
+      rowIndex: 0,
+      rawRow,
+    });
+    expect(result).toEqual({ ok: true, amount: 500, type: TransactionType.Debit });
   });
 });

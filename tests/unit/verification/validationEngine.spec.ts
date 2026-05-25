@@ -194,6 +194,108 @@ describe('validateCCSummary', () => {
     expect(result.valid).toBe(true);
   });
 
+  it('rejects invalid month name in date (e.g. "15 Xyz 2024")', () => {
+    const result = validateCCSummary({
+      statementDate: '15 Xyz 2024',
+      creditLimit: 100000,
+    });
+    expect(result.valid).toBe(false);
+    expect(result.errors.some(e => e.includes('statementDate'))).toBe(true);
+  });
+
+  it('rejects month-name date with day > 31', () => {
+    const result = validateCCSummary({
+      statementDate: '32 Jan 2024',
+      creditLimit: 100000,
+    });
+    expect(result.valid).toBe(false);
+  });
+
+  it('rejects month-name date with invalid day for month (Feb 30)', () => {
+    const result = validateCCSummary({
+      statementDate: '30 Feb 2024',
+      creditLimit: 100000,
+    });
+    expect(result.valid).toBe(false);
+  });
+
+  it('rejects invalid paymentDueDate format', () => {
+    const result = validateCCSummary({
+      statementDate: '2024-01-31',
+      paymentDueDate: 'garbage-date',
+      creditLimit: 100000,
+    });
+    expect(result.valid).toBe(false);
+    expect(result.errors.some(e => e.includes('paymentDueDate'))).toBe(true);
+  });
+
+  it('accepts MM-DD-YYYY date format when second part > 12', () => {
+    // "01-15-2024": first=01 <= 12, second=15 > 12 → MM/DD/YYYY interpretation
+    const result = validateCCSummary({
+      statementDate: '01-15-2024',
+      creditLimit: 100000,
+    });
+    expect(result.valid).toBe(true);
+  });
+
+  it('accepts DD/MM/YYYY when first part > 12', () => {
+    // "15/01/2024": first=15 > 12 → DD/MM/YYYY interpretation
+    const result = validateCCSummary({
+      statementDate: '15/01/2024',
+      creditLimit: 100000,
+    });
+    expect(result.valid).toBe(true);
+  });
+
+  it('accepts ambiguous DD/MM/YYYY when both parts <= 12', () => {
+    // "05/06/2024": both <= 12, ambiguous → defaults to DD/MM/YYYY
+    const result = validateCCSummary({
+      statementDate: '05/06/2024',
+      creditLimit: 100000,
+    });
+    expect(result.valid).toBe(true);
+  });
+
+  it('accepts 2-digit year format', () => {
+    // "25-01-15": first part length != 4, last part length != 4 → 2-digit year branch
+    // parts[0] < 100 → +2000 → year 2025
+    const result = validateCCSummary({
+      statementDate: '25-06-15',
+      creditLimit: 100000,
+    });
+    expect(result.valid).toBe(true);
+  });
+
+  it('rejects "25-13-15" — month 13 is invalid regardless of interpretation', () => {
+    // Primary parser: a=25 > 12 → DMY → day=25, month=13 → month > 11 → null
+    // Old parser: YY-MM-DD → year=2025, month=13 → invalid
+    // Both correctly reject it.
+    const result = validateCCSummary({
+      statementDate: '25-13-15',
+      creditLimit: 100000,
+    });
+    expect(result.valid).toBe(false);
+  });
+
+  it('parses 2-digit-year date "25-01-32" as DMY (Jan 25, 2032)', () => {
+    // The primary parser uses heuristic: first value > 12 → it's a day → DMY format.
+    // "25-01-32" → day=25, month=01, year=2032
+    const result = validateCCSummary({
+      statementDate: '25-01-32',
+      creditLimit: 100000,
+    });
+    expect(result.valid).toBe(true);
+  });
+
+  it('rejects genuinely invalid date "32-01-15" (day > 31)', () => {
+    // "32-01-15" → day=32 (invalid, >31)
+    const result = validateCCSummary({
+      statementDate: '32-01-15',
+      creditLimit: 100000,
+    });
+    expect(result.valid).toBe(false);
+  });
+
   it('rejects Feb 30 as statementDate', () => {
     const result = validateCCSummary({
       statementDate: '2024-02-30',

@@ -143,6 +143,58 @@ describe('extractDateFromText', () => {
   });
 });
 
+describe('parseDate — YYYY.MM.DD pattern', () => {
+  it('parses YYYY.MM.DD (European dot-separated)', () => {
+    const result = parseDate('2024.01.15');
+    expect(result).toEqual(new Date(2024, 0, 15));
+  });
+});
+
+describe('parseDate — DD.MM.YY pattern', () => {
+  it('parses DD.MM.YY with 2-digit year', () => {
+    const result = parseDate('15.01.24');
+    expect(result).toEqual(new Date(2024, 0, 15));
+  });
+});
+
+describe('parseDate — detected order does not override unambiguous dates', () => {
+  it('parses 29/02/2024 as unambiguous DMY regardless of MDY preference', () => {
+    // a=29 > 12, b=2 <= 12 → unambiguous DMY. Detected order is irrelevant.
+    const result = parseDate('29/02/2024', 'MDY');
+    expect(result).toEqual(new Date(2024, 1, 29));
+  });
+
+  it('parses 02/29/2024 as unambiguous MDY regardless of DMY preference', () => {
+    // b=29 > 12, a=2 <= 12 → unambiguous MDY. Detected order is irrelevant.
+    const result = parseDate('02/29/2024', 'DMY');
+    expect(result).toEqual(new Date(2024, 1, 29));
+  });
+});
+
+describe('parseDate — native Date constructor fallback', () => {
+  it('uses native Date constructor for date strings not matching any pattern', () => {
+    // "15 Jan, 2024" with a comma — let's check if it matches patterns.
+    // After cleaning: "15 Jan, 2024"
+    // Pattern 2 (DD-Mon-YYYY): regex /^(\d{1,2})[-/\s]([A-Za-z]{3,9})[-/\s,]*(\d{2,4})$/
+    // "15 Jan, 2024" => match with comma consumed by [-/\s,]* => hits pattern 2, not native fallback.
+    //
+    // We need something that passes ALL pattern checks but still parses natively.
+    // A date-only ISO string with a T attached (time stripped) would work.
+    // Input: "2024-01-15T00:00:00" — after time stripping, becomes "2024-01-15"
+    // which matches pattern 1. Not useful.
+    //
+    // "2024-Jan-15" — doesn't start with digit (wait, it does: 2024).
+    // Pattern 1: /^(\d{4})[-/](\d{1,2})[-/](\d{1,2})$/ — "Jan" is not \d{1,2}, fails.
+    // Pattern 6 (YYYY.MM.DD): dots not dashes, fails.
+    // Falls through to native Date which parses it.
+    const result = parseDate('2024-Jan-15');
+    expect(result).not.toBeNull();
+    expect(result!.getFullYear()).toBe(2024);
+    expect(result!.getMonth()).toBe(0);
+    expect(result!.getDate()).toBe(15);
+  });
+});
+
 describe('excelSerialToDate', () => {
   it('converts valid serial (45306 → Jan 15, 2024)', () => {
     const result = excelSerialToDate(45306);
@@ -171,5 +223,37 @@ describe('excelSerialToDate', () => {
 
   it('returns null for serial > 100000', () => {
     expect(excelSerialToDate(100001)).toBeNull();
+  });
+});
+
+describe('parseDate — unambiguous dates with invalid day/month combinations', () => {
+  it('returns null for Feb 29 in non-leap year (unambiguous DMY)', () => {
+    // a=29 > 12 → unambiguous DMY path. Feb 29 2023 doesn't exist → null.
+    const result = parseDate('29/02/2023', 'DMY');
+    expect(result).toBeNull();
+  });
+
+  it('parses 31/01/2024 as unambiguous DMY regardless of MDY preference', () => {
+    // a=31 > 12 → unambiguous DMY path. Jan 31 is valid.
+    const result = parseDate('31/01/2024', 'MDY');
+    expect(result).toEqual(new Date(2024, 0, 31));
+  });
+});
+
+describe('parseDate — native fallback overflow protection', () => {
+  it('rejects "30 Feb 2024" (month name with invalid day)', () => {
+    expect(parseDate('30 Feb 2024')).toBeNull();
+  });
+
+  it('rejects "25-13-15" — month 13 is invalid regardless of DMY/YY-MM-DD interpretation', () => {
+    expect(parseDate('25-13-15')).toBeNull();
+  });
+
+  it('rejects "32-01-15" — native fallback blocked for pattern-matched strings', () => {
+    expect(parseDate('32-01-15')).toBeNull();
+  });
+
+  it('rejects "2024-02-30" (ISO with overflow)', () => {
+    expect(parseDate('2024-02-30')).toBeNull();
   });
 });
