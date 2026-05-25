@@ -63,6 +63,27 @@ describe('mergeOutputs — bank statement', () => {
     expect(result.meta.warnings.some(w => w.includes('Balance reconciliation'))).toBe(true);
   });
 
+  it('runs bank cross-section validation when accountNumber is present', () => {
+    // The mergeEngine checks `'accountNumber' in summary` to decide whether
+    // to call validateBankCrossSection. This test includes accountNumber
+    // to exercise that branch (line 194).
+    const summary = {
+      statementDate: '2024-01-31',
+      statementPeriodStart: '2024-01-01',
+      statementPeriodEnd: '2024-01-31',
+      openingBalance: 50000,
+      closingBalance: 100000, // Doesn't match: 50000 + 1000(credit) - 500(debit) = 50500 ≠ 100000
+      accountNumber: '1234567890',
+    };
+    const transactions = [
+      makeTxn({ description: 'SALARY', amount: 1000, type: 'credit' }),
+      makeTxn({ description: 'AMAZON', amount: 500, type: 'debit' }),
+    ];
+    const result = mergeOutputs('bank', summary as BankSummary, { transactions }, null, []);
+    // Should have cross-section warning from validateBankCrossSection
+    expect(result.meta.warnings.some(w => w.includes('cross-section') || w.includes('openingBalance'))).toBe(true);
+  });
+
   it('warns on bank balance mismatch, no warning when reconciled', () => {
     const summary = {
       statementDate: '2024-01-31',

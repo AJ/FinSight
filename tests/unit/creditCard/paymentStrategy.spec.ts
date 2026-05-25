@@ -39,6 +39,20 @@ describe('calculateAvalanche', () => {
     // Both cards should get some payment (at least minimum)
     expect(result.cardPayments[0].recommendedPayment).toBeGreaterThan(0);
   });
+
+  it('handles insufficient funds where remaining < minPay', () => {
+    // Two cards with large balances but very small available amount.
+    // First card's 5% minimum = 500, which exceeds the available 300.
+    const cards = [
+      makeCard({ issuer: 'A', lastFour: '1111', balance: 10000, apr: 0.40 }),
+      makeCard({ issuer: 'B', lastFour: '2222', balance: 10000, apr: 0.30 }),
+    ];
+    const result = calculateAvalanche(cards, 300);
+    // First card gets min(500, 300) = 300; second card gets min(500, 0) = 0
+    expect(result.cardPayments[0].recommendedPayment).toBe(300);
+    expect(result.cardPayments[1].recommendedPayment).toBe(0);
+    expect(result.totalDebt).toBe(20000);
+  });
 });
 
 describe('calculateSnowball', () => {

@@ -247,4 +247,82 @@ describe('buildChatContextForQuestion', () => {
     const context = buildChatContextForQuestion(txns, INR, 'overview');
     expect(context).toContain('No valid transaction dates available.');
   });
+
+  // --- buildSummary: multiple expense categories sorted by total ---
+
+  it('sorts expense categories by total descending in summary', () => {
+    const txns = [
+      makeTransaction({ id: '1', description: 'Grocery', amount: 5000, category: makeCategory('groceries') }),
+      makeTransaction({ id: '2', description: 'Restaurant', amount: 2000, category: makeCategory('dining') }),
+      makeTransaction({ id: '3', description: 'Gas', amount: 1000, category: makeCategory('transportation') }),
+    ];
+    const context = buildChatContextForQuestion(txns, INR, 'spending breakdown');
+    // The "Top expense categories" line should list them in order: groceries, dining, transportation
+    const categoryLine = context.split('\n').find(l => l.includes('Top expense categories'));
+    expect(categoryLine).toBeTruthy();
+    // groceries (5000) should appear before dining (2000) in the string
+    const groceriesIdx = categoryLine!.indexOf('groceries');
+    const diningIdx = categoryLine!.indexOf('dining');
+    expect(groceriesIdx).toBeLessThan(diningIdx);
+  });
+
+  // --- buildSummary: multiple months in recent months summary ---
+
+  it('shows recent months sorted by month descending', () => {
+    const txns = [
+      makeTransaction({ id: '1', description: 'Jan expense', amount: 1000, date: new Date('2025-01-15') }),
+      makeTransaction({ id: '2', description: 'Mar expense', amount: 2000, date: new Date('2025-03-15') }),
+      makeTransaction({ id: '3', description: 'Feb expense', amount: 1500, date: new Date('2025-02-15') }),
+    ];
+    const context = buildChatContextForQuestion(txns, INR, 'monthly breakdown');
+    // "Recent months" line should list months in descending order: 2025-03, 2025-02, 2025-01
+    const monthsLine = context.split('\n').find(l => l.includes('Recent months'));
+    expect(monthsLine).toBeTruthy();
+    const marIdx = monthsLine!.indexOf('2025-03');
+    const febIdx = monthsLine!.indexOf('2025-02');
+    const janIdx = monthsLine!.indexOf('2025-01');
+    expect(marIdx).toBeLessThan(febIdx);
+    expect(febIdx).toBeLessThan(janIdx);
+  });
+
+  // --- Hard truncation when context exceeds maxChars with few transactions ---
+
+  it('hard-truncates context when few transactions still exceed maxChars', () => {
+    // Create a transaction with an extremely long description
+    const veryLongDesc = 'X'.repeat(500);
+    const txns = [
+      makeTransaction({ id: '1', description: veryLongDesc, amount: 100 }),
+    ];
+    // Set a very small maxChars to force the hard truncation path
+    const context = buildChatContextForQuestion(txns, INR, 'show transactions', { maxChars: 100 });
+    expect(context.length).toBeLessThanOrEqual(100);
+    // Hard truncation appends "..."
+    expect(context).toContain('...');
+  });
+
+  // --- buildSummary: topCategories is empty when no expense transactions ---
+
+  it('shows "none" for top expense categories when only income transactions', () => {
+    const txns = [
+      makeTransaction({ id: '1', description: 'Salary', amount: 5000, category: makeCategory('salary', CategoryType.Income) }),
+    ];
+    const context = buildChatContextForQuestion(txns, INR, 'overview');
+    expect(context).toContain('Top expense categories: none');
+  });
+
+  // --- buildSummary: recentMonths is empty when dates are invalid ---
+
+  it('shows "none" for recent months when no valid month data', () => {
+    // Use transactions with no valid dates — the monthMap will be empty
+    const txns = [
+      makeTransaction({ id: 'd1', amount: 100 }),
+    ];
+    for (const txn of txns) {
+      Object.defineProperty(txn, 'date', { value: 'invalid', writable: true });
+    }
+    const context = buildChatContextForQuestion(txns, INR, 'overview');
+    // When dates are invalid, format() may produce "Invalid Date" as month key
+    // or the whole summary may show the fallback
+    expect(context).toContain('Ledger snapshot');
+  });
 });

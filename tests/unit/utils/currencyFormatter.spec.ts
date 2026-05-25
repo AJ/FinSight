@@ -158,3 +158,20 @@ describe('formatCurrency — casing consistency', () => {
     expect(result).not.toContain('1,501.');
   });
 });
+
+describe('formatCurrency — Intl fallback', () => {
+  it('falls back to symbol + toLocaleString for invalid currency code', () => {
+    const fake = { code: 'FAKE', symbol: 'F$', name: 'Fake Currency' };
+    const result = formatCurrency(1000, fake);
+    // Intl.NumberFormat throws for 'FAKE', so fallback path produces "F$" + formatted number
+    expect(result).toContain('F$');
+    expect(result).toContain('1,000');
+  });
+
+  it('falls back with decimal amount for invalid currency code', () => {
+    const fake = { code: 'FAKE', symbol: 'F$', name: 'Fake Currency' };
+    const result = formatCurrency(1000.50, fake);
+    expect(result).toContain('F$');
+    expect(result).toContain('1,000.5');
+  });
+});

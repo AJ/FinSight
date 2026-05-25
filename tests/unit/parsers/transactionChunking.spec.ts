@@ -430,6 +430,97 @@ describe('mergeChunkTransactions', () => {
     expect(result.duplicatesRemoved).toBe(1);
   });
 
+  it('handles transactions with undefined optional fields for signature matching', () => {
+    // Exercises the ?? '' and !== undefined branches in buildTransactionSignature
+    // and buildConflictKey by omitting optional fields
+    const txMinimal: ExtractedTransaction = {
+      date: '2024-01-15',
+      description: 'Test',
+      amount: 50,
+      type: 'debit',
+    };
+    // Second transaction with same core fields, one with confidence and one without
+    const txWithConf: ExtractedTransaction = {
+      date: '2024-01-15',
+      description: 'Test',
+      amount: 50,
+      type: 'debit',
+      confidence: 0.9,
+    };
+
+    const result = mergeChunkTransactions([txMinimal, txWithConf]);
+    expect(result.transactions).toHaveLength(1);
+    expect(result.duplicatesRemoved).toBe(1);
+    expect(result.transactions[0].confidence).toBe(0.9);
+  });
+
+  it('handles transactions with undefined date and type fields', () => {
+    // Exercises the ?? '' branches for date and type in buildTransactionSignature
+    const txA = {
+      date: undefined,
+      description: 'No Date',
+      amount: 100,
+      type: undefined,
+    } as unknown as ExtractedTransaction;
+    const txB = {
+      date: undefined,
+      description: 'No Date',
+      amount: 100,
+      type: undefined,
+      confidence: 0.8,
+    } as unknown as ExtractedTransaction;
+
+    const result = mergeChunkTransactions([txA, txB]);
+    expect(result.transactions).toHaveLength(1);
+    expect(result.duplicatesRemoved).toBe(1);
+  });
+
+  it('handles transactions with undefined description', () => {
+    // Exercises normalizeDescription with undefined input
+    const txA = {
+      date: '2024-01-15',
+      description: undefined,
+      amount: 50,
+      type: 'debit',
+    } as unknown as ExtractedTransaction;
+    const txB = {
+      date: '2024-01-15',
+      description: undefined,
+      amount: 50,
+      type: 'debit',
+      confidence: 0.9,
+    } as unknown as ExtractedTransaction;
+
+    const result = mergeChunkTransactions([txA, txB]);
+    expect(result.transactions).toHaveLength(1);
+    expect(result.duplicatesRemoved).toBe(1);
+  });
+
+  it('handles transactions with amount conflict but undefined originalCurrency', () => {
+    // Exercises buildConflictKey with undefined originalCurrency
+    const txA: ExtractedTransaction = {
+      date: '2024-01-15',
+      description: 'Test',
+      amount: 50,
+      type: 'debit',
+      originalCurrency: undefined,
+      confidence: 0.6,
+    };
+    const txB: ExtractedTransaction = {
+      date: '2024-01-15',
+      description: 'Test',
+      amount: 75,
+      type: 'debit',
+      originalCurrency: undefined,
+      confidence: 0.9,
+    };
+
+    const result = mergeChunkTransactions([txA, txB]);
+    expect(result.transactions).toHaveLength(1);
+    expect(result.conflictsResolved).toBe(1);
+    expect(result.transactions[0].amount).toBe(75);
+  });
+
   it('preserves insertion order for unique transactions', () => {
     const txns = [
       makeTx({ date: '2024-01-01', description: 'First', amount: 10, type: 'debit' }),

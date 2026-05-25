@@ -565,6 +565,162 @@ describe('processStatement — credit card chunks large statements', () => {
   });
 });
 
+describe('processStatement — error path coverage', () => {
+  it('retries CC summary after validation failure (onValidationFailure callback)', async () => {
+    // Parseable JSON that fails validateCCSummary (bad date format)
+    const invalidCCSummary = JSON.stringify({
+      statementDate: 'not-a-date',
+      totalDue: 5000,
+      minimumDue: 500,
+      creditLimit: 100000,
+      previousBalance: 4000,
+    });
+    mockFetch
+      .mockResolvedValueOnce(ollamaJson(invalidCCSummary))    // attempt 1: fails validation → onValidationFailure fires
+      .mockResolvedValueOnce(ollamaJson(ccSummaryJson()))      // attempt 2: valid
+      .mockResolvedValueOnce(ollamaJson(transactionsJson()))    // transactions
+      .mockResolvedValueOnce(ollamaJson(JSON.stringify({ rewards: [] }))); // rewards
+
+    const result = await processStatement('credit card statement with cashback', {
+      ...defaultOptions,
+      statementType: 'credit_card',
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.data?.statementSummary).toBeDefined();
+    // summary (2 attempts) + transactions + rewards = 4 fetch calls
+    expect(mockFetch).toHaveBeenCalledTimes(4);
+  });
+
+  it('retries bank summary after validation failure (onValidationFailure callback)', async () => {
+    const invalidBankSummary = JSON.stringify({
+      statementDate: 'not-a-date',
+      openingBalance: 10000,
+      closingBalance: 5000,
+    });
+    mockFetch
+      .mockResolvedValueOnce(ollamaJson(invalidBankSummary))   // attempt 1: fails validation → onValidationFailure fires
+      .mockResolvedValueOnce(ollamaJson(bankSummaryJson()))     // attempt 2: valid
+      .mockResolvedValueOnce(ollamaJson(transactionsJson()));    // transactions
+
+    const result = await processStatement('raw bank text', {
+      ...defaultOptions,
+      statementType: 'bank',
+    });
+
+    expect(result.success).toBe(true);
+    // summary (2 attempts) + transactions = 3 fetch calls
+    expect(mockFetch).toHaveBeenCalledTimes(3);
+  });
+
+  it('reports transaction extraction failure for credit card path', async () => {
+    const brokenResponse = 'BROKEN JSON }}}';
+    mockFetch
+      .mockResolvedValueOnce(ollamaJson(ccSummaryJson()))
+      .mockResolvedValueOnce(ollamaJson(brokenResponse))  // txn attempt 1
+      .mockResolvedValueOnce(ollamaJson(brokenResponse))  // txn attempt 2
+      .mockResolvedValueOnce(ollamaJson(brokenResponse))  // txn attempt 3
+      .mockResolvedValueOnce(ollamaJson(JSON.stringify({ rewards: [] })));
+
+    const result = await processStatement('credit card statement with cashback', {
+      ...defaultOptions,
+      statementType: 'credit_card',
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.errors[0]).toContain('Transaction extraction failed');
+  });
+
+  it('reports partial extraction warning when some CC chunks fail', async () => {
+    const longLine = 'Credit card transaction data with cashback rewards';
+    const longText = Array.from({ length: 300 }, (_, i) => `${longLine} #${i + 1}`).join('\n');
+
+    const brokenResponse = 'BROKEN JSON }}}';
+    const chunk1Txns = [
+      { date: '2024-01-10', description: 'CC Purchase', amount: 45.50, type: 'debit' },
+    ];
+
+    mockFetch
+      .mockResolvedValueOnce(ollamaJson(ccSummaryJson()))
+      .mockResolvedValueOnce(ollamaJson(transactionsJson(chunk1Txns)))  // chunk 1: valid
+      .mockResolvedValueOnce(ollamaJson(brokenResponse))                // chunk 2 attempt 1
+      .mockResolvedValueOnce(ollamaJson(brokenResponse))                // chunk 2 attempt 2
+      .mockResolvedValueOnce(ollamaJson(brokenResponse))                // chunk 2 attempt 3
+      .mockResolvedValueOnce(ollamaJson(JSON.stringify({ rewards: [] })));
+
+    const result = await processStatement(longText, {
+      ...defaultOptions,
+      statementType: 'credit_card',
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.data?.transactions).toHaveLength(1);
+    expect(result.warnings.some(w => w.includes('Partial extraction'))).toBe(true);
+  });
+
+  it('fires chunk validation failure callback for parseable but invalid chunk data', async () => {
+    const longLine = 'Transaction data line with sufficient content to build up character count for threshold testing';
+    const longText = Array.from({ length: 250 }, (_, i) => `${longLine} #${i + 1}`).join('\n');
+
+    // Parseable JSON that fails validateTransactions (negative amount)
+    const invalidChunkTxns = [
+      { date: '2024-01-15', description: 'Invalid Amount', amount: -50, type: 'debit' },
+    ];
+    const chunk2Txns = [
+      { date: '2024-02-01', description: 'Valid Purchase', amount: 75, type: 'debit' },
+    ];
+
+    mockFetch
+      .mockResolvedValueOnce(ollamaJson(bankSummaryJson()))
+      // Chunk 1: 3 attempts with parseable but invalid data → triggers onValidationFailure each time
+      .mockResolvedValueOnce(ollamaJson(transactionsJson(invalidChunkTxns)))
+      .mockResolvedValueOnce(ollamaJson(transactionsJson(invalidChunkTxns)))
+      .mockResolvedValueOnce(ollamaJson(transactionsJson(invalidChunkTxns)))
+      // Chunk 2: valid
+      .mockResolvedValueOnce(ollamaJson(transactionsJson(chunk2Txns)));
+
+    const result = await processStatement(longText, {
+      ...defaultOptions,
+      statementType: 'bank',
+    });
+
+    // hasUsableData=true (chunk 2 succeeded), so success with chunk 1 failures as warnings
+    expect(result.success).toBe(true);
+    expect(result.data?.transactions.length).toBeGreaterThanOrEqual(1);
+    expect(result.warnings.length).toBeGreaterThan(0);
+  });
+
+  it('warns about chunk overlap amount conflicts', async () => {
+    const longLine = 'Transaction data line with sufficient content to build up character count for threshold testing';
+    const longText = Array.from({ length: 250 }, (_, i) => `${longLine} #${i + 1}`).join('\n');
+
+    // Same transaction extracted with different amounts across chunks
+    const chunk1Txns = [
+      { date: '2024-01-15', description: 'Amazon Purchase', amount: 100, type: 'debit', confidence: 0.9 },
+    ];
+    const chunk2Txns = [
+      { date: '2024-01-15', description: 'Amazon Purchase', amount: 150, type: 'debit', confidence: 0.7 },
+    ];
+
+    mockFetch
+      .mockResolvedValueOnce(ollamaJson(bankSummaryJson()))
+      .mockResolvedValueOnce(ollamaJson(transactionsJson(chunk1Txns)))
+      .mockResolvedValueOnce(ollamaJson(transactionsJson(chunk2Txns)));
+
+    const result = await processStatement(longText, {
+      ...defaultOptions,
+      statementType: 'bank',
+    });
+
+    expect(result.success).toBe(true);
+    // mergeChunkTransactions detects same date/type/description with different amounts → conflict resolved
+    expect(result.warnings.some(w => w.includes('Chunk overlap: resolved 1 amount conflict'))).toBe(true);
+    // Higher-confidence extraction (amount 100, confidence 0.9) should win
+    expect(result.data?.transactions).toHaveLength(1);
+    expect(result.data?.transactions[0].amount).toBe(100);
+  });
+});
+
 describe('processStatement — type detection bankName forwarding', () => {
   it('forwards bankName from type detection to extraction', async () => {
     const detectedType = typeDetectionJson('bank', 0.95);

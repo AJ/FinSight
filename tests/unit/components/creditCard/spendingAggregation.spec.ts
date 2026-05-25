@@ -94,6 +94,17 @@ describe('aggregateByCategory', () => {
     const result = aggregateByCategory([], mockCategoryDisplay);
     expect(result).toHaveLength(0);
   });
+
+  it('returns 0 percentage when all amounts are zero', () => {
+    const txns = [
+      txn({ date: '2025-01-15', category: { id: 'shopping' }, amount: 0 }),
+    ];
+
+    const result = aggregateByCategory(txns, mockCategoryDisplay);
+    expect(result).toHaveLength(1);
+    expect(result[0].percentage).toBe(0);
+    expect(result[0].value).toBe(0);
+  });
 });
 
 describe('aggregateByCard', () => {
@@ -132,6 +143,17 @@ describe('aggregateByCard', () => {
 
     const result = aggregateByCard(txns);
     expect(result[0].label).toBe('HDFC ****9999');
+  });
+
+  it('returns 0 percentage when all amounts are zero', () => {
+    const txns = [
+      txn({ date: '2025-01-15', cardIssuer: 'HDFC', cardLastFour: '1234', amount: 0 }),
+    ];
+
+    const result = aggregateByCard(txns);
+    expect(result).toHaveLength(1);
+    expect(result[0].percentage).toBe(0);
+    expect(result[0].amount).toBe(0);
   });
 });
 

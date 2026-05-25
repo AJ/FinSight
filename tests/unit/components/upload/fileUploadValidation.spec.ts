@@ -137,6 +137,14 @@ describe('isAbortError', () => {
   it('returns false for object without abort indicators', () => {
     expect(isAbortError({ name: 'TypeError', message: 'not a function' })).toBe(false);
   });
+
+  it('handles non-string message property', () => {
+    expect(isAbortError({ name: 'Error', message: 42 })).toBe(false);
+  });
+
+  it('handles object with undefined message', () => {
+    expect(isAbortError({ name: 'Error', message: undefined })).toBe(false);
+  });
 });
 
 describe('formatElapsedSeconds', () => {

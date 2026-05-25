@@ -62,6 +62,10 @@ describe('buildMerchantKey', () => {
     // "MERCHANT (NOISE) STORE" → "MERCHANT  STORE" → "MERCHANT STORE"
     expect(buildMerchantKey('MERCHANT (NOISE) STORE')).toBe('MERCHANT STORE');
   });
+
+  it('returns __unknown__ for whitespace-only input', () => {
+    expect(buildMerchantKey('   ')).toBe('__unknown__');
+  });
 });
 
 describe('findMatchingMerchantRule', () => {
@@ -165,6 +169,75 @@ describe('findMatchingMerchantRule', () => {
     );
     expect(result).toBeNull();
   });
+
+  it('breaks tie by totalConfirmations when specificity is equal', () => {
+    const fewerConfirms = makeRule({
+      direction: 'any',
+      sourceType: 'any',
+      activeCategoryId: 'shopping',
+      totalConfirmations: 3,
+      lastConfirmedAt: '2024-01-02',
+    });
+    const moreConfirms = makeRule({
+      merchantKey: 'AMAZON',
+      direction: 'any',
+      sourceType: 'any',
+      activeCategoryId: 'shopping',
+      totalConfirmations: 10,
+      lastConfirmedAt: '2024-01-01',
+    });
+    const result = findMatchingMerchantRule(
+      [fewerConfirms, moreConfirms],
+      { merchantKey: 'AMAZON', direction: 'debit', sourceType: SourceType.Bank },
+    );
+    expect(result?.totalConfirmations).toBe(10);
+  });
+
+  it('breaks tie by lastConfirmedAt when specificity and totalConfirmations are equal', () => {
+    const older = makeRule({
+      direction: 'any',
+      sourceType: 'any',
+      activeCategoryId: 'shopping',
+      totalConfirmations: 5,
+      lastConfirmedAt: '2024-01-01',
+    });
+    const newer = makeRule({
+      merchantKey: 'AMAZON',
+      direction: 'any',
+      sourceType: 'any',
+      activeCategoryId: 'shopping',
+      totalConfirmations: 5,
+      lastConfirmedAt: '2024-06-01',
+    });
+    const result = findMatchingMerchantRule(
+      [older, newer],
+      { merchantKey: 'AMAZON', direction: 'debit', sourceType: SourceType.Bank },
+    );
+    expect(result?.lastConfirmedAt).toBe('2024-06-01');
+  });
+
+  it('returns best when tied candidates agree on activeCategoryId', () => {
+    const ruleA = makeRule({
+      direction: 'debit',
+      sourceType: 'any',
+      activeCategoryId: 'shopping',
+      totalConfirmations: 5,
+      lastConfirmedAt: '2024-01-01',
+    });
+    const ruleB = makeRule({
+      direction: 'any',
+      sourceType: SourceType.Bank,
+      activeCategoryId: 'shopping',
+      totalConfirmations: 5,
+      lastConfirmedAt: '2024-01-02',
+    });
+    const result = findMatchingMerchantRule(
+      [ruleA, ruleB],
+      { merchantKey: 'AMAZON', direction: 'debit', sourceType: SourceType.Bank },
+    );
+    expect(result).not.toBeNull();
+    expect(result?.activeCategoryId).toBe('shopping');
+  });
 });
 
 describe('applyMerchantRuleDecision', () => {
@@ -260,6 +333,72 @@ describe('applyMerchantRuleDecision', () => {
     expect(result.activeCategoryId).toBe('shopping');
     expect(result.runnerUpCategoryId).toBe('travel');
     expect(result.statusReason).toBe('dominance-restored');
+  });
+
+  it('filters zero-count categories from votes before resolving', () => {
+    const existing = makeRule({
+      categoryVotes: { shopping: 0, travel: 3 },
+      activeCategoryId: 'travel',
+      totalConfirmations: 3,
+    });
+    const result = applyMerchantRuleDecision(
+      existing,
+      { merchantKey: 'AMAZON', categoryId: 'groceries', direction: 'debit', sourceType: SourceType.Bank, sampleDescription: 'AMAZON PURCHASE' },
+      '2024-01-02'
+    );
+    // shopping=0 filtered out, travel=3, groceries=1 → travel leads by 2, travel(3)>=MIN(3)
+    expect(result.status).toBe('confident');
+    expect(result.activeCategoryId).toBe('travel');
+    expect(result.categoryVotes.shopping).toBe(0);
+    expect(result.categoryVotes.groceries).toBe(1);
+  });
+
+  it('sorts categories deterministically when votes are equal', () => {
+    const existing = makeRule({
+      categoryVotes: { shopping: 3, dining: 3 },
+      activeCategoryId: undefined,
+      status: 'ambiguous',
+      totalConfirmations: 6,
+    });
+    const result = applyMerchantRuleDecision(
+      existing,
+      { merchantKey: 'AMAZON', categoryId: 'shopping', direction: 'debit', sourceType: SourceType.Bank, sampleDescription: 'AMAZON PURCHASE' },
+      '2024-01-02'
+    );
+    // shopping=4, dining=3 → lead=1 < MIN_LEAD(2) → ambiguous
+    expect(result.status).toBe('ambiguous');
+    expect(result.runnerUpCategoryId).toBe('dining');
+  });
+
+  it('returns ambiguous when all category votes are zero (resolveMerchantRuleState empty votes)', () => {
+    // When categoryVotes has all zero counts, getSortedCategoryVotes filters them all out,
+    // leaving sortedVotes empty. topVote is undefined → line 224 path.
+    const existing = makeRule({
+      categoryVotes: { shopping: 0, dining: 0 },
+      activeCategoryId: undefined,
+      status: 'ambiguous',
+      totalConfirmations: 0,
+    });
+    const result = applyMerchantRuleDecision(
+      existing,
+      { merchantKey: 'AMAZON', categoryId: 'shopping', direction: 'debit', sourceType: SourceType.Bank, sampleDescription: 'AMAZON PURCHASE' },
+      '2024-01-02'
+    );
+    // shopping=1, dining=0 → shopping is top, dining filtered → single-category → confident
+    expect(result.status).toBe('confident');
+    expect(result.activeCategoryId).toBe('shopping');
+  });
+
+  it('returns ambiguous when existing has zero votes and new vote is for unknown category', () => {
+    // Create a rule with genuinely empty categoryVotes (no entries at all)
+    const result = applyMerchantRuleDecision(
+      undefined,
+      { merchantKey: 'TEST', categoryId: 'other', direction: 'debit', sourceType: SourceType.Bank, sampleDescription: 'TEST' },
+      '2024-01-01'
+    );
+    // No existing rule → creates new rule with one category vote → single-category → confident
+    expect(result.status).toBe('confident');
+    expect(result.activeCategoryId).toBe('other');
   });
 });
 
@@ -434,6 +573,30 @@ describe('isLegacyMerchantRule', () => {
     expect(isLegacyMerchantRule(null)).toBe(false);
     expect(isLegacyMerchantRule('string')).toBe(false);
   });
+
+  it('returns false when categoryId is missing', () => {
+    expect(isLegacyMerchantRule({
+      merchantKey: 'AMAZON',
+      confirmations: 5,
+      direction: 'debit',
+      sourceType: SourceType.Bank,
+      lastConfirmedAt: '2024-01-01',
+      sampleDescription: 'AMAZON',
+    })).toBe(false);
+  });
+
+  it('returns false when totalConfirmations is present (new-format indicator)', () => {
+    expect(isLegacyMerchantRule({
+      merchantKey: 'AMAZON',
+      categoryId: 'shopping',
+      confirmations: 5,
+      totalConfirmations: 5,
+      direction: 'debit',
+      sourceType: SourceType.Bank,
+      lastConfirmedAt: '2024-01-01',
+      sampleDescription: 'AMAZON',
+    })).toBe(false);
+  });
 });
 
 // ── migrateLegacyMerchantRule ──────────────────────────────────────────────
@@ -490,5 +653,20 @@ describe('migrateLegacyMerchantRule', () => {
     const migrated = migrateLegacyMerchantRule(legacy);
     expect(migrated.totalConfirmations).toBe(1);
     expect(migrated.categoryVotes.other).toBe(1);
+  });
+
+  it('defaults to confident when ambiguous field is absent', () => {
+    const legacy = {
+      merchantKey: 'NETFLIX',
+      categoryId: 'entertainment',
+      direction: 'debit' as const,
+      sourceType: SourceType.Bank,
+      confirmations: 3,
+      lastConfirmedAt: '2024-01-01',
+      sampleDescription: 'NETFLIX SUB',
+    };
+    const migrated = migrateLegacyMerchantRule(legacy);
+    expect(migrated.status).toBe('confident');
+    expect(migrated.activeCategoryId).toBe('entertainment');
   });
 });

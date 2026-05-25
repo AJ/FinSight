@@ -435,4 +435,54 @@ describe('runWithRetry', () => {
     expect(result.errors[0]).not.toContain('16244');
     expect(result.errors[0]).toContain('Consider using a model with a larger context window');
   });
+
+  it('reports generic LLM call failure for non-context-size errors', async () => {
+    // Simulate a server error that is NOT about context size
+    mockFetch.mockResolvedValue({
+      ok: false,
+      status: 500,
+      statusText: 'Internal Server Error',
+      json: () => Promise.resolve({ error: { message: 'Model not found' } }),
+      text: () => Promise.resolve(JSON.stringify({ error: { message: 'Model not found' } })),
+    });
+
+    const result = await runWithRetry(
+      '{RAW_TEXT}',
+      'text',
+      vi.fn().mockReturnValue({ valid: true, errors: [], warnings: [], data: null }),
+      {
+        maxRetries: 1,
+        stage: 'test',
+        llmConfig: { provider: 'lmstudio', baseUrl: 'http://localhost:1234', model: 'test' },
+      },
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.errors).toHaveLength(1);
+    expect(result.errors[0]).toContain('LLM call failed:');
+  });
+
+  it('re-throws when signal is aborted during LLM call', async () => {
+    const controller = new AbortController();
+    // Abort before the fetch even completes
+    controller.abort();
+
+    mockFetch.mockImplementation(() => {
+      throw new DOMException('The user aborted a request.', 'AbortError');
+    });
+
+    await expect(
+      runWithRetry(
+        '{RAW_TEXT}',
+        'text',
+        vi.fn().mockReturnValue({ valid: true, errors: [], warnings: [], data: null }),
+        {
+          maxRetries: 1,
+          stage: 'test',
+          signal: controller.signal,
+          llmConfig: { provider: 'lmstudio', baseUrl: 'http://localhost:1234', model: 'test' },
+        },
+      ),
+    ).rejects.toThrow('aborted');
+  });
 });

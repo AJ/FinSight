@@ -115,4 +115,36 @@ describe('reviewSessionRepository', () => {
       Object.defineProperty(globalThis, 'sessionStorage', { value: realSessionStorage, configurable: true });
     }
   });
+
+  it('preserves sourceMetadata when round-tripping through save and load', () => {
+    const payload = {
+      transactions: [makeTransaction({ id: '1' })],
+      currency: { code: 'INR', symbol: '₹', name: 'Indian Rupee' },
+      format: 'csv' as const,
+      statementType: 'bank' as const,
+      fileName: 'test.csv',
+      parseDate: new Date('2024-01-15'),
+      statementSummary: null,
+      verificationReport: {
+        verified: [],
+        rejected: [],
+        duplicates: [],
+        reconciliation: { passed: true },
+        overallConfidence: 0.95,
+      },
+      warnings: [],
+      sourceMetadata: { sourceFileHash: 'abc123' },
+    };
+    reviewSessionRepository.save(payload);
+    const loaded = reviewSessionRepository.load();
+    expect(loaded).not.toBeNull();
+    expect(loaded!.sourceMetadata).toEqual({ sourceFileHash: 'abc123' });
+    expect(loaded!.verificationReport).toEqual({
+      verified: [],
+      rejected: [],
+      duplicates: [],
+      reconciliation: { passed: true },
+      overallConfidence: 0.95,
+    });
+  });
 });

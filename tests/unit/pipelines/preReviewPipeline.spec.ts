@@ -57,9 +57,9 @@ describe('runPreReviewPipeline', () => {
     expect(saved!.fileName).toBe('test.csv');
   });
 
-  it('silently drops rows with unparseable dates', async () => {
-    // parseRow returns { transaction: null, error: null } when parseDate() fails.
-    // These rows are silently omitted — no ParsingError, no warning generated.
+  it('reports rows with unparseable dates as warnings', async () => {
+    // parseRow returns a ParsingError when parseDate() fails.
+    // These are captured as warnings in the ExtractionBundle.
     const csv = `Date,Description,Amount,Type
 20/10/2025,Salary Credit,1000,credit
 not-a-date,Bad Row,abc,debit
@@ -74,7 +74,8 @@ not-a-date,Bad Row,abc,debit
     });
 
     expect(result.transactions).toHaveLength(2);
-    expect(result.warnings).toHaveLength(0);
+    expect(result.warnings).toHaveLength(1);
+    expect(result.warnings[0]).toContain('1 row(s) failed to parse');
   });
 
   it('throws when CSV has no date column', async () => {
@@ -290,5 +291,40 @@ Some purchase,100`;
     // Pipeline always constructs sourceMetadata, but hash is undefined when not provided
     expect(result.sourceMetadata).toBeDefined();
     expect(result.sourceMetadata!.sourceFileHash).toBeUndefined();
+  });
+
+  it('passes isDuplicateImport into saved session sourceMetadata', async () => {
+    const csv = `Date,Description,Amount,Type
+20/10/2025,Salary,5000,credit`;
+
+    await runPreReviewPipeline({
+      file: createCSVFile(csv),
+      provider: 'ollama',
+      baseUrl: 'http://localhost:11434',
+      model: 'test-model',
+      defaultCurrency: INR,
+      sourceFileHash: 'hash123',
+      isDuplicateImport: true,
+    });
+
+    const saved = reviewSessionRepository.load();
+    expect(saved!.sourceMetadata?.isDuplicateImport).toBe(true);
+  });
+
+  it('does not set isDuplicateImport when not provided', async () => {
+    const csv = `Date,Description,Amount,Type
+20/10/2025,Salary,5000,credit`;
+
+    await runPreReviewPipeline({
+      file: createCSVFile(csv),
+      provider: 'ollama',
+      baseUrl: 'http://localhost:11434',
+      model: 'test-model',
+      defaultCurrency: INR,
+      sourceFileHash: 'hash123',
+    });
+
+    const saved = reviewSessionRepository.load();
+    expect(saved!.sourceMetadata?.isDuplicateImport).toBeUndefined();
   });
 });

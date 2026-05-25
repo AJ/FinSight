@@ -169,6 +169,31 @@ describe('merchantRuleStore', () => {
       // Clean up
       localStorage.removeItem('merchant-rule-storage');
     });
+
+    it('handles null rules in persisted state', async () => {
+      const persisted = {
+        state: { rules: null },
+        version: 0,
+      };
+      localStorage.setItem('merchant-rule-storage', JSON.stringify(persisted));
+      const { useMerchantRuleStore: freshStore } = await import('@/lib/store/merchantRuleStore?' + Date.now());
+      expect(freshStore.getState().rules).toEqual([]);
+      localStorage.removeItem('merchant-rule-storage');
+    });
+
+    it('handles rules array containing null entries', async () => {
+      const validRule = makeRule('VALID');
+      const persisted = {
+        state: { rules: [null, validRule, null] },
+        version: 0,
+      };
+      localStorage.setItem('merchant-rule-storage', JSON.stringify(persisted));
+      const { useMerchantRuleStore: freshStore } = await import('@/lib/store/merchantRuleStore?' + Date.now());
+      const rules = freshStore.getState().rules;
+      expect(rules.length).toBe(1);
+      expect(rules[0].merchantKey).toBe('VALID');
+      localStorage.removeItem('merchant-rule-storage');
+    });
   });
 
   describe('sortAndTrimRules trim boundary', () => {

@@ -234,6 +234,16 @@ describe('ollamaAdapter.generate', () => {
     const body = JSON.parse(mockFetch.mock.calls[0][1].body);
     expect(body.options.top_p).toBe(0.9);
   });
+
+  it('defaults eval_count to 0 when absent but prompt_eval_count present', async () => {
+    mockFetch.mockResolvedValueOnce(
+      okResponse({ response: 'result', prompt_eval_count: 10 }),
+    );
+
+    const result = await ollamaAdapter.generate(baseUrl, model, 'prompt', defaultOptions());
+
+    expect(result.usage).toEqual({ promptTokens: 10, completionTokens: 0 });
+  });
 });
 
 // ── chatStream ───────────────────────────────────────────────────────────────
@@ -548,6 +558,38 @@ describe('ollamaAdapter.listModels', () => {
     const result = await ollamaAdapter.listModels(baseUrl, new AbortController().signal);
 
     expect(result[0].contextLength).toBe(32768);
+  });
+
+  it('returns undefined context length when parameters has no num_ctx and model_info is empty', async () => {
+    mockFetch.mockResolvedValueOnce(
+      okResponse({ models: [{ name: 'mymodel' }] }),
+    );
+    mockFetch.mockResolvedValueOnce(
+      okResponse({ parameters: 'temperature 0.7', model_info: {} }),
+    );
+
+    const result = await ollamaAdapter.listModels(baseUrl, new AbortController().signal);
+
+    expect(result[0].contextLength).toBeUndefined();
+  });
+
+  it('returns undefined context length when model_info has no context_length keys', async () => {
+    mockFetch.mockResolvedValueOnce(
+      okResponse({ models: [{ name: 'mymodel' }] }),
+    );
+    mockFetch.mockResolvedValueOnce(
+      okResponse({
+        parameters: undefined,
+        model_info: {
+          'mymodel.architecture': 'transformer',
+          'mymodel.parameter_count': '7B',
+        },
+      }),
+    );
+
+    const result = await ollamaAdapter.listModels(baseUrl, new AbortController().signal);
+
+    expect(result[0].contextLength).toBeUndefined();
   });
 });
 

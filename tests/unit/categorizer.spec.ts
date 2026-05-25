@@ -56,6 +56,14 @@ describe('categorizeTransaction', () => {
     const result = categorizeTransaction('swiggy order', 200, categories);
     expect(result).toBe('groceries');
   });
+
+  it('returns default ID when no income category exists for credit type', () => {
+    const expenseOnly = [
+      new Category('groceries', 'groceries', CategoryType.Expense, ['grocery']),
+    ];
+    const result = categorizeTransaction('unknown credit', 100, expenseOnly, TransactionType.Credit);
+    expect(result).toBe(Category.DEFAULT_ID);
+  });
 });
 
 describe('normalizeMerchantName', () => {

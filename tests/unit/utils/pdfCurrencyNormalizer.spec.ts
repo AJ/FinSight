@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 
 import { PDFCurrencyNormalizer } from '@/lib/utils/pdfCurrencyNormalizer.js';
 
@@ -353,6 +353,44 @@ describe('PDFCurrencyNormalizer', () => {
       expect(result.text).toContain('£');
       expect(result.text).toContain('€');
       expect(result.fixed).toBe(true);
+    });
+
+    it('logs warning when logUnknown is true and no currency detected', () => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const normalizer = new PDFCurrencyNormalizer({ logUnknown: true });
+      normalizer.normalize('plain text with no currency indicators');
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('Currency undetected'),
+      );
+      warnSpy.mockRestore();
+    });
+
+    it('does not warn when logUnknown is false', () => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const normalizer = new PDFCurrencyNormalizer({ logUnknown: false });
+      normalizer.normalize('plain text with no currency indicators');
+      expect(warnSpy).not.toHaveBeenCalled();
+      warnSpy.mockRestore();
+    });
+  });
+
+  describe('normalizeDocument', () => {
+    it('returns per-page results for a multi-page document', async () => {
+      const normalizer = new PDFCurrencyNormalizer();
+      const mockPage = (text: string) => ({
+        getTextContent: vi.fn().mockResolvedValue({ items: [{ str: text }] }),
+      });
+      const pdfDoc = {
+        numPages: 2,
+        getPage: vi.fn()
+          .mockResolvedValueOnce(mockPage('NEFT C 5,000'))
+          .mockResolvedValueOnce(mockPage('another page text')),
+      };
+
+      const results = await normalizer.normalizeDocument(pdfDoc as never);
+      expect(results).toHaveLength(2);
+      expect(results[0].pageNumber).toBe(1);
+      expect(results[1].pageNumber).toBe(2);
     });
   });
 });

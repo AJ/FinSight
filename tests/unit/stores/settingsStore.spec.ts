@@ -206,6 +206,14 @@ describe('validateLlmServerUrl', () => {
     const result = validateLlmServerUrl('http://myserver.com:8080');
     expect(result.warning).toContain('myserver.com');
   });
+
+  it('rejects malformed http:// URL that fails validator', () => {
+    // http:// with invalid characters should fail at the "starts with http but
+    // fails validator" branch (line 33)
+    const result = validateLlmServerUrl('http://[invalid-ipv6');
+    expect(result.valid).toBe(false);
+    expect(result.error).toBe('Invalid URL format');
+  });
 });
 
 describe('remote URL confirmation', () => {

@@ -139,6 +139,37 @@ describe('parseCategorizationResponse', () => {
     const result = parseCategorizationResponse(response);
     expect(result[0].confidence).toBe(0.2);
   });
+
+  it('extracts JSON array from surrounding text', () => {
+    const response = `Here are the categorizations:
+[{"id":"1","category":"dining","confidence":0.9}]
+Hope this helps!`;
+    const result = parseCategorizationResponse(response);
+    expect(result).toHaveLength(1);
+    expect(result[0].category).toBe('dining');
+    expect(result[0].confidence).toBe(0.9);
+  });
+
+  it('handles string confidence value', () => {
+    const response = JSON.stringify([{ id: '1', category: 'dining', confidence: '0.85' }]);
+    const result = parseCategorizationResponse(response);
+    expect(result[0].confidence).toBe(0.85);
+    expect(result[0].source).toBe('ai');
+  });
+
+  it('handles out-of-range string confidence as keyword source', () => {
+    const response = JSON.stringify([{ id: '1', category: 'dining', confidence: '1.5' }]);
+    const result = parseCategorizationResponse(response);
+    expect(result[0].confidence).toBe(0.2);
+    expect(result[0].source).toBe('keyword');
+  });
+
+  it('handles non-numeric string confidence as keyword source', () => {
+    const response = JSON.stringify([{ id: '1', category: 'dining', confidence: 'high' }]);
+    const result = parseCategorizationResponse(response);
+    expect(result[0].confidence).toBe(0.2);
+    expect(result[0].source).toBe('keyword');
+  });
 });
 
 describe('normalizeCategoryId', () => {

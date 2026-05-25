@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { useTransactionStore } from '@/lib/store/transactionStore';
-import { CategoryType, CategorizedBy, SourceType, type Transaction } from '@/types';
+import { Category, CategoryType, CategorizedBy, SourceType, type Transaction } from '@/types';
 import { makeTransaction as _makeTransaction, makeCategory } from '@tests/unit/factories';
 
 function makeTransaction(id: string = 'txn-1', amount: number = 1299, description: string = 'Test Transaction') {
@@ -27,6 +27,27 @@ describe('useTransactionStore', () => {
       useTransactionStore.getState().addTransactions([txn]);
       useTransactionStore.getState().addTransactions([txn]);
       expect(useTransactionStore.getState().transactions.filter(t => t.description === 'Dedup test')).toHaveLength(1);
+    });
+
+    it('bypasses deduplication when skipDedup is true', () => {
+      const txn = makeTransaction('skip-dedup-1', 300, 'Skip dedup test');
+      useTransactionStore.getState().addTransactions([txn]);
+      useTransactionStore.getState().addTransactions([txn], { skipDedup: true });
+      expect(useTransactionStore.getState().transactions.filter(t => t.description === 'Skip dedup test')).toHaveLength(2);
+    });
+
+    it('deduplicates when skipDedup is false', () => {
+      const txn = makeTransaction('skip-dedup-false', 300, 'Skip dedup false');
+      useTransactionStore.getState().addTransactions([txn]);
+      useTransactionStore.getState().addTransactions([txn], { skipDedup: false });
+      expect(useTransactionStore.getState().transactions.filter(t => t.description === 'Skip dedup false')).toHaveLength(1);
+    });
+
+    it('deduplicates when options are omitted', () => {
+      const txn = makeTransaction('no-opts', 300, 'No opts');
+      useTransactionStore.getState().addTransactions([txn]);
+      useTransactionStore.getState().addTransactions([txn]);
+      expect(useTransactionStore.getState().transactions.filter(t => t.description === 'No opts')).toHaveLength(1);
     });
   });
 
@@ -455,6 +476,96 @@ describe('useTransactionStore', () => {
       const result = useTransactionStore.getState().hasFileImported('cc-hash');
       expect(result.alreadyImported).toBe(true);
       expect(result.sourceType).toBe(SourceType.CreditCard);
+    });
+  });
+
+  describe('persist rehydration', () => {
+    it('converts plain JSON objects to Transaction instances via merge', async () => {
+      const txn = _makeTransaction({ id: 'rehydrate-test' });
+      // Serialize to plain JSON (simulates what localStorage stores)
+      const json = txn.toJSON();
+
+      localStorage.setItem('transaction-storage', JSON.stringify({
+        state: { transactions: [json] },
+        version: 0,
+      }));
+
+      const { useTransactionStore: freshStore } = await import('@/lib/store/transactionStore?' + Date.now());
+      const transactions = freshStore.getState().transactions;
+
+      expect(transactions).toHaveLength(1);
+      // rehydrateTransactions should have called Transaction.fromJSON on the plain object
+      expect(transactions[0].constructor.name).toBe('Transaction');
+      expect(transactions[0].id).toBe('rehydrate-test');
+      expect(transactions[0].date).toBeInstanceOf(Date);
+
+      localStorage.removeItem('transaction-storage');
+    });
+
+    it('defaults to Category.DEFAULT_ID when category is not a string in persisted JSON', async () => {
+      // Simulate a persisted transaction where category is an object (not a string ID)
+      const json = {
+        id: 'rehydrate-nocat',
+        date: '2024-06-15T00:00:00.000Z',
+        description: 'No category test',
+        amount: 100,
+        type: 'debit',
+        category: { id: 'shopping', name: 'Shopping' }, // object, not string
+        balance: null,
+      };
+
+      localStorage.setItem('transaction-storage', JSON.stringify({
+        state: { transactions: [json] },
+        version: 0,
+      }));
+
+      const { useTransactionStore: freshStore } = await import('@/lib/store/transactionStore?' + Date.now());
+      const transactions = freshStore.getState().transactions;
+
+      expect(transactions).toHaveLength(1);
+      // category is not a string → falls to Category.DEFAULT_ID
+      expect(transactions[0].category.id).toBe(Category.DEFAULT_ID);
+
+      localStorage.removeItem('transaction-storage');
+    });
+  });
+
+  describe('updateTransaction category resolution', () => {
+    it('falls back to existing category when update category is neither string nor Category', () => {
+      useTransactionStore.getState().addTransactions([makeTransaction('cat-fb')]);
+      const originalCategory = useTransactionStore.getState().transactions[0].category;
+
+      // Pass a number as category — neither string nor Category instance
+      useTransactionStore.getState().updateTransaction('cat-fb', { category: 42 } as unknown as Partial<Transaction>);
+
+      expect(useTransactionStore.getState().transactions[0].category.id).toBe(originalCategory.id);
+    });
+  });
+
+  describe('hasFileImported with sourceType undefined', () => {
+    it('returns undefined sourceType when transaction sourceType is falsy', async () => {
+      // Create a transaction directly via JSON to control sourceType
+      const json = _makeTransaction({
+        id: 'hash-nosrc',
+        date: new Date('2024-03-15'),
+        sourceFileHash: 'xyz',
+      }).toJSON();
+      // Override sourceType to be null in the raw JSON
+      json.sourceType = null as unknown as undefined;
+
+      // Use persist rehydration to get a transaction with null sourceType
+      localStorage.setItem('transaction-storage', JSON.stringify({
+        state: { transactions: [json] },
+        version: 0,
+      }));
+
+      const { useTransactionStore: freshStore } = await import('@/lib/store/transactionStore?' + Date.now());
+
+      const result = freshStore.getState().hasFileImported('xyz');
+      expect(result.alreadyImported).toBe(true);
+      expect(result.sourceType).toBeUndefined();
+
+      localStorage.removeItem('transaction-storage');
     });
   });
 });

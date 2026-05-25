@@ -121,4 +121,23 @@ describe('normalizeCCTransactionSubTypes', () => {
     const result = normalizeCCTransactionSubTypes([txn]);
     expect(result[0].transactionSubType).toBe('bill_payment');
   });
+
+  it('does not reclassify CC credit with non-bill_payment subType', () => {
+    // Line 46 guard: if transactionSubType !== 'bill_payment', return unchanged
+    const txn = makeCCTransaction({
+      description: 'AMAZON.IN REFUND',
+      transactionSubType: 'refund',
+    });
+    const result = normalizeCCTransactionSubTypes([txn]);
+    expect(result[0].transactionSubType).toBe('refund');
+  });
+
+  it('does not reclassify CC credit with purchase subType', () => {
+    const txn = makeCCTransaction({
+      description: 'Some merchant',
+      transactionSubType: 'purchase',
+    });
+    const result = normalizeCCTransactionSubTypes([txn]);
+    expect(result[0].transactionSubType).toBe('purchase');
+  });
 });

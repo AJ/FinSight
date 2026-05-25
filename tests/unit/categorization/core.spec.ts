@@ -142,6 +142,36 @@ describe('runCategorizationCore', () => {
     expect(result[0].category).toBe('shopping'); // Keyword fallback
   });
 
+  it('falls back to keywords per-transaction when AI returns partial results', async () => {
+    // AI returns results for id '1' but not for id '2' or '3'
+    const generate = vi.fn().mockResolvedValue(
+      JSON.stringify([{ id: '1', category: 'dining', confidence: 0.9, source: 'ai' }])
+    );
+
+    const result = await runCategorizationCore(
+      [
+        { id: '1', description: 'SWIGGY ORDER', amount: 350, type: 'debit' },
+        { id: '2', description: 'AMAZON PURCHASE', amount: 1299, type: 'debit' },
+        { id: '3', description: 'NETFLIX SUBSCRIPTION', amount: 649, type: 'debit' },
+      ],
+      { generate },
+    );
+
+    expect(result).toHaveLength(3);
+    // id '1' was returned by AI
+    expect(result[0].id).toBe('1');
+    expect(result[0].source).toBe('ai');
+    expect(result[0].category).toBe('dining');
+    // id '2' and '3' fell back to keyword categorization
+    expect(result[1].id).toBe('2');
+    expect(result[1].source).toBe('keyword');
+    expect(result[1].confidence).toBe(0.3);
+    expect(result[1].category).toBe('shopping');
+    expect(result[2].id).toBe('3');
+    expect(result[2].source).toBe('keyword');
+    expect(result[2].confidence).toBe(0.3);
+  });
+
   it('falls back to keywords when LLM throws', async () => {
     const generate = vi.fn().mockRejectedValue(new Error('LLM connection failed'));
 

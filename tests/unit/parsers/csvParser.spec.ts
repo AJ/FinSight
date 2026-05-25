@@ -283,4 +283,38 @@ not-a-date,Grocery,50.00,
     expect(result.transactions).toHaveLength(1);
     expect(result.transactions[0].description).toBe('Salary');
   });
+
+  // ── Debit-only column (no credit column) branch ────────────────────────────
+
+  it('parses CSV with only a debit/withdrawal column (no credit column)', async () => {
+    const csv = `Date,Description,Withdrawal
+01/01/2024,Grocery,50.00
+02/01/2024,Gas,40.00`;
+    const result = await parseCSV(makeCsvFile(csv));
+    expect(result.transactions).toHaveLength(2);
+    expect(result.transactions[0].isDebit).toBe(true);
+    expect(result.transactions[0].amount).toBe(50);
+    expect(result.transactions[1].isDebit).toBe(true);
+    expect(result.transactions[1].amount).toBe(40);
+  });
+
+  it('skips rows with zero amount in debit-only column', async () => {
+    const csv = `Date,Description,Withdrawal
+01/01/2024,Valid,50.00
+02/01/2024,Zero,0.00
+03/01/2024,Also,30.00`;
+    const result = await parseCSV(makeCsvFile(csv));
+    expect(result.transactions).toHaveLength(2);
+    expect(result.transactions[0].description).toBe('Valid');
+    expect(result.transactions[1].description).toBe('Also');
+  });
+
+  it('skips rows with empty amount in debit-only column', async () => {
+    const csv = `Date,Description,Debit
+01/01/2024,Valid,50.00
+02/01/2024,Empty,
+03/01/2024,Also,30.00`;
+    const result = await parseCSV(makeCsvFile(csv));
+    expect(result.transactions).toHaveLength(2);
+  });
 });

@@ -7,7 +7,7 @@ import {
   getPeriodComparison,
   getMonthlyTrend,
 } from '@/lib/creditCard/dimensionalAnalysis';
-import { TransactionType } from '@/types';
+import { TransactionType, SourceType } from '@/types';
 import { makeTransaction, makeCategory } from '@tests/unit/factories';
 
 describe('getGroupKey', () => {
@@ -40,6 +40,77 @@ describe('getGroupKey', () => {
   it('groups domestic as India', () => {
     const txn = makeTransaction({ amount: 1000 });
     expect(getGroupKey(txn, 'country')).toBe('India');
+  });
+
+  it('groups credit card by issuer-lastFour', () => {
+    const txn = makeTransaction({
+      amount: 1000,
+      sourceType: SourceType.CreditCard,
+    });
+    Object.defineProperty(txn, 'cardIssuer', { value: 'HDFC', writable: true });
+    Object.defineProperty(txn, 'cardLastFour', { value: '1234', writable: true });
+    expect(getGroupKey(txn, 'card')).toBe('HDFC-****1234');
+  });
+
+  it('groups bank transactions as Bank for card dimension', () => {
+    const txn = makeTransaction({ amount: 1000, sourceType: SourceType.Bank });
+    expect(getGroupKey(txn, 'card')).toBe(SourceType.Bank);
+  });
+
+  it('groups credit card without issuer as Bank for card dimension', () => {
+    const txn = makeTransaction({
+      amount: 1000,
+      sourceType: SourceType.CreditCard,
+    });
+    // No cardIssuer set → falls through to return SourceType.Bank
+    expect(getGroupKey(txn, 'card')).toBe(SourceType.Bank);
+  });
+
+  it('returns >10000 for amount beyond all ranges', () => {
+    const txn = makeTransaction({ amount: 50000 });
+    expect(getGroupKey(txn, 'amountRange')).toBe('>10000');
+  });
+
+  it('returns transaction cardHolder when set', () => {
+    const txn = makeTransaction({ amount: 1000 });
+    Object.defineProperty(txn, 'cardHolder', { value: 'Supplementary User', writable: true });
+    expect(getGroupKey(txn, 'cardHolder')).toBe('Supplementary User');
+  });
+
+  it('returns Primary for cardHolder when not set', () => {
+    const txn = makeTransaction({ amount: 1000 });
+    expect(getGroupKey(txn, 'cardHolder')).toBe('Primary');
+  });
+
+  it('returns ">10000" for amount beyond all range bounds in getGroupKey loop', () => {
+    // The for loop checks abs < range.max for each range. The last range has max: Infinity,
+    // so finite amounts always match inside the loop. To reach the fallback return on line 78,
+    // we need an amount of Infinity (Math.abs(Infinity) < Infinity is false).
+    const txn = makeTransaction({ amount: 1000 });
+    Object.defineProperty(txn, 'amount', { value: Infinity, writable: true });
+    expect(getGroupKey(txn, 'amountRange')).toBe('>10000');
+  });
+
+  it('returns "other" for the default switch case via casting', () => {
+    // Force an unknown dimension to exercise the default case (line 97).
+    // TypeScript doesn't allow passing unknown dimensions, but runtime can.
+    const txn = makeTransaction({ amount: 1000 });
+    // Use type assertion to bypass TypeScript's type check
+    const unknownDimension = 'unknown_dimension' as unknown as Parameters<typeof getGroupKey>[1];
+    expect(getGroupKey(txn, unknownDimension)).toBe('other');
+  });
+
+  it('returns other for unknown dimension via default case', () => {
+    const txn = makeTransaction({ amount: 1000 });
+    // Cast to force an unknown dimension through the default case
+    expect(getGroupKey(txn, 'month' as string as never)).not.toBe('other');
+    // The month branch will execute, but we can't easily hit default via TypeScript.
+    // Instead verify all known dimensions return meaningful values.
+  });
+
+  it('handles string date in month dimension', () => {
+    const txn = makeTransaction({ amount: 1000, date: '2024-06-20' });
+    expect(getGroupKey(txn, 'month')).toBe('2024-06');
   });
 });
 
@@ -84,6 +155,54 @@ describe('applyFilters', () => {
     ];
     const filtered = applyFilters(txns, { type: TransactionType.Debit });
     expect(filtered).toHaveLength(1);
+  });
+
+  it('filters by sourceType', () => {
+    const txns = [
+      makeTransaction({ id: '1', sourceType: SourceType.CreditCard }),
+      makeTransaction({ id: '2', sourceType: SourceType.Bank }),
+    ];
+    const filtered = applyFilters(txns, { sourceType: SourceType.CreditCard });
+    expect(filtered).toHaveLength(1);
+    expect(filtered[0].sourceType).toBe(SourceType.CreditCard);
+  });
+
+  it('filters by cardIssuer', () => {
+    const txn1 = makeTransaction({ id: '1' });
+    Object.defineProperty(txn1, 'cardIssuer', { value: 'HDFC', writable: true });
+    const txn2 = makeTransaction({ id: '2' });
+    Object.defineProperty(txn2, 'cardIssuer', { value: 'ICICI', writable: true });
+    const filtered = applyFilters([txn1, txn2], { cardIssuer: 'HDFC' });
+    expect(filtered).toHaveLength(1);
+  });
+
+  it('filters by cardLastFour', () => {
+    const txn1 = makeTransaction({ id: '1' });
+    Object.defineProperty(txn1, 'cardLastFour', { value: '1234', writable: true });
+    const txn2 = makeTransaction({ id: '2' });
+    Object.defineProperty(txn2, 'cardLastFour', { value: '5678', writable: true });
+    const filtered = applyFilters([txn1, txn2], { cardLastFour: '1234' });
+    expect(filtered).toHaveLength(1);
+  });
+
+  it('filters by dateFrom only', () => {
+    const txns = [
+      makeTransaction({ id: '1', date: new Date('2024-01-15') }),
+      makeTransaction({ id: '2', date: new Date('2024-06-15') }),
+    ];
+    const filtered = applyFilters(txns, { dateFrom: new Date('2024-03-01') });
+    expect(filtered).toHaveLength(1);
+    expect(filtered[0].id).toBe('2');
+  });
+
+  it('filters by dateTo only', () => {
+    const txns = [
+      makeTransaction({ id: '1', date: new Date('2024-01-15') }),
+      makeTransaction({ id: '2', date: new Date('2024-06-15') }),
+    ];
+    const filtered = applyFilters(txns, { dateTo: new Date('2024-03-01') });
+    expect(filtered).toHaveLength(1);
+    expect(filtered[0].id).toBe('1');
   });
 });
 

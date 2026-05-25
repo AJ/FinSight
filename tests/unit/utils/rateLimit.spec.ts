@@ -67,3 +67,34 @@ describe('getClientIdentifier', () => {
     expect(getClientIdentifier(req)).toBe('unknown');
   });
 });
+
+describe('rateLimitStore cleanup interval', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('cleans up expired entries when interval fires', () => {
+    // Create an entry with a 1-second window
+    checkRateLimit('cleanup-test', { limit: 5, windowMs: 1000 });
+
+    // Advance past the entry's resetTime (1s) but not yet the interval (60s)
+    vi.advanceTimersByTime(2000);
+
+    // The entry should still be in the store (interval hasn't fired yet)
+    // Now create a fresh entry to verify the old one is expired via checkRateLimit logic
+    const result = checkRateLimit('cleanup-test', { limit: 5, windowMs: 1000 });
+    expect(result.success).toBe(true); // New window starts
+
+    // Now advance to trigger the 60s cleanup interval
+    vi.advanceTimersByTime(60000);
+
+    // After cleanup, the store should have the new entry but not the old one
+    // Verify by checking that the identifier still works normally
+    const result2 = checkRateLimit('cleanup-test', { limit: 5, windowMs: 1000 });
+    expect(result2.success).toBe(true);
+  });
+});

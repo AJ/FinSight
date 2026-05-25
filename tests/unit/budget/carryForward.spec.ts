@@ -127,6 +127,41 @@ describe('findCarryForwardState', () => {
     expect(result.hidden).toEqual([]);
   });
 
+  // 5b. Returns 0 income when existing period has null income
+  it('returns 0 income when existing period has null income', () => {
+    const period = makeBudgetPeriod({
+      month: '2026-04',
+      income: undefined as unknown as number,
+      allocations: [{ categoryId: 'groceries', amount: 5000 }],
+      hiddenCategories: [],
+    });
+    // Ensure income is actually null/undefined on the object
+    period.income = undefined as unknown as number;
+
+    const periods = periodMap(period);
+    const result = findCarryForwardState({ month: '2026-04', periods });
+
+    expect(result.income).toBe(0);
+    expect(result.allocations).toEqual({ groceries: 5000 });
+  });
+
+  // 5c. Returns 0 income when carried-forward period has null income
+  it('returns 0 income when carried-forward period has null income', () => {
+    const period = makeBudgetPeriod({
+      month: '2026-03',
+      income: undefined as unknown as number,
+      allocations: [{ categoryId: 'groceries', amount: 5000 }],
+      hiddenCategories: [],
+    });
+    period.income = undefined as unknown as number;
+
+    const periods = periodMap(period);
+    const result = findCarryForwardState({ month: '2026-04', periods });
+
+    expect(result.income).toBe(0);
+    expect(result.allocations).toEqual({ groceries: 5000 });
+  });
+
   // 6. Copies hidden categories from source period
   it('copies hidden categories from the source period', () => {
     const periods = periodMap(

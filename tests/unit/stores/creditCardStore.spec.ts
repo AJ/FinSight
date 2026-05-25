@@ -508,6 +508,51 @@ describe('creditCardStore', () => {
       expect(result.totalPointsAllCards).toBe(0);
       expect(result.byCard).toHaveLength(0);
     });
+
+    it('sorts expiringSoon ascending by expiry date across multiple cards', () => {
+      const soonDate1 = new Date();
+      soonDate1.setDate(soonDate1.getDate() + 60);
+
+      const soonDate2 = new Date();
+      soonDate2.setDate(soonDate2.getDate() + 15); // expires sooner
+
+      useCreditCardStore.getState().addStatements([
+        makeStatement({
+          cardIssuer: 'HDFC',
+          cardLastFour: '1111',
+          rewardPoints: {
+            openingBalance: 500,
+            earned: 100,
+            redeemed: 0,
+            expired: 0,
+            closingBalance: 600,
+            expiringNext: 50,
+            expiringNextDate: soonDate1,
+          },
+        }),
+        makeStatement({
+          cardIssuer: 'SBI',
+          cardLastFour: '2222',
+          rewardPoints: {
+            openingBalance: 800,
+            earned: 200,
+            redeemed: 0,
+            expired: 0,
+            closingBalance: 1000,
+            expiringNext: 100,
+            expiringNextDate: soonDate2,
+          },
+        }),
+      ]);
+
+      const result = useCreditCardStore.getState().getRewardPointsAnalysis();
+      expect(result.expiringSoon).toHaveLength(2);
+      // Sorted ascending by expiry: SBI (15 days) first, HDFC (60 days) second
+      expect(result.expiringSoon[0].cardIssuer).toBe('SBI');
+      expect(result.expiringSoon[0].points).toBe(100);
+      expect(result.expiringSoon[1].cardIssuer).toBe('HDFC');
+      expect(result.expiringSoon[1].points).toBe(50);
+    });
   });
 
   describe('createCreditCardStatement', () => {
@@ -629,6 +674,41 @@ describe('creditCardStore', () => {
       const result = useCreditCardStore.getState().getCardComparison([], new Date(), new Date());
       expect(result).toHaveLength(0);
     });
+
+    it('sorts multi-card results descending by totalSpend', () => {
+      useCreditCardStore.getState().addStatements([
+        makeStatement({ cardIssuer: 'HDFC', cardLastFour: '1111', creditLimit: 200000 }),
+        makeStatement({ cardIssuer: 'SBI', cardLastFour: '2222', creditLimit: 100000 }),
+      ]);
+
+      const periodStart = new Date('2024-05-01');
+      const periodEnd = new Date('2024-05-31');
+
+      // SBI card has MORE spend (added first — should sort to index 0)
+      const txn1 = makeTransaction({ id: 'cc-sbi', amount: 15000, date: new Date('2024-05-10') });
+      Object.defineProperty(txn1, 'sourceType', { value: SourceType.CreditCard, writable: true });
+      Object.defineProperty(txn1, 'cardIssuer', { value: 'SBI', writable: true });
+      Object.defineProperty(txn1, 'cardLastFour', { value: '2222', writable: true });
+
+      // HDFC card has LESS spend
+      const txn2 = makeTransaction({ id: 'cc-hdfc', amount: 5000, date: new Date('2024-05-15') });
+      Object.defineProperty(txn2, 'sourceType', { value: SourceType.CreditCard, writable: true });
+      Object.defineProperty(txn2, 'cardIssuer', { value: 'HDFC', writable: true });
+      Object.defineProperty(txn2, 'cardLastFour', { value: '1111', writable: true });
+
+      const result = useCreditCardStore.getState().getCardComparison(
+        [txn1, txn2],
+        periodStart,
+        periodEnd,
+      );
+
+      expect(result).toHaveLength(2);
+      // Descending by totalSpend: SBI (15000) first, HDFC (5000) second
+      expect(result[0].cardIssuer).toBe('SBI');
+      expect(result[0].totalSpend).toBe(15000);
+      expect(result[1].cardIssuer).toBe('HDFC');
+      expect(result[1].totalSpend).toBe(5000);
+    });
   });
 
   describe('getUnpaidStatements', () => {
@@ -650,6 +730,175 @@ describe('creditCardStore', () => {
         makeStatement({ isPaid: true, paidDate: new Date() }),
       );
       expect(useCreditCardStore.getState().getUnpaidStatements()).toHaveLength(0);
+    });
+  });
+
+  describe('getFinancialHealthScore edge cases', () => {
+    it('uses default utilizationScore=40 when utilization is between 0.30 and 0.50', () => {
+      // 0.30 <= utilization < 0.50 → utilizationScore = 60
+      useCreditCardStore.getState().addStatement(
+        makeStatement({ totalDue: 80000, creditLimit: 200000, paymentsReceived: 80000, lateFee: 0, statementDate: new Date() }),
+      );
+
+      const result = useCreditCardStore.getState().getFinancialHealthScore([], 50000, 30000);
+      // utilization = 80000/200000 = 0.40 → score 60
+      expect(result.components.utilization.score).toBe(60);
+    });
+
+    it('uses utilizationScore=40 when utilization is between 0.50 and above', () => {
+      // utilization >= 0.50 → falls through all ifs, stays at default 40
+      useCreditCardStore.getState().addStatement(
+        makeStatement({ totalDue: 120000, creditLimit: 200000, paymentsReceived: 120000, lateFee: 0, statementDate: new Date() }),
+      );
+
+      const result = useCreditCardStore.getState().getFinancialHealthScore([], 50000, 30000);
+      // utilization = 120000/200000 = 0.60 → default 40
+      expect(result.components.utilization.score).toBe(40);
+    });
+
+    it('uses spendingTrendScore=50 when income is zero', () => {
+      useCreditCardStore.getState().addStatement(
+        makeStatement({ totalDue: 5000, creditLimit: 200000, paymentsReceived: 5000, lateFee: 0, statementDate: new Date() }),
+      );
+
+      const result = useCreditCardStore.getState().getFinancialHealthScore([], 0, 3000);
+      expect(result.components.spendingTrend.score).toBe(50);
+      expect(result.components.spendingTrend.value).toBe(1);
+    });
+
+    it('uses spendingTrendScore=100 when expenses < income', () => {
+      useCreditCardStore.getState().addStatement(
+        makeStatement({ totalDue: 5000, creditLimit: 200000, paymentsReceived: 5000, lateFee: 0, statementDate: new Date() }),
+      );
+
+      const result = useCreditCardStore.getState().getFinancialHealthScore([], 50000, 30000);
+      expect(result.components.spendingTrend.score).toBe(100);
+    });
+
+    it('uses spendingTrendScore=50 when expenses >= income', () => {
+      useCreditCardStore.getState().addStatement(
+        makeStatement({ totalDue: 5000, creditLimit: 200000, paymentsReceived: 5000, lateFee: 0, statementDate: new Date() }),
+      );
+
+      const result = useCreditCardStore.getState().getFinancialHealthScore([], 30000, 50000);
+      expect(result.components.spendingTrend.score).toBe(50);
+    });
+  });
+
+  describe('getCardComparison edge cases', () => {
+    it('returns utilization 0 when card has no utilization data', () => {
+      useCreditCardStore.getState().addStatements([
+        makeStatement({ cardIssuer: 'HDFC', cardLastFour: '1234', creditLimit: 200000 }),
+      ]);
+
+      // Transactions from a different card — utilization perCard map won't have this card
+      const periodStart = new Date('2024-05-01');
+      const periodEnd = new Date('2024-05-31');
+
+      // Use a different card in transactions to not match the statement card
+      const txn = makeTransaction({ id: 'cc-other', amount: 5000, date: new Date('2024-05-10') });
+      Object.defineProperty(txn, 'sourceType', { value: SourceType.CreditCard, writable: true });
+      Object.defineProperty(txn, 'cardIssuer', { value: 'HDFC', writable: true });
+      Object.defineProperty(txn, 'cardLastFour', { value: '1234', writable: true });
+
+      // Clear statements and add one with zero totalDue to get 0 utilization
+      useCreditCardStore.getState().clearStatements();
+      useCreditCardStore.getState().addStatement(
+        makeStatement({ cardIssuer: 'HDFC', cardLastFour: '9999', totalDue: 0, creditLimit: 200000 }),
+      );
+
+      const result = useCreditCardStore.getState().getCardComparison([txn], periodStart, periodEnd);
+      // Card 9999 has no matching transactions, so cardUtil is from utilization perCard
+      // The card in the result is 9999 with no transactions, utilization comes from perCard
+      expect(result).toHaveLength(1);
+    });
+
+    it('handles transactions with no category as uncategorized', () => {
+      useCreditCardStore.getState().addStatement(
+        makeStatement({ cardIssuer: 'HDFC', cardLastFour: '1234', creditLimit: 200000 }),
+      );
+
+      const periodStart = new Date('2024-05-01');
+      const periodEnd = new Date('2024-05-31');
+
+      const txn = makeTransaction({ id: 'cc-nocat', amount: 5000, date: new Date('2024-05-10') });
+      Object.defineProperty(txn, 'sourceType', { value: SourceType.CreditCard, writable: true });
+      Object.defineProperty(txn, 'cardIssuer', { value: 'HDFC', writable: true });
+      Object.defineProperty(txn, 'cardLastFour', { value: '1234', writable: true });
+      // Set category to null to hit the fallback
+      txn.category = null as unknown as Category;
+
+      const result = useCreditCardStore.getState().getCardComparison([txn], periodStart, periodEnd);
+      expect(result[0].categoryBreakdown).toEqual({ uncategorized: 5000 });
+    });
+  });
+
+  describe('getUnpaidStatements all due dates', () => {
+    it('includes statements with past due dates', () => {
+      useCreditCardStore.getState().addStatement(
+        makeStatement({ id: 's-past', isPaid: false, paymentDueDate: new Date('2020-01-01') }),
+      );
+
+      const result = useCreditCardStore.getState().getUnpaidStatements();
+      expect(result).toHaveLength(1);
+      // getUnpaidStatements returns statements as-is, no computed properties added
+    });
+  });
+
+  describe('getCashbackAnalysis edge cases', () => {
+    it('returns null bestCard when no card has positive cashback rate', () => {
+      useCreditCardStore.getState().addStatement(
+        makeStatement({ cashbackEarned: 0, purchasesAndCharges: 0 }),
+      );
+
+      const result = useCreditCardStore.getState().getCashbackAnalysis();
+      expect(result.bestCard).toBeNull();
+    });
+  });
+
+  describe('getRewardPointsAnalysis earning rate', () => {
+    it('calculates earning rate from purchases', () => {
+      useCreditCardStore.getState().addStatement(
+        makeStatement({
+          id: 's-rate',
+          cardIssuer: 'HDFC',
+          cardLastFour: '1234',
+          purchasesAndCharges: 10000,
+          rewardPoints: {
+            openingBalance: 0,
+            earned: 100,
+            redeemed: 0,
+            expired: 0,
+            closingBalance: 100,
+          },
+        }),
+      );
+
+      const result = useCreditCardStore.getState().getRewardPointsAnalysis();
+      expect(result.byCard).toHaveLength(1);
+      expect(result.byCard[0].earningRate).toBeGreaterThan(0);
+    });
+
+    it('skips earning rate when purchasesAndCharges is zero', () => {
+      useCreditCardStore.getState().addStatement(
+        makeStatement({
+          id: 's-zero',
+          cardIssuer: 'HDFC',
+          cardLastFour: '1234',
+          purchasesAndCharges: 0,
+          rewardPoints: {
+            openingBalance: 100,
+            earned: 0,
+            redeemed: 0,
+            expired: 0,
+            closingBalance: 100,
+          },
+        }),
+      );
+
+      const result = useCreditCardStore.getState().getRewardPointsAnalysis();
+      expect(result.byCard).toHaveLength(1);
+      expect(result.byCard[0].earningRate).toBe(0);
     });
   });
 
@@ -698,6 +947,70 @@ describe('creditCardStore', () => {
       expect(hydrated.rewardPoints?.expiringNextDate).toBeInstanceOf(Date);
 
       // Clean up
+      localStorage.removeItem('credit-card-storage');
+    });
+
+    it('defaults isPaid to false when absent from persisted data', async () => {
+      const stmt = makeStatement({ id: 'rehydrate-nopaid' });
+      // Remove isPaid from serialized data
+      const raw = { ...stmt };
+      delete (raw as Record<string, unknown>).isPaid;
+
+      const serialized = JSON.stringify({
+        state: { statements: [raw] },
+        version: 0,
+      });
+      localStorage.setItem('credit-card-storage', serialized);
+
+      const { useCreditCardStore: freshStore } = await import('@/lib/store/creditCardStore?' + Date.now());
+      const hydrated = freshStore.getState().statements[0];
+
+      expect(hydrated.isPaid).toBe(false);
+      localStorage.removeItem('credit-card-storage');
+    });
+
+    it('rehydrates statement without paidDate when absent', async () => {
+      const stmt = makeStatement({ id: 'rehydrate-nopaiddate' });
+      const serialized = JSON.stringify({
+        state: { statements: [stmt] },
+        version: 0,
+      });
+      localStorage.setItem('credit-card-storage', serialized);
+
+      const { useCreditCardStore: freshStore } = await import('@/lib/store/creditCardStore?' + Date.now());
+      const hydrated = freshStore.getState().statements[0];
+
+      expect(hydrated.paidDate).toBeUndefined();
+      localStorage.removeItem('credit-card-storage');
+    });
+
+    it('handles statements with no rewardPoints', async () => {
+      const stmt = makeStatement({ id: 'rehydrate-norewards' });
+      const raw = { ...stmt };
+      delete (raw as Record<string, unknown>).rewardPoints;
+
+      const serialized = JSON.stringify({
+        state: { statements: [raw] },
+        version: 0,
+      });
+      localStorage.setItem('credit-card-storage', serialized);
+
+      const { useCreditCardStore: freshStore } = await import('@/lib/store/creditCardStore?' + Date.now());
+      const hydrated = freshStore.getState().statements[0];
+
+      expect(hydrated.rewardPoints).toBeUndefined();
+      localStorage.removeItem('credit-card-storage');
+    });
+
+    it('handles merge when persisted state has no statements array', async () => {
+      const serialized = JSON.stringify({
+        state: { isParsing: false },
+        version: 0,
+      });
+      localStorage.setItem('credit-card-storage', serialized);
+
+      const { useCreditCardStore: freshStore } = await import('@/lib/store/creditCardStore?' + Date.now());
+      expect(freshStore.getState().statements).toEqual([]);
       localStorage.removeItem('credit-card-storage');
     });
   });

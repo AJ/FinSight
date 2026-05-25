@@ -246,6 +246,26 @@ describe('runPostImportJobs', () => {
     expect(useTransactionStore.getState().categorizeProgress).toBe('');
   });
 
+  it('does not clear categorizeProgress if isCategorizing is true when 3s timer fires', async () => {
+    const tx = createTestTransaction('1', CategorizedBy.AI);
+    useTransactionStore.setState({ transactions: [tx] });
+
+    runPostImportJobs();
+    await vi.advanceTimersByTimeAsync(6000);
+
+    // Progress shows completion
+    expect(useTransactionStore.getState().categorizeProgress).toContain('Completed');
+
+    // Simulate another categorization starting before the 3s clear timer fires
+    useTransactionStore.setState({ isCategorizing: true });
+
+    // Advance past the 3s auto-clear timer
+    await vi.advanceTimersByTimeAsync(3000);
+
+    // Progress should NOT have been cleared because isCategorizing was true
+    expect(useTransactionStore.getState().categorizeProgress).toContain('Completed');
+  });
+
   it('handles network error gracefully with keyword fallback', async () => {
     const tx = createTestTransaction('1', CategorizedBy.AI);
     useTransactionStore.setState({ transactions: [tx] });
@@ -298,6 +318,26 @@ describe('runPostImportJobs', () => {
     await vi.advanceTimersByTimeAsync(5000);
 
     expect(useTransactionStore.getState().categorizeProgress).toBe('');
+  });
+
+  it('does not clear error categorizeProgress if isCategorizing is true when 5s timer fires', async () => {
+    const tx = createTestTransaction('1', CategorizedBy.AI);
+    useTransactionStore.setState({ transactions: [tx] });
+    useSettingsStore.setState({ llmModel: '' });
+
+    runPostImportJobs();
+    await vi.advanceTimersByTimeAsync(6000);
+
+    expect(useTransactionStore.getState().categorizeProgress).toContain('Categorization failed');
+
+    // Simulate another categorization starting before the 5s clear timer fires
+    useTransactionStore.setState({ isCategorizing: true });
+
+    // Advance past the 5s auto-clear timer
+    await vi.advanceTimersByTimeAsync(5000);
+
+    // Progress should NOT have been cleared because isCategorizing was true
+    expect(useTransactionStore.getState().categorizeProgress).toContain('Categorization failed');
   });
 
   it('runs anomaly detection and updates transaction anomaly flags', async () => {

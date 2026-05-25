@@ -107,5 +107,81 @@ describe('onboardingStore', () => {
       expect(localStorage.getItem('settings-storage')).toBeNull();
       expect(localStorage.getItem('transaction-storage')).toBeNull();
     });
+
+    it('migrates v0 with existing LLM config → hasCompletedOnboarding=true', async () => {
+      localStorage.setItem('settings-storage', JSON.stringify({
+        state: { llmProvider: 'ollama', llmModel: 'llama3', llmUrl: 'http://localhost:11434' },
+      }));
+      localStorage.setItem('onboarding-storage', JSON.stringify({
+        state: { currentStep: 1 },
+        version: 0,
+      }));
+
+      const { useOnboardingStore: freshStore } = await import('@/lib/store/onboardingStore?' + Date.now());
+      expect(freshStore.getState().hasCompletedOnboarding).toBe(true);
+
+      localStorage.removeItem('onboarding-storage');
+      localStorage.removeItem('settings-storage');
+    });
+
+    it('migrates v0 with existing transactions but no settings → hasCompletedOnboarding=true', async () => {
+      localStorage.setItem('transaction-storage', JSON.stringify({
+        state: { transactions: [{ id: '1', amount: 100 }] },
+      }));
+      localStorage.setItem('onboarding-storage', JSON.stringify({
+        state: { currentStep: 1 },
+        version: 0,
+      }));
+
+      const { useOnboardingStore: freshStore } = await import('@/lib/store/onboardingStore?' + Date.now());
+      expect(freshStore.getState().hasCompletedOnboarding).toBe(true);
+
+      localStorage.removeItem('onboarding-storage');
+      localStorage.removeItem('transaction-storage');
+    });
+
+    it('migrates v0 for new user (empty localStorage) → hasCompletedOnboarding=false', async () => {
+      localStorage.setItem('onboarding-storage', JSON.stringify({
+        state: { currentStep: 1 },
+        version: 0,
+      }));
+
+      const { useOnboardingStore: freshStore } = await import('@/lib/store/onboardingStore?' + Date.now());
+      expect(freshStore.getState().hasCompletedOnboarding).toBe(false);
+
+      localStorage.removeItem('onboarding-storage');
+    });
+
+    it('migrates v0 with corrupted settings-storage → hasCompletedOnboarding=false', async () => {
+      localStorage.setItem('settings-storage', 'not-valid-json{{{');
+      localStorage.setItem('onboarding-storage', JSON.stringify({
+        state: { currentStep: 1 },
+        version: 0,
+      }));
+
+      const { useOnboardingStore: freshStore } = await import('@/lib/store/onboardingStore?' + Date.now());
+      expect(freshStore.getState().hasCompletedOnboarding).toBe(false);
+
+      localStorage.removeItem('onboarding-storage');
+      localStorage.removeItem('settings-storage');
+    });
+
+    it('skips migration when hasCompletedOnboarding is already defined', async () => {
+      localStorage.setItem('settings-storage', JSON.stringify({
+        state: { llmProvider: 'ollama', llmModel: 'llama3' },
+      }));
+      // hasCompletedOnboarding=false is explicitly set — migration should not overwrite it
+      localStorage.setItem('onboarding-storage', JSON.stringify({
+        state: { hasCompletedOnboarding: false, currentStep: 1 },
+        version: 0,
+      }));
+
+      const { useOnboardingStore: freshStore } = await import('@/lib/store/onboardingStore?' + Date.now());
+      // Should remain false (no-op migration) even though settings exist
+      expect(freshStore.getState().hasCompletedOnboarding).toBe(false);
+
+      localStorage.removeItem('onboarding-storage');
+      localStorage.removeItem('settings-storage');
+    });
   });
 });

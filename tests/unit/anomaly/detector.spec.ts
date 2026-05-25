@@ -182,6 +182,29 @@ describe('detectFrequencyAnomaly', () => {
     const allTxns = [makeTransaction({ id: '2', description: 'AMAZON', amount: 400, date: new Date('2024-01-10') })];
     expect(detectFrequencyAnomaly(txn, allTxns)).toBeNull();
   });
+
+  it('returns null when txn id is not in frequencyCountsByTxnId indexes', () => {
+    // Line 275: the counts lookup returns undefined for a transaction not in the index
+    const emptyIndexes = {
+      amountBuckets: new Map(),
+      frequencyCountsByTxnId: new Map(),
+    };
+    const txn = makeTransaction({ id: 'missing-from-index', description: 'COFFEE', amount: 500 });
+    const result = detectFrequencyAnomaly(txn, [], emptyIndexes);
+    expect(result).toBeNull();
+  });
+
+  it('flags 7d frequency anomaly without indexes (non-indexed path)', () => {
+    // Lines 296-301, 316-321: non-indexed path for 7d window
+    const txn = makeTransaction({ id: '1', description: 'DAILY COFFEE SHOP', amount: 500, date: new Date('2024-01-20') });
+    const allTxns = Array.from({ length: 5 }, (_, i) =>
+      makeTransaction({ id: `t${i}`, description: 'DAILY COFFEE SHOP', amount: 400 + i * 100, date: new Date(2024, 0, 15 + i) })
+    );
+    const result = detectFrequencyAnomaly(txn, allTxns);
+    expect(result).not.toBeNull();
+    expect(result!.type).toBe('unusual_frequency');
+    expect(result!.frequencyCount).toBeGreaterThanOrEqual(5);
+  });
 });
 
 describe('detectAnomalies (full pipeline)', () => {
@@ -222,5 +245,26 @@ describe('detectAnomalies (full pipeline)', () => {
     const result = detectAnomalies(txns);
     const flagged = result.find(t => t.id === '1');
     expect(flagged?.anomalyDismissed).toBe(true);
+  });
+
+  it('detects 7d frequency anomaly via precomputed indexes', () => {
+    // Create 6 transactions to the same merchant spread across 6 days (within 7d window)
+    // but NOT within 24h of each other (so 24h check doesn't fire)
+    const txns = Array.from({ length: 6 }, (_, i) =>
+      makeTransaction({
+        id: `freq7d-${i}`,
+        description: 'DAILY COFFEE SHOP',
+        amount: 5 + i,
+        date: new Date(2024, 0, 10 + i), // Jan 10-15
+      })
+    );
+    const result = detectAnomalies(txns);
+    const flagged = result.filter(t => t.isAnomaly);
+    // At least some should be flagged for unusual frequency within 7d
+    expect(flagged.length).toBeGreaterThan(0);
+    for (const t of flagged) {
+      expect(t.anomalyTypes).toBeDefined();
+      expect(t.anomalyTypes!.length).toBeGreaterThan(0);
+    }
   });
 });

@@ -126,4 +126,39 @@ describe('categoryStore', () => {
       expect(cat!.name).toBe('Custom Groceries');
     });
   });
+
+  describe('persist migration', () => {
+    it('resets categories to defaults when migrating from version 1', async () => {
+      localStorage.setItem('category-storage', JSON.stringify({
+        state: { categories: [{ id: 'custom', name: 'Custom', type: 'expense' }] },
+        version: 1,
+      }));
+
+      const { useCategoryStore: freshStore } = await import('@/lib/store/categoryStore?' + Date.now());
+      const categories = freshStore.getState().categories as { id: string; name: string; type: string }[];
+
+      // Migration reset to DEFAULT_CATEGORIES — custom category should be gone
+      expect(categories.length).toBeGreaterThan(1);
+      expect(categories.some((c: { id: string }) => c.id === 'groceries')).toBe(true);
+      expect(categories.find((c: { id: string }) => c.id === 'custom')).toBeUndefined();
+
+      localStorage.removeItem('category-storage');
+    });
+
+    it('preserves categories when migrating from version 2+', async () => {
+      const custom = [{ id: 'kept', name: 'Kept', type: 'expense' }];
+      localStorage.setItem('category-storage', JSON.stringify({
+        state: { categories: custom },
+        version: 2,
+      }));
+
+      const { useCategoryStore: freshStore } = await import('@/lib/store/categoryStore?' + Date.now());
+      const categories = freshStore.getState().categories as { id: string; name: string; type: string }[];
+
+      // Same version → migrate returns state as-is
+      expect(categories.some((c: { id: string }) => c.id === 'kept')).toBe(true);
+
+      localStorage.removeItem('category-storage');
+    });
+  });
 });

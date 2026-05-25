@@ -78,4 +78,16 @@ describe('formatPayoffTime', () => {
   it('handles zero months', () => {
     expect(formatPayoffTime(0)).toBe('Paid off');
   });
+
+  it('handles 600+ months (MAX_MONTHS threshold)', () => {
+    expect(formatPayoffTime(600)).toBe('50+ years');
+  });
+
+  it('formats single year', () => {
+    expect(formatPayoffTime(12)).toBe('1 year');
+  });
+
+  it('formats years and months with plural both', () => {
+    expect(formatPayoffTime(27)).toBe('2 years 3 months');
+  });
 });

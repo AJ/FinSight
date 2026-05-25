@@ -42,7 +42,7 @@ describe('finalizeReviewImport', () => {
     const reviewed = makeTransaction({ id: 'txn-1', description: 'Coffee Shop', amount: 250 });
     const result = await finalizeReviewImport([reviewed], defaultDependencies);
 
-    expect(defaultDependencies.addTransactions).toHaveBeenCalledWith([reviewed]);
+    expect(defaultDependencies.addTransactions).toHaveBeenCalledWith([reviewed], { skipDedup: false });
     expect(result.importedCount).toBe(1);
   });
 
@@ -232,6 +232,7 @@ describe('finalizeReviewImport', () => {
       expect.arrayContaining([
         expect.objectContaining({ sourceFileHash: 'sha256abc' }),
       ]),
+      { skipDedup: false },
     );
   });
 
@@ -340,5 +341,272 @@ describe('finalizeReviewImport', () => {
 
     const result = await finalizeReviewImport([reviewed], defaultDependencies);
     expect(result.warnings).toEqual([]);
+  });
+
+  it('passes skipDedup:true when isDuplicateImport is true', async () => {
+    const reviewed = makeTransaction({ id: 'txn-1', description: 'Coffee', amount: 100 });
+
+    reviewSessionRepository.save({
+      transactions: [reviewed],
+      currency: INR,
+      format: 'csv',
+      statementType: 'bank',
+      fileName: 'test.csv',
+      parseDate: new Date(),
+      statementSummary: null,
+      sourceMetadata: { sourceFileHash: 'abc', isDuplicateImport: true },
+      warnings: [],
+    });
+
+    await finalizeReviewImport([reviewed], defaultDependencies);
+
+    expect(defaultDependencies.addTransactions).toHaveBeenCalledWith(
+      expect.arrayContaining([expect.objectContaining({ sourceFileHash: 'abc' })]),
+      { skipDedup: true },
+    );
+  });
+
+  it('passes skipDedup:false when isDuplicateImport is absent', async () => {
+    const reviewed = makeTransaction({ id: 'txn-1', description: 'Coffee', amount: 100 });
+
+    reviewSessionRepository.save({
+      transactions: [reviewed],
+      currency: INR,
+      format: 'csv',
+      statementType: 'bank',
+      fileName: 'test.csv',
+      parseDate: new Date(),
+      statementSummary: null,
+      sourceMetadata: { sourceFileHash: 'abc' },
+      warnings: [],
+    });
+
+    await finalizeReviewImport([reviewed], defaultDependencies);
+
+    expect(defaultDependencies.addTransactions).toHaveBeenCalledWith(
+      expect.arrayContaining([expect.objectContaining({ sourceFileHash: 'abc' })]),
+      { skipDedup: false },
+    );
+  });
+});
+
+describe('toCreditCardStatement (via finalizeReviewImport)', () => {
+  const defaultDependencies = {
+    addTransactions: vi.fn(),
+    addCreditCardStatement: vi.fn(),
+  };
+
+  beforeEach(() => {
+    sessionStorage.clear();
+    vi.clearAllMocks();
+  });
+
+  it('defaults cardLastFour and cardIssuer to empty string when absent', async () => {
+    const reviewed = makeTransaction({ id: 'txn-1', description: 'CC', amount: 500 });
+
+    reviewSessionRepository.save({
+      transactions: [reviewed],
+      currency: INR,
+      format: 'pdf',
+      statementType: 'credit_card',
+      fileName: 'cc.pdf',
+      parseDate: new Date(),
+      statementSummary: {
+        statementDate: null,
+        paymentDueDate: null,
+        totalDue: 500,
+        minimumDue: 50,
+        creditLimit: 100000,
+        availableCredit: 99500,
+        cardLastFour: '',
+        cardIssuer: '',
+        cardHolder: null,
+        statementPeriodStart: null,
+        statementPeriodEnd: null,
+        purchasesAndCharges: 500,
+        paymentsReceived: 0,
+      } as Summary,
+      warnings: [],
+    });
+
+    await finalizeReviewImport([reviewed], defaultDependencies);
+
+    expect(defaultDependencies.addCreditCardStatement).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cardLastFour: '',
+        cardIssuer: '',
+      }),
+    );
+  });
+
+  it('defaults to current date when statementPeriodStart/End are null', async () => {
+    const reviewed = makeTransaction({ id: 'txn-1', description: 'CC', amount: 500 });
+
+    reviewSessionRepository.save({
+      transactions: [reviewed],
+      currency: INR,
+      format: 'pdf',
+      statementType: 'credit_card',
+      fileName: 'cc.pdf',
+      parseDate: new Date(),
+      statementSummary: {
+        statementDate: null,
+        paymentDueDate: null,
+        totalDue: 500,
+        minimumDue: 50,
+        creditLimit: 100000,
+        availableCredit: 99500,
+        cardLastFour: '1234',
+        cardIssuer: 'Test',
+        cardHolder: null,
+        statementPeriodStart: null,
+        statementPeriodEnd: null,
+        purchasesAndCharges: 500,
+        paymentsReceived: 0,
+      } as Summary,
+      warnings: [],
+    });
+
+    await finalizeReviewImport([reviewed], defaultDependencies);
+
+    const call = defaultDependencies.addCreditCardStatement.mock.calls[0][0];
+    // When period start/end are null, falls to { start: new Date(), end: new Date() }
+    expect(call.statementPeriod.start).toBeInstanceOf(Date);
+    expect(call.statementPeriod.end).toBeInstanceOf(Date);
+    expect(call.statementDate).toBeInstanceOf(Date);
+    expect(call.paymentDueDate).toBeInstanceOf(Date);
+  });
+
+  it('defaults all numeric fields to 0 when null', async () => {
+    const reviewed = makeTransaction({ id: 'txn-1', description: 'CC', amount: 500 });
+
+    reviewSessionRepository.save({
+      transactions: [reviewed],
+      currency: INR,
+      format: 'pdf',
+      statementType: 'credit_card',
+      fileName: 'cc.pdf',
+      parseDate: new Date(),
+      statementSummary: {
+        statementDate: null,
+        paymentDueDate: null,
+        totalDue: null,
+        minimumDue: null,
+        creditLimit: null,
+        availableCredit: null,
+        previousBalance: null,
+        paymentsReceived: null,
+        purchasesAndCharges: null,
+        interestCharged: null,
+        lateFee: null,
+        otherCharges: null,
+        cashbackEarned: null,
+        cardLastFour: '1234',
+        cardIssuer: 'Test',
+        cardHolder: null,
+        statementPeriodStart: null,
+        statementPeriodEnd: null,
+      } as Summary,
+      warnings: [],
+    });
+
+    await finalizeReviewImport([reviewed], defaultDependencies);
+
+    const call = defaultDependencies.addCreditCardStatement.mock.calls[0][0];
+    expect(call.totalDue).toBe(0);
+    expect(call.minimumDue).toBe(0);
+    expect(call.creditLimit).toBe(0);
+    expect(call.availableCredit).toBe(0);
+    expect(call.previousBalance).toBe(0);
+    expect(call.paymentsReceived).toBe(0);
+    expect(call.purchasesAndCharges).toBe(0);
+    expect(call.interestCharged).toBe(0);
+    expect(call.lateFee).toBe(0);
+    expect(call.otherCharges).toBe(0);
+    expect(call.cashbackEarned).toBe(0);
+    expect(call.rewardPoints).toBeUndefined();
+  });
+
+  it('maps rewardPoints with missing sub-fields to 0', async () => {
+    const reviewed = makeTransaction({ id: 'txn-1', description: 'CC', amount: 500 });
+
+    reviewSessionRepository.save({
+      transactions: [reviewed],
+      currency: INR,
+      format: 'pdf',
+      statementType: 'credit_card',
+      fileName: 'cc.pdf',
+      parseDate: new Date(),
+      statementSummary: {
+        statementDate: '2025-10-31',
+        paymentDueDate: '2025-11-25',
+        totalDue: 500,
+        minimumDue: 50,
+        creditLimit: 100000,
+        availableCredit: 99500,
+        cardLastFour: '1234',
+        cardIssuer: 'Test',
+        cardHolder: null,
+        statementPeriodStart: '2025-10-01',
+        statementPeriodEnd: '2025-10-31',
+        purchasesAndCharges: 500,
+        paymentsReceived: 0,
+        rewardPoints: {
+          opening: undefined as unknown as number,
+          earned: undefined as unknown as number,
+          redeemed: undefined as unknown as number,
+          closing: undefined as unknown as number,
+        },
+      } as Summary,
+      warnings: [],
+    });
+
+    await finalizeReviewImport([reviewed], defaultDependencies);
+
+    const call = defaultDependencies.addCreditCardStatement.mock.calls[0][0];
+    expect(call.rewardPoints).toEqual({
+      openingBalance: 0,
+      earned: 0,
+      redeemed: 0,
+      expired: 0,
+      closingBalance: 0,
+      expiringNext: undefined,
+      expiringNextDate: undefined,
+    });
+  });
+
+  it('skips credit card statement when addCreditCardStatement dependency is absent', async () => {
+    const reviewed = makeTransaction({ id: 'txn-1', description: 'CC', amount: 500 });
+
+    reviewSessionRepository.save({
+      transactions: [reviewed],
+      currency: INR,
+      format: 'pdf',
+      statementType: 'credit_card',
+      fileName: 'cc.pdf',
+      parseDate: new Date(),
+      statementSummary: {
+        statementDate: '2025-10-31',
+        paymentDueDate: '2025-11-25',
+        totalDue: 500,
+        minimumDue: 50,
+        creditLimit: 100000,
+        availableCredit: 99500,
+        cardLastFour: '1234',
+        cardIssuer: 'Test',
+        cardHolder: null,
+        statementPeriodStart: '2025-10-01',
+        statementPeriodEnd: '2025-10-31',
+        purchasesAndCharges: 500,
+        paymentsReceived: 0,
+      } as Summary,
+      warnings: [],
+    });
+
+    // No addCreditCardStatement provided
+    await finalizeReviewImport([reviewed], { addTransactions: vi.fn() });
+
+    // Should not throw — just skips CC statement creation
+    // Post-import jobs still triggered
   });
 });

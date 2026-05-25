@@ -323,6 +323,30 @@ describe('categorizeTransactions', () => {
     expect(lastCall.processed).toBe(1);
   });
 
+  it('excludes skip-category transactions from mixed batch', async () => {
+    mockFetch.mockResolvedValue(ollamaResponse(JSON.stringify([{
+      id: '2',
+      category: 'groceries',
+      confidence: 0.9,
+      source: 'ai',
+    }])));
+
+    const txns = [
+      makeTransaction({ id: '1', category: makeCategory('transfer', CategoryType.Excluded) }),
+      makeTransaction({ id: '2', description: 'WHOLEFOODS MARKET' }),
+    ];
+    const results = await categorizeTransactions(txns, {
+      provider: 'ollama',
+      baseUrl: 'http://localhost:11434',
+      model: 'llama3',
+    });
+
+    // Only the normal transaction appears; transfer is filtered by shouldSkipAICategorization
+    expect(results).toHaveLength(1);
+    expect(results[0].id).toBe('2');
+    expect(results[0].source).toBe('ai');
+  });
+
   it('returns mix of rule-matched and AI-categorized results', async () => {
     // Seed a rule for "AMAZON"
     useMerchantRuleStore.setState({

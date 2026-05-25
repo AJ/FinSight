@@ -43,6 +43,14 @@ describe('detectCurrencyFromText — symbol detection', () => {
     expect(detectCurrencyFromText('1299.00')).toBeNull();
   });
 
+  it('returns null for empty string', () => {
+    expect(detectCurrencyFromText('')).toBeNull();
+  });
+
+  it('returns null for whitespace-only string', () => {
+    expect(detectCurrencyFromText('   ')).toBeNull();
+  });
+
   it('handles large text with currency at the end', () => {
     // Currency detector samples first 5000 + last 2000 chars
     const text = 'A'.repeat(6000) + '₹500';

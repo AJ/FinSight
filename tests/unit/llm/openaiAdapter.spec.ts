@@ -430,6 +430,45 @@ describe('createOpenAIAdapter', () => {
       const models = await adapter.listModels(BASE, new AbortController().signal);
       expect(models).toEqual([]);
     });
+
+    it('falls back to OpenAI-compatible /v1/models when native API returns empty', async () => {
+      // Native LM Studio API returns empty models array
+      mockFetch
+        .mockResolvedValueOnce(okResponse({ models: [] }))
+        // OpenAI-compatible endpoint returns models
+        .mockResolvedValueOnce(okResponse({
+          data: [
+            { id: 'model-a', loaded_instances: [{ config: { context_length: 4096 } }] },
+            { id: 'model-b' },
+          ],
+        }));
+
+      const models = await adapter.listModels(BASE, new AbortController().signal);
+      expect(models).toEqual([
+        { id: 'model-a', contextLength: 4096 },
+        { id: 'model-b', contextLength: undefined },
+      ]);
+    });
+
+    it('falls back to /v1/models when native API throws', async () => {
+      mockFetch
+        .mockRejectedValueOnce(new Error('native API down'))
+        .mockResolvedValueOnce(okResponse({
+          data: [{ id: 'fallback-model' }],
+        }));
+
+      const models = await adapter.listModels(BASE, new AbortController().signal);
+      expect(models).toEqual([{ id: 'fallback-model', contextLength: undefined }]);
+    });
+
+    it('returns empty when both native and fallback endpoints return non-OK', async () => {
+      mockFetch
+        .mockResolvedValueOnce(errorResponse(500, 'native error'))
+        .mockResolvedValueOnce(errorResponse(503, 'fallback error'));
+
+      const models = await adapter.listModels(BASE, new AbortController().signal);
+      expect(models).toEqual([]);
+    });
   });
 
   // ── checkStatus ────────────────────────────────────────────────────────

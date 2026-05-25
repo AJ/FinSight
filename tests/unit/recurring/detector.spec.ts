@@ -59,6 +59,17 @@ describe('merchantsMatch', () => {
   it('no match', () => {
     expect(merchantsMatch('netflix', 'spotify')).toBe(false);
   });
+
+  it('returns false when first significant word is a common word', () => {
+    // "the" is in the commonWords list — even though first significant word matches, should return false
+    expect(merchantsMatch('The Something', 'The Other')).toBe(false);
+  });
+
+  it('matches on first significant non-common word when neither contains the other', () => {
+    // 'netflix' and 'netflix' as first significant word — but neither string contains the other
+    // because they differ after the first word
+    expect(merchantsMatch('Netflix Premium Plan', 'Netflix Basic Plan')).toBe(true);
+  });
 });
 
 describe('calculateIntervals', () => {
@@ -414,6 +425,12 @@ describe('getMonthlyAmount', () => {
   it('keeps monthly as-is', () => {
     expect(getMonthlyAmount(500, 'monthly')).toBe(500);
   });
+
+  it('returns amount unchanged for unknown frequency via default case', () => {
+    // The default case in getMonthlyAmount is unreachable via TypeScript's type system,
+    // but can be triggered at runtime. Exercise it via type assertion.
+    expect(getMonthlyAmount(500, 'bimonthly' as unknown as Parameters<typeof getMonthlyAmount>[1])).toBe(500);
+  });
 });
 
 describe('getTotalMonthlyRecurring', () => {
@@ -504,5 +521,80 @@ describe('predictNextDate', () => {
     const result = predictNextDate(lastSeen, 'quarterly');
     // Nov 30 + 3 months = Feb 30 → Mar 2 (Feb has 28 days in 2025)
     expect(result).toEqual(new Date(2025, 2, 2));
+  });
+});
+
+describe('chooseDisplayName via detectRecurringPayments', () => {
+  it('picks shortest name when all names are <=3 chars', () => {
+    const txns = Array.from({ length: 6 }, (_, i) =>
+      makeTransaction({
+        id: `short${i}`,
+        description: 'ABC',
+        amount: 100,
+        date: new Date(2024, i, 1),
+      })
+    );
+    const result = detectRecurringPayments(txns);
+    expect(result.length).toBeGreaterThan(0);
+    expect(result[0].merchantName).toBe('ABC');
+  });
+
+  it('picks shortest meaningful name (>3 chars) when multiple names exist', () => {
+    // Transactions with varying descriptions that normalize to the same merchant
+    const txns = [
+      ...Array.from({ length: 3 }, (_, i) =>
+        makeTransaction({
+          id: `name${i}a`,
+          description: 'NFLX',
+          amount: 649,
+          date: new Date(2024, i, 1),
+        })
+      ),
+      ...Array.from({ length: 3 }, (_, i) =>
+        makeTransaction({
+          id: `name${i}b`,
+          description: 'NETFLIX.COM',
+          amount: 649,
+          date: new Date(2024, i, 15),
+        })
+      ),
+    ];
+    const result = detectRecurringPayments(txns);
+    expect(result.length).toBeGreaterThan(0);
+    // Should pick the shortest meaningful name (>3 chars)
+    // Both "NFLX" (4 chars) and "NETFLIX.COM" should be available
+    expect(result[0].merchantName).toBeTruthy();
+  });
+});
+
+describe('yearly minOccurrences boundary', () => {
+  it('does not skip group with count below minOccurrences but >= minOccurrencesYearly', () => {
+    const config: DetectionConfig = {
+      ...DEFAULT_DETECTION_CONFIG,
+      minOccurrences: 3,
+      minOccurrencesYearly: 2,
+      excludeVariableAmounts: false,
+      confidenceThreshold: 0,
+    };
+    // 2 transactions: below minOccurrences (3) but >= minOccurrencesYearly (2)
+    const txns = [
+      makeTransaction({
+        id: 'yr1',
+        description: 'ANNUAL MEMBERSHIP',
+        amount: 999,
+        date: new Date(2023, 0, 15),
+        category: makeCategory('entertainment'),
+      }),
+      makeTransaction({
+        id: 'yr2',
+        description: 'ANNUAL MEMBERSHIP',
+        amount: 999,
+        date: new Date(2024, 0, 15),
+        category: makeCategory('entertainment'),
+      }),
+    ];
+    const result = detectRecurringPayments(txns, config);
+    expect(result.length).toBeGreaterThan(0);
+    expect(result[0].frequency).toBe('yearly');
   });
 });

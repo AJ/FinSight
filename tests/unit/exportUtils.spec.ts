@@ -86,6 +86,22 @@ describe('exportTransactionsToCSV', () => {
     expect(mockAppendChild).toHaveBeenCalled();
     expect(mockRemoveChild).toHaveBeenCalled();
   });
+
+  it('escapes merchant name when present', () => {
+    const txn = makeTransaction({ merchant: 'Amazon "Marketplace"' });
+    exportTransactionsToCSV([txn]);
+
+    expect(capturedBlobContent!).toContain('""Marketplace""');
+  });
+
+  it('includes non-empty merchant in CSV row', () => {
+    const txn = makeTransaction({ merchant: 'Amazon India' });
+    exportTransactionsToCSV([txn]);
+
+    const lines = capturedBlobContent!.split('\n');
+    const row = lines[1];
+    expect(row).toContain('Amazon India');
+  });
 });
 
 describe('exportDebugLog', () => {

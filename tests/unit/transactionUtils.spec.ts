@@ -1,7 +1,9 @@
 import { describe, it, expect } from 'vitest';
 
-import { getTransactionSignature, deduplicateTransactions } from '@/lib/transactionUtils';
-import { makeTransaction } from '@tests/unit/factories';
+import { getTransactionSignature, deduplicateTransactions, getCategoryType, isIncome, isExpense, isExcluded } from '@/lib/transactionUtils';
+import { makeTransaction, makeCategory } from '@tests/unit/factories';
+import { CategoryType } from '@/types';
+import '@/lib/categorization/categories';
 
 describe('getTransactionSignature', () => {
   it('includes date, absolute amount, and lowercase description', () => {
@@ -63,5 +65,50 @@ describe('deduplicateTransactions', () => {
 
   it('handles both lists empty', () => {
     expect(deduplicateTransactions([], [])).toHaveLength(0);
+  });
+});
+
+describe('getCategoryType', () => {
+  it('returns "expense" for expense categories', () => {
+    const txn = makeTransaction({ category: makeCategory('shopping') });
+    expect(getCategoryType(txn)).toBe('expense');
+  });
+
+  it('returns "income" for income categories', () => {
+    const txn = makeTransaction({ category: makeCategory('income', CategoryType.Income) });
+    expect(getCategoryType(txn)).toBe('income');
+  });
+
+  it('returns "excluded" for excluded categories', () => {
+    const txn = makeTransaction({ category: makeCategory('transfer', CategoryType.Excluded) });
+    expect(getCategoryType(txn)).toBe('excluded');
+  });
+
+  it('defaults to "expense" for unregistered category IDs', () => {
+    const txn = makeTransaction({ category: makeCategory('totally-fake-id') });
+    expect(getCategoryType(txn)).toBe('expense');
+  });
+});
+
+describe('isIncome / isExpense / isExcluded', () => {
+  it('isIncome returns true for income, false otherwise', () => {
+    const income = makeTransaction({ category: makeCategory('income', CategoryType.Income) });
+    const expense = makeTransaction({ category: makeCategory('shopping') });
+    expect(isIncome(income)).toBe(true);
+    expect(isIncome(expense)).toBe(false);
+  });
+
+  it('isExpense returns true for expense, false otherwise', () => {
+    const expense = makeTransaction({ category: makeCategory('shopping') });
+    const excluded = makeTransaction({ category: makeCategory('transfer', CategoryType.Excluded) });
+    expect(isExpense(expense)).toBe(true);
+    expect(isExpense(excluded)).toBe(false);
+  });
+
+  it('isExcluded returns true for excluded, false otherwise', () => {
+    const excluded = makeTransaction({ category: makeCategory('transfer', CategoryType.Excluded) });
+    const expense = makeTransaction({ category: makeCategory('shopping') });
+    expect(isExcluded(excluded)).toBe(true);
+    expect(isExcluded(expense)).toBe(false);
   });
 });

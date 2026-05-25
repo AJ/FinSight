@@ -84,6 +84,10 @@ describe('getCategoryGroup', () => {
     expect(getCategoryGroup('income')).toBeNull();
     expect(getCategoryGroup('cashback')).toBeNull();
   });
+
+  it('returns null for nonexistent category id', () => {
+    expect(getCategoryGroup('totally-fake-category')).toBeNull();
+  });
 });
 
 describe('groupStyles', () => {
