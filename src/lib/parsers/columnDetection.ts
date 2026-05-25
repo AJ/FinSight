@@ -3,6 +3,104 @@
  * Matches header names to semantic roles using keyword lists with fuzzy matching.
  */
 
+import type { TransactionType } from '@/types';
+import { TransactionType as TT } from '@/types';
+import type { ParsingError } from './contracts';
+
+export type AmountResult =
+  | { ok: true; amount: number; type: TransactionType }
+  | { ok: false; error: ParsingError };
+
+export function resolveAmount(params: {
+  debit: number | null;
+  credit: number | null;
+  amount: number | null;
+  typeValue: string;
+  mapping: ColumnMapping;
+  rowIndex: number;
+  rawRow: Record<string, unknown>;
+}): AmountResult {
+  const { mapping, rowIndex, rawRow } = params;
+
+  if (mapping.debitCol && mapping.creditCol) {
+    if (params.debit !== null && params.debit !== 0) {
+      return { ok: true, amount: Math.abs(params.debit), type: TT.Debit };
+    }
+    if (params.credit !== null && params.credit !== 0) {
+      return { ok: true, amount: Math.abs(params.credit), type: TT.Credit };
+    }
+    return {
+      ok: false,
+      error: {
+        rowIndex,
+        rawRow,
+        errorMessage: `Row ${rowIndex}: debit ("${rawRow[mapping.debitCol]}") and credit ("${rawRow[mapping.creditCol]}") both null or zero`,
+      },
+    };
+  }
+
+  if (mapping.amountCol) {
+    if (params.amount === null || params.amount === 0) {
+      return {
+        ok: false,
+        error: {
+          rowIndex,
+          rawRow,
+          errorMessage: `Row ${rowIndex}: unparseable amount "${rawRow[mapping.amountCol]}"`,
+        },
+      };
+    }
+
+    const rawType = params.typeValue.toLowerCase().trim();
+    if (rawType.includes('debit') || rawType.includes('dr') || rawType.includes('withdrawal') || rawType.includes('expense')) {
+      return { ok: true, amount: Math.abs(params.amount), type: TT.Debit };
+    }
+    if (rawType.includes('credit') || rawType.includes('cr') || rawType.includes('deposit') || rawType.includes('income')) {
+      return { ok: true, amount: Math.abs(params.amount), type: TT.Credit };
+    }
+
+    const type = params.amount >= 0 ? TT.Credit : TT.Debit;
+    return { ok: true, amount: Math.abs(params.amount), type };
+  }
+
+  if (mapping.debitCol) {
+    if (params.debit === null || params.debit === 0) {
+      return {
+        ok: false,
+        error: {
+          rowIndex,
+          rawRow,
+          errorMessage: `Row ${rowIndex}: unparseable debit "${rawRow[mapping.debitCol]}"`,
+        },
+      };
+    }
+    return { ok: true, amount: Math.abs(params.debit), type: TT.Debit };
+  }
+
+  if (mapping.creditCol) {
+    if (params.credit === null || params.credit === 0) {
+      return {
+        ok: false,
+        error: {
+          rowIndex,
+          rawRow,
+          errorMessage: `Row ${rowIndex}: unparseable credit "${rawRow[mapping.creditCol]}"`,
+        },
+      };
+    }
+    return { ok: true, amount: Math.abs(params.credit), type: TT.Credit };
+  }
+
+  return {
+    ok: false,
+    error: {
+      rowIndex,
+      rawRow,
+      errorMessage: `Row ${rowIndex}: no amount columns available`,
+    },
+  };
+}
+
 export interface ColumnMapping {
   dateCol: string | null;
   descriptionCols: string[];

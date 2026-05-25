@@ -36,6 +36,7 @@ export interface VerifiedTransaction extends Transaction {
     descriptionMatched: boolean
     contextMatched: boolean
     currencyMatched: boolean
+    typeMatched: boolean
   }
 }
 
