@@ -19,6 +19,7 @@ export interface ReviewSessionPayload {
   sourceMetadata?: {
     failedChunks?: string[];
     sourceFileHash?: string;
+    isDuplicateImport?: boolean;
   };
 }
 
@@ -31,6 +32,6 @@ export interface ReviewFinalizeResult {
 }
 
 export interface ReviewFinalizeDependencies {
-  addTransactions: (transactions: Transaction[]) => void;
+  addTransactions: (transactions: Transaction[], options?: { skipDedup?: boolean }) => void;
   addCreditCardStatement?: (statement: CreditCardStatement) => void;
 }

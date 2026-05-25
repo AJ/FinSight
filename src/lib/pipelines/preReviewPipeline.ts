@@ -18,6 +18,7 @@ export interface RunPreReviewPipelineInput {
   onProgress?: (status: string) => void;
   signal?: AbortSignal;
   sourceFileHash?: string;
+  isDuplicateImport?: boolean;
 }
 
 export async function runPreReviewPipeline(
@@ -60,6 +61,7 @@ export async function runPreReviewPipeline(
     sourceMetadata: {
       ...verifiedBundle.sourceMetadata,
       sourceFileHash: input.sourceFileHash,
+      isDuplicateImport: input.isDuplicateImport,
     },
   };
 

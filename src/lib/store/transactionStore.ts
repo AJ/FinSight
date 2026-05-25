@@ -41,7 +41,7 @@ interface TransactionStore {
   selectedIds: string[];
   isCategorizing: boolean;
   categorizeProgress: string;
-  addTransactions: (txns: Transaction[]) => void;
+  addTransactions: (txns: Transaction[], options?: { skipDedup?: boolean }) => void;
   updateTransaction: (id: string, updates: Partial<Transaction>) => void;
   deleteTransaction: (id: string) => void;
   clearAll: () => void;
@@ -76,15 +76,17 @@ export const useTransactionStore = create<TransactionStore>()(
       isCategorizing: false,
       categorizeProgress: '',
 
-      addTransactions: (txns) =>
+      addTransactions: (txns, options) =>
         set((state) => {
           const rehydrated = rehydrateTransactions(txns);
-          const unique = deduplicateTransactions(rehydrated, state.transactions);
-          if (unique.length < rehydrated.length) {
-            console.log(`[Store] Filtered ${rehydrated.length - unique.length} duplicate transaction(s)`);
+          const toAdd = options?.skipDedup
+            ? rehydrated
+            : deduplicateTransactions(rehydrated, state.transactions);
+          if (toAdd.length < rehydrated.length) {
+            console.log(`[Store] Filtered ${rehydrated.length - toAdd.length} duplicate transaction(s)`);
           }
           return {
-            transactions: [...state.transactions, ...unique],
+            transactions: [...state.transactions, ...toAdd],
           };
         }),
 

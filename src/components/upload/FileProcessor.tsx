@@ -174,6 +174,7 @@ export function FileProcessor({ onSuccess, onProcessingChange }: FileProcessorPr
     selectedType: 'auto' | 'bank' | 'credit_card',
     password?: string,
     sourceFileHash?: string,
+    isDuplicateImport?: boolean,
   ) => {
     abortManager.current = new AbortManager();
     const signal = abortManager.current.signal();
@@ -192,6 +193,7 @@ export function FileProcessor({ onSuccess, onProcessingChange }: FileProcessorPr
         onProgress: setProgress,
         signal,
         sourceFileHash,
+        isDuplicateImport,
       });
 
       if (wasCancelledRef.current || signal.aborted) {
@@ -344,15 +346,18 @@ export function FileProcessor({ onSuccess, onProcessingChange }: FileProcessorPr
 
   const handleDuplicateContinue = useCallback(async () => {
     setDuplicateDialogOpen(false);
-    if (pendingTypeFile && duplicateSourceType) {
+    if (pendingTypeFile) {
       setIsProcessing(true);
-      const type = resolveDuplicateStatementType(duplicateSourceType);
+      const type = duplicateSourceType
+        ? resolveDuplicateStatementType(duplicateSourceType)
+        : 'bank';
       try {
         await processFileWithStatementType(
           pendingTypeFile,
           type,
           undefined,
           pendingHash ?? undefined,
+          true, // isDuplicateImport — user explicitly chose "Import Anyway"
         );
       } catch (err) {
         if (isPasswordError(err)) {

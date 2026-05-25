@@ -64,11 +64,14 @@ export async function finalizeReviewImport(
   );
 
   const sourceFileHash = reviewSession.sourceMetadata?.sourceFileHash;
+  const isDuplicateImport = reviewSession.sourceMetadata?.isDuplicateImport;
   const stampedTransactions = sourceFileHash
     ? reviewedTransactions.map((t) => t.cloneWith({ sourceFileHash }))
     : reviewedTransactions;
 
-  dependencies.addTransactions(stampedTransactions);
+  dependencies.addTransactions(stampedTransactions, {
+    skipDedup: isDuplicateImport === true,
+  });
 
   const postImportJobsTriggered: string[] = [];
   const creditCardSummary =
