@@ -99,20 +99,6 @@ export const useLLMConnectionStore = create<LLMConnectionState>((set, get) => ({
         }
 
         return status;
-      })
-      .catch((error) => {
-        const errorMessage = error instanceof Error ? error.message : 'Connection failed';
-        set({
-          status: null,
-          isLoading: false,
-          lastChecked: now,
-          cachedUrl: url,
-          cachedProvider: provider,
-          cachedModel: model,
-          inFlightPromise: null,
-          error: errorMessage,
-        });
-        throw error;
       });
     
     set({ inFlightPromise: promise });

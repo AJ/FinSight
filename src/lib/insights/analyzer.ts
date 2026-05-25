@@ -234,11 +234,6 @@ function calculateThreeMonthAvg(
   byMonth: Record<string, { income: number; expenses: number }>
 ): { income: number; expenses: number } {
   const months = Object.keys(byMonth).sort().slice(-3);
-
-  if (months.length === 0) {
-    return { income: 0, expenses: 0 };
-  }
-
   const totals = months.reduce(
     (acc, month) => ({
       income: acc.income + byMonth[month].income,

@@ -47,16 +47,6 @@ export function validateLlmServerUrl(inputUrl: string): URLValidationResult {
 
     const parsed = new URL(url);
 
-    // Only allow http/https
-    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-      return { 
-        valid: false, 
-        sanitized: '', 
-        error: 'Only HTTP and HTTPS protocols are allowed',
-        isRemote: false,
-      };
-    }
-
     const hostname = parsed.hostname.toLowerCase();
 
     // Check if this is a local/loopback connection
