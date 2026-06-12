@@ -49,13 +49,24 @@ export default function ReviewPage() {
   const verificationReport = reviewSession?.verificationReport ?? null;
 
   const editingTransaction = pendingTransactions?.find((t) => t.id === editingId) ?? null;
+  const suspenseCount = pendingTransactions?.filter(t => t.isSuspense).length ?? 0;
 
   const handleEditSave = useCallback(
     (id: string, updates: Record<string, unknown>) => {
       const t0 = performance.now();
       setPendingTransactions((prev) => {
         if (!prev) return prev;
-        return prev.map((t) => (t.id === id ? t.cloneWith(updates) : t));
+        return prev.map((t) => {
+          if (t.id !== id) return t;
+          // Clear suspense flag when category changes — expanded CategoryType handles routing
+          if (t.isSuspense && typeof updates.category === "string") {
+            return t.cloneWith({
+              ...updates,
+              isSuspense: false,
+            });
+          }
+          return t.cloneWith(updates);
+        });
       });
       console.log(`[Review] editSave: ${Math.round(performance.now() - t0)}ms`);
     },
@@ -118,6 +129,7 @@ export default function ReviewPage() {
     await finalizeReviewImport(pendingTransactions, {
       addTransactions,
       addCreditCardStatement: addCCStatement,
+      addBankSummary: useTransactionStore.getState().addBankSummary,
     });
     console.log(`[Review] import: ${Math.round(performance.now() - t0)}ms`);
 
@@ -146,6 +158,11 @@ export default function ReviewPage() {
                 <p className="text-sm text-muted-foreground" suppressHydrationWarning>
                   Review and edit before importing •{" "}
                   {pendingTransactions.length} transactions
+                  {suspenseCount > 0 && (
+                    <span className="text-amber-600 dark:text-amber-400 ml-2">
+                      • {suspenseCount} need{suspenseCount !== 1 ? "s" : ""} classification
+                    </span>
+                  )}
                 </p>
               </div>
             </div>
@@ -161,7 +178,7 @@ export default function ReviewPage() {
               <Button variant="outline" onClick={handleCancel}>
                 Cancel
               </Button>
-              <Button onClick={handleConfirmImport}>
+              <Button onClick={handleConfirmImport} disabled={suspenseCount > 0}>
                 <CheckCircle className="w-4 h-4 mr-2" />
                 Confirm & Import
               </Button>
@@ -169,6 +186,13 @@ export default function ReviewPage() {
           </div>
         </div>
       </div>
+
+      {/* Verification Summary */}
+      {verificationReport && (
+        <div className="w-[80vw] mx-auto pb-4">
+          <VerificationSummary report={verificationReport} currency={currency} />
+        </div>
+      )}
 
       {/* Transactions Table */}
       <div className="flex justify-center pb-4">
@@ -212,13 +236,6 @@ export default function ReviewPage() {
         }}
         onSave={handleEditSave}
       />
-
-      {/* Verification Summary - Bottom of page */}
-      {verificationReport && (
-        <div className="w-[80vw] mx-auto pb-8">
-          <VerificationSummary report={verificationReport} currency={currency} />
-        </div>
-      )}
 
       {/* Unsaved Changes Modal */}
       <Dialog open={showUnsavedModal} onOpenChange={setShowUnsavedModal}>

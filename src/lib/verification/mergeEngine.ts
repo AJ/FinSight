@@ -3,7 +3,6 @@
  */
 
 import type { ExtractedTransaction } from '@/types/extractedTransaction';
-import { validateCCCrossSection, validateBankCrossSection } from './verificationEngine';
 import type { StatementExtractionData } from '@/lib/parsers/extractionResult';
 import type { CCSummary, BankSummary } from '@/lib/parsers/extractSummary';
 import type { TransactionsOutput } from '@/lib/parsers/extractTransactions';
@@ -210,4 +209,107 @@ export function mergeOutputs(
       failedChunks,
     },
   };
+}
+
+//
+// CROSS-SECTION VALIDATION
+//
+
+export function validateCCCrossSection(
+  summary: CCSummary,
+  transactions: ExtractedTransaction[]
+): string[] {
+  const warnings: string[] = [];
+
+  if (!summary || !Array.isArray(transactions) || transactions.length === 0) {
+    return warnings;
+  }
+
+  const totalDebit = transactions
+    .filter((t) => t.type === 'debit')
+    .reduce((s: number, t) => s + t.amount, 0);
+
+  const totalCredit = transactions
+    .filter((t) => t.type === 'credit')
+    .reduce((s: number, t) => s + t.amount, 0);
+
+  // CC debit total vs purchasesAndCharges (15% tolerance)
+  if (
+    summary.purchasesAndCharges !== null &&
+    summary.purchasesAndCharges !== undefined &&
+    summary.purchasesAndCharges > 0
+  ) {
+    const debitGap = Math.abs(totalDebit - summary.purchasesAndCharges);
+    const debitGapPct = debitGap / summary.purchasesAndCharges;
+
+    if (debitGapPct > 0.15) {
+      warnings.push(
+        `CC cross-section: transaction debits (${totalDebit.toFixed(2)}) differ from ` +
+        `summary purchasesAndCharges (${summary.purchasesAndCharges}) ` +
+        `by ${(debitGapPct * 100).toFixed(1)}% — review extraction`
+      );
+    }
+  }
+
+  // CC credit total vs paymentsReceived (15% tolerance)
+  if (
+    summary.paymentsReceived !== null &&
+    summary.paymentsReceived !== undefined &&
+    summary.paymentsReceived > 0
+  ) {
+    const creditGap = Math.abs(totalCredit - summary.paymentsReceived);
+    const creditGapPct = creditGap / summary.paymentsReceived;
+
+    if (creditGapPct > 0.15) {
+      warnings.push(
+        `CC cross-section: transaction credits (${totalCredit.toFixed(2)}) differ from ` +
+        `summary paymentsReceived (${summary.paymentsReceived}) ` +
+        `by ${(creditGapPct * 100).toFixed(1)}% — review extraction`
+      );
+    }
+  }
+
+  return warnings;
+}
+
+export function validateBankCrossSection(
+  summary: BankSummary,
+  transactions: ExtractedTransaction[]
+): string[] {
+  const warnings: string[] = [];
+
+  if (!summary || !Array.isArray(transactions) || transactions.length === 0) {
+    return warnings;
+  }
+
+  if (
+    summary.openingBalance === null ||
+    summary.openingBalance === undefined ||
+    summary.closingBalance === null ||
+    summary.closingBalance === undefined
+  ) {
+    return warnings;
+  }
+
+  const totalCredit = transactions
+    .filter((t) => t.type === 'credit')
+    .reduce((s: number, t) => s + t.amount, 0);
+
+  const totalDebit = transactions
+    .filter((t) => t.type === 'debit')
+    .reduce((s: number, t) => s + t.amount, 0);
+
+  const calculatedClosing = summary.openingBalance + totalCredit - totalDebit;
+  const diff = Math.abs(calculatedClosing - summary.closingBalance);
+
+  if (diff > 1.0) {
+    warnings.push(
+      `Bank cross-section: openingBalance(${summary.openingBalance}) + ` +
+      `credits(${totalCredit.toFixed(2)}) - debits(${totalDebit.toFixed(2)}) = ` +
+      `${calculatedClosing.toFixed(2)}, but closingBalance = ${summary.closingBalance} ` +
+      `(diff: ${diff.toFixed(2)}) — transactions may be incomplete`
+    );
+  }
+
+  return warnings;
 }

@@ -575,6 +575,95 @@ describe('toCreditCardStatement (via finalizeReviewImport)', () => {
     });
   });
 
+  it('strips isSuspense flag from transactions before persisting', async () => {
+    const base = makeTransaction({ id: 'txn-1', description: 'Transfer', amount: 5000 });
+    const suspenseTxn = base.cloneWith({ isSuspense: true });
+
+    reviewSessionRepository.save({
+      transactions: [suspenseTxn],
+      currency: INR,
+      format: 'csv',
+      statementType: 'bank',
+      fileName: 'test.csv',
+      parseDate: new Date(),
+      statementSummary: null,
+      warnings: [],
+    });
+
+    const reviewed = base.cloneWith({ isSuspense: true });
+    const deps = { addTransactions: vi.fn(), addCreditCardStatement: vi.fn() };
+    await finalizeReviewImport([reviewed], deps);
+
+    // The transaction passed to addTransactions should NOT have isSuspense
+    const added = deps.addTransactions.mock.calls[0][0][0];
+    expect(added.isSuspense).toBeFalsy();
+  });
+
+  it('creates bank summary for bank statements with closingBalance', async () => {
+    const reviewed = makeTransaction({ id: 'txn-1', description: 'Salary', amount: 50000, type: 'credit' });
+
+    reviewSessionRepository.save({
+      transactions: [reviewed],
+      currency: INR,
+      format: 'csv',
+      statementType: 'bank',
+      fileName: 'bank.csv',
+      parseDate: new Date(),
+      statementSummary: {
+        statementDate: '2025-10-31',
+        statementPeriodStart: '2025-10-01',
+        statementPeriodEnd: '2025-10-31',
+        accountNumber: '1234567890',
+        accountHolderName: 'John Doe',
+        bankName: 'Test Bank',
+        accountType: 'savings',
+        openingBalance: 10000,
+        closingBalance: 60000,
+      } as Summary,
+      warnings: [],
+    });
+
+    const addBankSummary = vi.fn();
+    await finalizeReviewImport([reviewed], { addTransactions: vi.fn(), addBankSummary });
+
+    expect(addBankSummary).toHaveBeenCalledWith(
+      expect.objectContaining({
+        accountNumber: '1234567890',
+        bankName: 'Test Bank',
+        openingBalance: 10000,
+        closingBalance: 60000,
+      }),
+    );
+  });
+
+  it('skips bank summary when addBankSummary dependency is absent', async () => {
+    const reviewed = makeTransaction({ id: 'txn-1', description: 'Salary', amount: 50000, type: 'credit' });
+
+    reviewSessionRepository.save({
+      transactions: [reviewed],
+      currency: INR,
+      format: 'csv',
+      statementType: 'bank',
+      fileName: 'bank.csv',
+      parseDate: new Date(),
+      statementSummary: {
+        statementDate: '2025-10-31',
+        statementPeriodStart: '2025-10-01',
+        statementPeriodEnd: '2025-10-31',
+        accountNumber: null,
+        accountHolderName: null,
+        bankName: null,
+        accountType: null,
+        openingBalance: 0,
+        closingBalance: 50000,
+      } as Summary,
+      warnings: [],
+    });
+
+    // No addBankSummary provided — should not throw
+    await finalizeReviewImport([reviewed], { addTransactions: vi.fn() });
+  });
+
   it('skips credit card statement when addCreditCardStatement dependency is absent', async () => {
     const reviewed = makeTransaction({ id: 'txn-1', description: 'CC', amount: 500 });
 
@@ -607,6 +696,5 @@ describe('toCreditCardStatement (via finalizeReviewImport)', () => {
     await finalizeReviewImport([reviewed], { addTransactions: vi.fn() });
 
     // Should not throw — just skips CC statement creation
-    // Post-import jobs still triggered
   });
 });

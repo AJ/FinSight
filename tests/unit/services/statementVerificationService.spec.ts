@@ -112,7 +112,7 @@ describe('attachVerificationToExtractionBundle', () => {
 
     const result = attachVerificationToExtractionBundle(bundle);
 
-    // Both verifyCCStatement and verifyStatement run for CC inputs
+    // verifyStatement handles both per-transaction matching and CC aggregate checks
     expect(result.verificationReport).toBeDefined();
   });
 
@@ -184,9 +184,9 @@ describe('attachVerificationToExtractionBundle', () => {
     // Only the pre-existing warning — no verification warning added
     expect(result.warnings).toEqual(['existing warning']);
     expect(result.verificationReport).toBeDefined();
-    const report = result.verificationReport as import('@/lib/verification/verificationEngine').CCVerificationReport;
-    expect(report.statementTotals.passed).toBe(true);
-    expect(report.transactionSums.passed).toBe(true);
+    const report = result.verificationReport!;
+    expect(report.ccAggregate!.statementTotals.passed).toBe(true);
+    expect(report.ccAggregate!.transactionSums.passed).toBe(true);
   });
 
   it('CC individual sub-check — only statementTotals fails, warning still mentions it', () => {
@@ -213,9 +213,9 @@ describe('attachVerificationToExtractionBundle', () => {
 
     const ccWarning = result.warnings.find((w) => w.includes('Credit card'));
     expect(ccWarning).toBeDefined();
-    const report = result.verificationReport as import('@/lib/verification/verificationEngine').CCVerificationReport;
-    expect(report.statementTotals.passed).toBe(false);
-    expect(report.transactionSums.passed).toBe(true);
+    const report = result.verificationReport!;
+    expect(report.ccAggregate!.statementTotals.passed).toBe(false);
+    expect(report.ccAggregate!.transactionSums.passed).toBe(true);
   });
 
   it('bank reconciliation with undefined difference falls back to "unknown"', () => {
@@ -231,7 +231,7 @@ describe('attachVerificationToExtractionBundle', () => {
 
     const result = attachVerificationToExtractionBundle(bundle);
 
-    const reconWarning = result.warnings.find((w) => w.includes('reconciliation difference unknown'));
+    const reconWarning = result.warnings.find((w) => w.includes('difference of unknown'));
     expect(reconWarning).toBeDefined();
   });
 
@@ -258,5 +258,109 @@ describe('attachVerificationToExtractionBundle', () => {
     const unmatched = result.transactions.find((t) => t.id === 'tx-unmatched');
     expect(matched).toBeDefined();
     expect(unmatched).toBeDefined();
+  });
+
+  // ── Nuanced warning tests ────────────────────────────────────────────────────
+
+  it('bank: recon passes but unverified transactions → nuanced warning', () => {
+    // opening=1000, credit=100, debit=0 → computed=1100, closing=1100 → recon passes
+    // But rawText is generic — transaction won't verify against it
+    const txn = makeTransaction({ amount: 100, type: 'credit', description: 'Something Not In Text' });
+    const bundle = makeBundle({
+      verificationInputs: bankVerificationInputs({
+        rawText: 'unrelated text without transaction details',
+        transactions: [txn],
+        meta: { openingBalance: 1000, closingBalance: 1100, currency: 'INR' },
+      }),
+    });
+
+    const result = attachVerificationToExtractionBundle(bundle);
+
+    const warning = result.warnings.find((w) => w.includes('Reconciliation balanced'));
+    expect(warning).toBeDefined();
+    expect(warning).toContain('could not be verified against source text');
+    expect(warning).toContain('overall confidence');
+  });
+
+  it('bank: recon fails → primary failure warning with difference', () => {
+    const txn = makeTransaction();
+    const bundle = makeBundle({
+      verificationInputs: bankVerificationInputs({
+        meta: { openingBalance: 1000, closingBalance: 500, currency: 'INR' },
+        transactions: [txn],
+      }),
+    });
+
+    const result = attachVerificationToExtractionBundle(bundle);
+
+    const warning = result.warnings.find((w) => w.includes('Balance reconciliation difference'));
+    expect(warning).toBeDefined();
+    // Should NOT say "Reconciliation balanced"
+    expect(warning).not.toContain('Reconciliation balanced');
+  });
+
+  it('bank: recon passes, all verified → no verification warning', () => {
+    const txn = makeTransaction({ description: 'Test Transaction', amount: 100, type: 'debit', date: '2024-01-15' });
+    const bundle = makeBundle({
+      verificationInputs: bankVerificationInputs({
+        rawText: '2024-01-15 Test Transaction 100 debit',
+        transactions: [txn],
+        meta: { openingBalance: 1000, closingBalance: 900, currency: 'INR' },
+      }),
+    });
+
+    const result = attachVerificationToExtractionBundle(bundle);
+
+    // Only the existing warning — no verification warning
+    expect(result.warnings).toEqual(['existing warning']);
+  });
+
+  it('CC: only statementTotals fails → specific warning', () => {
+    // previousBalance=1000, totalDue=5000 (way off)
+    // transactionSums: totalDebits(100) ≈ purchasesAndCharges(100) ✓
+    const txn = makeTransaction({ type: 'debit', amount: 100 });
+    const bundle = makeBundle({
+      verificationInputs: {
+        kind: 'credit_card',
+        rawText: '2024-01-15 Test Transaction 100 debit',
+        transactions: [txn],
+        meta: {
+          previousBalance: 1000,
+          totalDue: 5000,
+          currency: 'INR',
+          purchasesAndCharges: 100,
+          paymentsReceived: 0,
+        },
+      },
+    });
+
+    const result = attachVerificationToExtractionBundle(bundle);
+
+    const warning = result.warnings.find((w) => w.includes('totals do not fully reconcile'));
+    expect(warning).toBeDefined();
+    expect(warning).not.toContain('transaction sums');
+  });
+
+  it('CC: both fail → combined warning', () => {
+    const txn = makeTransaction({ type: 'debit', amount: 100 });
+    const bundle = makeBundle({
+      verificationInputs: {
+        kind: 'credit_card',
+        rawText: 'text',
+        transactions: [txn],
+        meta: {
+          previousBalance: 5000,
+          totalDue: 100,
+          currency: 'INR',
+          purchasesAndCharges: 9999,
+          paymentsReceived: 0,
+        },
+      },
+    });
+
+    const result = attachVerificationToExtractionBundle(bundle);
+
+    const warning = result.warnings.find((w) => w.includes('totals and transaction sums'));
+    expect(warning).toBeDefined();
   });
 });

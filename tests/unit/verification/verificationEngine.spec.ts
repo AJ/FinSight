@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { verifyStatement, verifyCCStatement, validateCCCrossSection, validateBankCrossSection } from '@/lib/verification/verificationEngine';
+import { verifyStatement } from '@/lib/verification/verificationEngine';
+import { validateCCCrossSection, validateBankCrossSection } from '@/lib/verification/mergeEngine';
 import type { ExtractedTransaction } from '@/types/extractedTransaction';
 import type { CCSummary, BankSummary } from '@/lib/parsers/extractSummary';
 import { makeTransaction } from '@tests/unit/factories';
@@ -18,7 +19,7 @@ describe('verifyStatement — bank verification', () => {
     const txns = [
       makeTransaction({ description: 'AMAZON PURCHASE', amount: 1299, type: 'debit', date: '2024-01-15', balance: 48701 }),
     ];
-    const result = verifyStatement(simpleRawText, txns, { openingBalance: 50000, closingBalance: 50000 });
+    const result = verifyStatement(simpleRawText, txns, { kind: 'bank', openingBalance: 50000, closingBalance: 50000 });
     expect(result.verified.length).toBeGreaterThan(0);
     expect(result.verified[0].confidence).toBeGreaterThanOrEqual(75);
   });
@@ -27,73 +28,78 @@ describe('verifyStatement — bank verification', () => {
     const txns = [
       makeTransaction({ description: 'TOTALLY FAKE MERCHANT', amount: 999999, type: 'debit' }),
     ];
-    const result = verifyStatement(rawText, txns, {});
+    const result = verifyStatement(rawText, txns, { kind: 'bank' });
     expect(result.rejected.length).toBeGreaterThan(0);
     expect(result.verified.length).toBe(0);
   });
 
-  it('detects duplicate transactions (same signature content)', () => {
+  it('rejects hallucinated duplicate (one occurrence in text, two extraction objects)', () => {
     const simpleRawText = `2024-01-15 AMAZON PURCHASE 1299 debit`;
     const txn1 = makeTransaction({ description: 'AMAZON PURCHASE', amount: 1299, type: 'debit', date: '2024-01-15' });
     const txn2 = makeTransaction({ description: 'AMAZON PURCHASE', amount: 1299, type: 'debit', date: '2024-01-15' });
-    const result = verifyStatement(simpleRawText, [txn1, txn2], {});
-    // Both transactions have the same signature → second is duplicate
-    expect(result.duplicates.length).toBe(1);
+    const result = verifyStatement(simpleRawText, [txn1, txn2], { kind: 'bank' });
+    // Only one occurrence of 1299 in text — second extraction has no evidence, so rejected
+    expect(result.verified.length).toBe(1);
+    expect(result.rejected.length).toBe(1);
   });
 
   it('computes overall confidence', () => {
     const txns = [
       makeTransaction({ description: 'AMAZON INDIA PURCHASE', amount: 1299, type: 'debit', date: '2024-01-01' }),
     ];
-    const result = verifyStatement(rawText, txns, { openingBalance: 50000, closingBalance: 98351 });
+    const result = verifyStatement(rawText, txns, { kind: 'bank', openingBalance: 50000, closingBalance: 98351 });
     expect(result.overallConfidence).toBeGreaterThanOrEqual(0);
     expect(result.overallConfidence).toBeLessThanOrEqual(100);
   });
 });
 
 describe('verifyStatement — reconciliation', () => {
-  it('reconciliation is skipped when no transactions are verified', () => {
+  it('passes reconciliation when math holds even with zero transactions verified', () => {
     const txns = [
       makeTransaction({ amount: 1000, type: 'credit' }),
       makeTransaction({ amount: 300, type: 'debit' }),
     ];
-    // With rawText = 'text', transactions won't be found → none verified → reconciliation fails
-    const result = verifyStatement('text', txns, { openingBalance: 50000, closingBalance: 50700 });
-    // No verified transactions means reconciliation can still run but with 0 txns
-    expect(result.reconciliation.passed).toBe(false); // 0 credits - 0 debits ≠ 700
+    // Balance equation holds (50000 + 1000 - 300 = 50700) — reconciliation passes on its own merit.
+    const result = verifyStatement('text', txns, { kind: 'bank', openingBalance: 50000, closingBalance: 50700 });
+    expect(result.verified.length).toBe(0);
+    expect(result.reconciliation.passed).toBe(true);
   });
 
   it('fails when balance equation does not hold', () => {
     const txns = [
       makeTransaction({ amount: 1000, type: 'credit' }),
     ];
-    const result = verifyStatement('text', txns, { openingBalance: 50000, closingBalance: 100000 });
+    const result = verifyStatement('text', txns, { kind: 'bank', openingBalance: 50000, closingBalance: 100000 });
     expect(result.reconciliation.passed).toBe(false);
     expect(result.reconciliation.difference).toBeGreaterThan(1.0);
   });
 
   it('returns not passed when balances are missing', () => {
-    const result = verifyStatement('text', [], {});
+    const result = verifyStatement('text', [], { kind: 'bank' });
     expect(result.reconciliation.passed).toBe(false);
   });
 });
 
-describe('verifyCCStatement', () => {
+describe('CC aggregate checks via verifyStatement', () => {
   it('passes when statement totals formula holds', () => {
     const txns = [
-      makeTransaction({ amount: 10000, type: 'debit' }),
-      makeTransaction({ amount: 5000, type: 'credit' }),
+      makeTransaction({ amount: 10000, type: 'debit', description: 'AMAZON' }),
+      makeTransaction({ amount: 5000, type: 'credit', description: 'PAYMENT' }),
     ];
+    // Raw text must contain amount evidence so transactions verify (guard requires verified.length > 0)
+    const rawText = 'AMAZON 10000 dr PAYMENT 5000 cr';
     // PreviousBalance(30000) + Debits(10000) - Credits(5000) = 35000
-    const result = verifyCCStatement(txns, {
+    const result = verifyStatement(rawText, txns, {
+      kind: 'credit_card',
       previousBalance: 30000,
       totalDue: 35000,
       purchasesAndCharges: 10000,
       paymentsReceived: 5000,
     });
-    expect(result.statementTotals.passed).toBe(true);
-    expect(result.statementTotals.difference).toBeLessThanOrEqual(1.0);
-    expect(result.passed).toBe(true);
+    expect(result.verified.length).toBeGreaterThan(0);
+    expect(result.ccAggregate!.statementTotals.passed).toBe(true);
+    expect(result.reconciliation.difference).toBeLessThanOrEqual(1.0);
+    expect(result.ccAggregate!.statementTotals.passed && result.ccAggregate!.transactionSums.passed).toBe(true);
   });
 
   it('fails when statement totals do not match', () => {
@@ -101,57 +107,46 @@ describe('verifyCCStatement', () => {
       makeTransaction({ amount: 1000, type: 'debit' }),
     ];
     // Previous(30000) + Debits(1000) - Credits(0) = 31000, but expected 50000
-    const result = verifyCCStatement(txns, {
+    const result = verifyStatement('text', txns, {
+      kind: 'credit_card',
       previousBalance: 30000,
       totalDue: 50000,
     });
-    expect(result.statementTotals.passed).toBe(false);
-  });
-
-  it('gives partial credit for small differences', () => {
-    const txns = [
-      makeTransaction({ amount: 10000, type: 'debit' }),
-    ];
-    // Computed: 30000 + 10000 = 40000, Expected: 40050 (diff = 50, < 100)
-    const result = verifyCCStatement(txns, {
-      previousBalance: 30000,
-      totalDue: 40050,
-    });
-    expect(result.overallConfidence).toBeGreaterThanOrEqual(25);
+    expect(result.ccAggregate!.statementTotals.passed).toBe(false);
   });
 
   it('verifies transaction sums by type', () => {
     const txns = [
       makeTransaction({ amount: 5000, type: 'debit', transactionSubType: 'purchase' }),
-      makeTransaction({ amount: 3000, type: 'credit', transactionSubType: 'bill_payment' }),
+      makeTransaction({ amount: 3000, type: 'credit', transactionSubType: 'debt_payment' }),
     ];
-    const result = verifyCCStatement(txns, {
+    const result = verifyStatement('text', txns, {
+      kind: 'credit_card',
       purchasesAndCharges: 5000,
       paymentsReceived: 3000,
     });
-    expect(result.transactionSums.passed).toBe(true);
+    expect(result.ccAggregate!.transactionSums.passed).toBe(true);
   });
 
   it('passes when statement meta fields are undefined', () => {
     const txns = [
       makeTransaction({ amount: 1000, type: 'debit' }),
     ];
-    const result = verifyCCStatement(txns, {});
+    const result = verifyStatement('text', txns, { kind: 'credit_card' });
     // Without statement data to compare against, should pass by default
-    expect(result.transactionSums.passed).toBe(true);
+    expect(result.ccAggregate!.transactionSums.passed).toBe(true);
   });
 
   it('calculates correct subtype breakdown', () => {
     const txns = [
       makeTransaction({ amount: 1000, type: 'debit', transactionSubType: 'purchase' }),
       makeTransaction({ amount: 500, type: 'debit', transactionSubType: 'fee' }),
-      makeTransaction({ amount: 200, type: 'credit', transactionSubType: 'cashback' }),
+      makeTransaction({ amount: 200, type: 'credit', transactionSubType: 'rewards' }),
     ];
-    const result = verifyCCStatement(txns, {});
-    expect(result.transactionSums.totalPurchases).toBe(1000);
-    expect(result.transactionSums.totalFees).toBe(500);
-    expect(result.transactionSums.totalDebits).toBe(1500);
-    expect(result.transactionSums.totalCredits).toBe(200);
+    const result = verifyStatement('text', txns, { kind: 'credit_card' });
+    expect(result.ccAggregate!.transactionSums.totalDebits).toBe(1500);
+    expect(result.ccAggregate!.transactionSums.totalCredits).toBe(200);
+    expect(result.ccAggregate!.transactionSums.totalFees).toBe(500);
   });
 });
 
@@ -261,137 +256,132 @@ describe('validateBankCrossSection', () => {
   });
 });
 
-describe('verifyStatement — currency matching', () => {
-  it('adds 10 confidence points when currency code appears in raw text', () => {
-    // Raw text contains "usd" and "debit" keyword. Transaction has USD currency.
-    // amount(30) + type(25) + date(20) + description(15) + context(~matched) + currency(10) = 100+
-    const rawText = '2024-01-15 amazon purchase debit 99.99 usd balance 9900';
-    const txnUsd = makeTransaction({ description: 'amazon purchase', amount: 99.99, date: '2024-01-15', localCurrency: 'USD' });
-    const txnInr = makeTransaction({ description: 'amazon purchase', amount: 99.99, date: '2024-01-15', localCurrency: 'INR' });
-
-    const resultUsd = verifyStatement(rawText, [txnUsd], {});
-    const resultInr = verifyStatement(rawText, [txnInr], {});
-
-    // Both should verify (amount + type + date + description = 90 without currency)
-    expect(resultUsd.verified.length).toBeGreaterThan(0);
-    expect(resultInr.verified.length).toBeGreaterThan(0);
-    // USD one has strictly higher confidence due to currency match (+10 points)
-    expect(resultUsd.verified[0].confidence).toBeGreaterThan(resultInr.verified[0].confidence);
-  });
-
-  it('currency is case-insensitive in matching (raw text normalized to lowercase)', () => {
-    // verifyStatement normalizes raw text to lowercase, so "INR" in raw becomes "inr"
-    // The code checks rawText.includes(code.toLowerCase()) which is "inr".includes("inr") → true
-    const rawTextWithUppercase = '2024-01-15 PURCHASE debit 1299 INR';
-    const txn = makeTransaction({ description: 'PURCHASE', amount: 1299, date: '2024-01-15', localCurrency: 'INR' });
-    const result = verifyStatement(rawTextWithUppercase, [txn], {});
-
-    expect(result.verified.length).toBeGreaterThan(0);
-    expect(result.verified[0].verification.currencyMatched).toBe(true);
-  });
-
-  it('currency not present in raw text still passes verification on other fields', () => {
-    const rawText = '2024-01-15 amazon purchase debit 99.99 balance 9900';
-    const txn = makeTransaction({ description: 'amazon purchase', amount: 99.99, date: '2024-01-15', localCurrency: 'EUR' });
-    const result = verifyStatement(rawText, [txn], {});
-
-    expect(result.verified.length).toBeGreaterThan(0);
-    expect(result.verified[0].verification.currencyMatched).toBe(false);
-  });
-
-  it('transactions without localCurrency default to currency match true', () => {
-    // makeTransaction without localCurrency gets INR default from Transaction.fromExtracted
-    const rawText = '2024-01-15 purchase debit 99.99';
-    const txn = makeTransaction({ description: 'purchase', amount: 99.99, date: '2024-01-15' });
-    expect(txn.localCurrency.code).toBe('INR');
-    // "purchase debit 99.99" normalized doesn't contain "inr" → currencyMatched=false
-    const result = verifyStatement(rawText, [txn], {});
-    expect(result.verified.length).toBeGreaterThan(0);
-    expect(result.verified[0].verification.currencyMatched).toBe(false);
-  });
-});
-
-describe('verifyCCStatement — partial transaction sums confidence', () => {
-  it('awards partial confidence when fees mismatch but purchases/payments match or undefined', () => {
-    // Provide only interestCharged/lateFee to make feesMatch=false,
-    // but leave purchasesAndCharges and paymentsReceived undefined so those match.
-    // transactionSums.passed will be false (fees don't match),
-    // but partial credit for purchases (+17) and payments (+17) should apply.
+describe('CC aggregate — partial transaction sums', () => {
+  it('marks transaction sums as failed when fees mismatch', () => {
     const txns = [
       makeTransaction({ amount: 1000, type: 'debit', transactionSubType: 'fee' }),
     ];
-    const result = verifyCCStatement(txns, {
+    const result = verifyStatement('text', txns, {
+      kind: 'credit_card',
       interestCharged: 9999, // Very different from actual fees (1000)
     });
-    // transactionSums.passed should be false (fees don't match)
-    expect(result.transactionSums.passed).toBe(false);
-    // But overall confidence should include partial credit from purchases/payments
-    // purchases is undefined → +17, payments is undefined → +17
-    // statementTotals has no previousBalance → computedTotalDue = 0, expectedTotalDue = 0 → passed
-    // So confidence = 50 (statement totals) + 17 (purchases) + 17 (payments) + 0 (fees fail) = 84
-    expect(result.overallConfidence).toBeGreaterThanOrEqual(34);
+    expect(result.ccAggregate!.transactionSums.passed).toBe(false);
   });
 
-  it('awards fees partial credit when fees match but purchases/payments fail', () => {
-    // Make purchases/payments mismatch but fees within tolerance.
-    // This exercises line 424 (confidence += 16 for fees match).
+  it('marks transaction sums as failed when purchases and payments mismatch but fees match', () => {
     const txns = [
       makeTransaction({ amount: 500, type: 'debit', transactionSubType: 'purchase' }),
-      makeTransaction({ amount: 200, type: 'credit', transactionSubType: 'bill_payment' }),
+      makeTransaction({ amount: 200, type: 'credit', transactionSubType: 'debt_payment' }),
       makeTransaction({ amount: 100, type: 'debit', transactionSubType: 'fee' }),
     ];
-    const result = verifyCCStatement(txns, {
-      purchasesAndCharges: 9999,   // Way off from totalDebits (600) → purchasesMatch=false
-      paymentsReceived: 9999,       // Way off from totalCredits (200) → paymentsMatch=false
-      interestCharged: 100,         // Matches totalFees (100) → feesMatch=true
+    const result = verifyStatement('text', txns, {
+      kind: 'credit_card',
+      purchasesAndCharges: 9999,
+      paymentsReceived: 9999,
+      interestCharged: 100,
     });
-    // transactionSums.passed = false (purchases and payments don't match)
-    expect(result.transactionSums.passed).toBe(false);
-    // Confidence should include fees partial credit (+16) but not purchases or payments
-    // statementTotals: no previousBalance → computedTotalDue = 0, expectedTotalDue = 0 → passed → +50
-    // purchases: |600 - 9999| > 10 → no credit
-    // payments: |200 - 9999| > 10 → no credit
-    // fees: statementFees = 100, totalFees = 100, |100 - 100| < 10 → +16
-    // Total = 50 + 0 + 0 + 16 = 66
-    expect(result.overallConfidence).toBeGreaterThanOrEqual(66);
+    expect(result.ccAggregate!.transactionSums.passed).toBe(false);
+    // fees match individually even though overall sums fail
+    expect(result.ccAggregate!.transactionSums.statementFees).toBe(100);
+    expect(result.ccAggregate!.transactionSums.totalFees).toBe(100);
+  });
+});
+
+describe('CC aggregate — subtype decomposition', () => {
+  it('compares purchase subtype total against purchasesAndCharges (not all debits)', () => {
+    // 1000 purchase + 500 fee = 1500 total debits, but purchasesAndCharges should only match purchase portion
+    const txns = [
+      makeTransaction({ amount: 1000, type: 'debit', transactionSubType: 'purchase' }),
+      makeTransaction({ amount: 500, type: 'debit', transactionSubType: 'fee' }),
+      makeTransaction({ amount: 300, type: 'credit', transactionSubType: 'debt_payment' }),
+    ];
+    const result = verifyStatement('text', txns, {
+      kind: 'credit_card',
+      purchasesAndCharges: 1000,
+      paymentsReceived: 300,
+    });
+    // purchasesMatch: totalPurchases(1000) ≈ purchasesAndCharges(1000) ✓
+    // debitTotalsMatch: totalDebits(1500) ≈ statementDebits(1000 + 0 + 0 + 0) ✗
+    // → overall transactionSums fails because total debits don't match statement debits
+    expect(result.ccAggregate!.transactionSums.passed).toBe(false);
+    expect(result.ccAggregate!.transactionSums.totalFees).toBe(500);
+  });
+
+  it('passes when debits match full statement stack including fees', () => {
+    const txns = [
+      makeTransaction({ amount: 1000, type: 'debit', transactionSubType: 'purchase' }),
+      makeTransaction({ amount: 500, type: 'debit', transactionSubType: 'fee' }),
+      makeTransaction({ amount: 300, type: 'credit', transactionSubType: 'debt_payment' }),
+    ];
+    const result = verifyStatement('text', txns, {
+      kind: 'credit_card',
+      purchasesAndCharges: 1000,
+      interestCharged: 500,
+      paymentsReceived: 300,
+    });
+    // debitTotalsMatch: totalDebits(1500) ≈ statementDebits(1000 + 500) ✓
+    // creditTotalsMatch: totalCredits(300) ≈ statementCredits(300) ✓
+    // purchasesMatch: totalPurchases(1000) ≈ purchasesAndCharges(1000) ✓
+    // feesMatch: totalFees(500) ≈ interestCharged(500) ✓
+    // paymentsMatch: totalPayments(300) ≈ paymentsReceived(300) ✓
+    expect(result.ccAggregate!.transactionSums.passed).toBe(true);
+  });
+
+  it('compares only debt_payment credits against paymentsReceived (not all credits)', () => {
+    // 300 payment + 200 cashback = 500 total credits, but paymentsReceived should only match payment portion
+    const txns = [
+      makeTransaction({ amount: 1000, type: 'debit', transactionSubType: 'purchase' }),
+      makeTransaction({ amount: 300, type: 'credit', transactionSubType: 'debt_payment' }),
+      makeTransaction({ amount: 200, type: 'credit', transactionSubType: 'rewards' }),
+    ];
+    const result = verifyStatement('text', txns, {
+      kind: 'credit_card',
+      purchasesAndCharges: 1000,
+      paymentsReceived: 300,
+      cashbackEarned: 200,
+    });
+    // paymentsMatch: totalPayments(300) ≈ paymentsReceived(300) ✓
+    // creditTotalsMatch: totalCredits(500) ≈ statementCredits(300 + 200) ✓
+    expect(result.ccAggregate!.transactionSums.passed).toBe(true);
+  });
+
+  it('fails when paymentsReceived does not account for cashback', () => {
+    const txns = [
+      makeTransaction({ amount: 1000, type: 'debit', transactionSubType: 'purchase' }),
+      makeTransaction({ amount: 300, type: 'credit', transactionSubType: 'debt_payment' }),
+      makeTransaction({ amount: 200, type: 'credit', transactionSubType: 'rewards' }),
+    ];
+    const result = verifyStatement('text', txns, {
+      kind: 'credit_card',
+      purchasesAndCharges: 1000,
+      paymentsReceived: 500, // Wrong: includes cashback as if it were payment
+      cashbackEarned: 200,
+    });
+    // paymentsMatch: totalPayments(300) ≈ paymentsReceived(500) ✗
+    expect(result.ccAggregate!.transactionSums.passed).toBe(false);
   });
 });
 
 describe('verifyStatement — type matching with contradictory evidence', () => {
-  it('deducts type score for credit transaction in debit context', () => {
+  it('rejects credit transaction with contradictory debit evidence', () => {
     // A credit transaction found in raw text with "debit" keyword but no "credit" keyword.
-    // Must prevent hasPlusSign from winning: -1500 has hasMinusSign=true.
-    // Confidence: amount(30) + date(20) + desc(15) + currency(10) = 75, type(0) = 75 → passes threshold
+    // With redistributed weights: amount(34) + date(23) + desc(15) = 72 < 75 threshold
     const rawText = '2024-01-15 refund -1500 debit inr';
     const txn = makeTransaction({ description: 'refund', amount: 1500, type: 'credit', date: '2024-01-15' });
-    const result = verifyStatement(rawText, [txn], {});
-    expect(result.verified.length).toBeGreaterThan(0);
-    // Type match should be false: credit tx, hasDebitKeyword=true, hasCreditKeyword=false, hasMinusSign=true
-    // Line 641: hasCreditKeyword && !hasDebitKeyword → false
-    // Line 642: hasCRSuffix → false
-    // Line 643: hasPlusSign && !hasMinusSign → false (hasMinusSign is true)
-    // Line 644: hasDebitKeyword && !hasCreditKeyword → true → return false
-    expect(result.verified[0].verification.typeMatched).toBe(false);
+    const result = verifyStatement(rawText, [txn], { kind: 'bank' });
+    // Type mismatch prevents verification: 72 < 75
+    expect(result.verified.length).toBe(0);
+    expect(result.rejected.length).toBe(1);
   });
 
-  it('deducts type score for credit transaction with DR suffix', () => {
+  it('rejects credit transaction with DR suffix after amount', () => {
     // A credit transaction where raw text has "1500dr" suffix (DR after amount)
-    // No standalone debit keywords, but DR suffix after amount → contradictory evidence for credit tx
     const rawText = '2024-01-15 transfer -1500dr inr';
     const txn = makeTransaction({ description: 'transfer', amount: 1500, type: 'credit', date: '2024-01-15' });
-    const result = verifyStatement(rawText, [txn], {});
-    expect(result.verified.length).toBeGreaterThan(0);
-    // Row context around "1500": "...transfer -1500dr inr"
-    // hasCreditKeyword: \b(credit|cr|deposit|in)\b → "inr" does NOT contain standalone "in" (no word boundary after "in" in "inr")
-    // hasDebitKeyword: \b(debit|dr|withdrawal|out|payment)\b → "dr" is not standalone in "1500dr"
-    // hasCRSuffix: false
-    // hasPlusSign: [+]?1500 matches "1500" → true
-    // hasMinusSign: [-]?1500[)]? matches "-1500" → true
-    // hasPlusSign && !hasMinusSign → false
-    // hasDebitKeyword && !hasCreditKeyword → false
-    // hasDRSuffix: 1500\s*(dr|debit) → matches "1500dr" → true
-    // Line 645: hasDRSuffix → return false for credit tx
-    expect(result.verified[0].verification.typeMatched).toBe(false);
+    const result = verifyStatement(rawText, [txn], { kind: 'bank' });
+    // Type mismatch (DR suffix contradicts credit): 72 < 75
+    expect(result.verified.length).toBe(0);
+    expect(result.rejected.length).toBe(1);
   });
 });
 
@@ -404,46 +394,244 @@ describe('verifyStatement — reconciliation with verified transactions', () => 
       makeTransaction({ description: 'amazon', amount: 1500, type: 'debit', date: '2024-01-15' }),
       makeTransaction({ description: 'salary', amount: 5000, type: 'credit', date: '2024-01-16' }),
     ];
-    const result = verifyStatement(rawText, txns, { openingBalance: 50000, closingBalance: 53500 });
-    // Both should verify (amount + date + description + currency = 75+)
+    const result = verifyStatement(rawText, txns, { kind: 'bank', openingBalance: 50000, closingBalance: 53500 });
+    // Both should verify (amount + type + date + description = 100)
     expect(result.verified.length).toBe(2);
     // Reconciliation should run: 50000 + 5000 - 1500 = 53500 = closingBalance
     expect(result.reconciliation.passed).toBe(true);
   });
 
-  it('runs findRowStart fallback when no date anchor near amount', () => {
-    // Raw text where amount appears without a nearby date — exercises findRowStart fallback (line 679)
+  it('falls back to amount-context matching when no date anchor is near the amount', () => {
     const rawText = 'some text without dates and amount 1500 inr debit more padding text here';
     const txn = makeTransaction({ description: 'text', amount: 1500, type: 'debit', date: new Date('2020-01-01') });
-    const result = verifyStatement(rawText, [txn], {});
-    // May or may not verify depending on confidence, but findRowStart fallback is exercised
+    const result = verifyStatement(rawText, [txn], { kind: 'bank' });
     expect(result).toBeTruthy();
   });
 });
 
-describe('verifyStatement — debit type matching branches (lines 648-651)', () => {
-  it('deducts type score for debit transaction in credit context', () => {
+describe('verifyStatement — debit type matching branches', () => {
+  it('rejects debit transaction with contradictory credit evidence', () => {
     // A debit transaction found in raw text with "credit" keyword but no "debit" keyword.
-    // This exercises line 650: hasCreditKeyword && !hasDebitKeyword → return false for debit tx
     const rawText = '2024-01-15 refund +1500 credit inr';
     const txn = makeTransaction({ description: 'refund', amount: 1500, type: 'debit', date: '2024-01-15' });
-    const result = verifyStatement(rawText, [txn], {});
-    expect(result.verified.length).toBeGreaterThan(0);
-    // Line 647: hasDebitKeyword && !hasCreditKeyword → false (hasCreditKeyword is true)
-    // Line 648: hasDRSuffix → false
-    // Line 649: hasMinusSign → false (amount is positive)
-    // Line 650: hasCreditKeyword && !hasDebitKeyword → true → return false
+    const result = verifyStatement(rawText, [txn], { kind: 'bank' });
+    // Type mismatch (credit keyword contradicts debit tx): 72 < 75
+    expect(result.verified.length).toBe(0);
+    expect(result.rejected.length).toBe(1);
+  });
+
+  it('rejects debit transaction with CR suffix after amount', () => {
+    // A debit transaction where raw text has "1500cr" suffix (CR after amount)
+    const rawText = '2024-01-15 transfer +1500cr inr';
+    const txn = makeTransaction({ description: 'transfer', amount: 1500, type: 'debit', date: '2024-01-15' });
+    const result = verifyStatement(rawText, [txn], { kind: 'bank' });
+    // Type mismatch (CR suffix contradicts debit tx): 72 < 75
+    expect(result.verified.length).toBe(0);
+    expect(result.rejected.length).toBe(1);
+  });
+});
+
+describe('verifyStatement — structured row matching', () => {
+  const columnarRawText = [
+    'Date||Description||Debit||Credit||Balance',
+    '01/01/2024||AMAZON INDIA PURCHASE||1299.00||||48701.00',
+    '15/01/2024||SALARY CREDIT||||50000.00||98701.00',
+    '20/01/2024||SWIGGY FOOD ORDER||350.00||||98351.00',
+  ].join('\n');
+
+  it('verifies transactions using structured column matching', () => {
+    const txns = [
+      makeTransaction({ description: 'AMAZON INDIA PURCHASE', amount: 1299, type: 'debit', date: '2024-01-01' }),
+    ];
+    const result = verifyStatement(columnarRawText, txns, { kind: 'bank', openingBalance: 50000, closingBalance: 98351 });
+    expect(result.verified.length).toBe(1);
+    expect(result.verified[0].verification.amountMatched).toBe(true);
+    expect(result.verified[0].verification.typeMatched).toBe(true);
+  });
+
+  it('determines type from debit/credit column position', () => {
+    const txns = [
+      makeTransaction({ description: 'SALARY CREDIT', amount: 50000, type: 'credit', date: '2024-01-15' }),
+    ];
+    const result = verifyStatement(columnarRawText, txns, { kind: 'bank' });
+    expect(result.verified.length).toBe(1);
+    expect(result.verified[0].verification.typeMatched).toBe(true);
+  });
+
+  it('handles duplicate amounts via row consumption', () => {
+    const rawText = [
+      'Date||Description||Debit||Credit||Balance',
+      '01/01/2024||ATM WITHDRAWAL||500.00||||49500.00',
+      '05/01/2024||ATM WITHDRAWAL||500.00||||49000.00',
+    ].join('\n');
+    const txns = [
+      makeTransaction({ description: 'ATM WITHDRAWAL', amount: 500, type: 'debit', date: '2024-01-01' }),
+      makeTransaction({ description: 'ATM WITHDRAWAL', amount: 500, type: 'debit', date: '2024-01-05' }),
+    ];
+    const result = verifyStatement(rawText, txns, { kind: 'bank' });
+    expect(result.verified.length).toBe(2);
+  });
+
+  it('falls back to progressive matching for transactions not in structured rows', () => {
+    const txns = [
+      makeTransaction({ description: 'AMAZON INDIA PURCHASE', amount: 1299, type: 'debit', date: '2024-01-01' }),
+      makeTransaction({ description: 'PHANTOM TRANSACTION', amount: 99999, type: 'debit', date: '2024-01-30' }),
+    ];
+    const result = verifyStatement(columnarRawText, txns, { kind: 'bank' });
+    expect(result.verified.length).toBe(1);
+    expect(result.rejected.length).toBe(1);
+  });
+
+  it('reconciliation works with structured matching results', () => {
+    const txns = [
+      makeTransaction({ description: 'AMAZON INDIA PURCHASE', amount: 1299, type: 'debit', date: '2024-01-01' }),
+      makeTransaction({ description: 'SALARY CREDIT', amount: 50000, type: 'credit', date: '2024-01-15' }),
+      makeTransaction({ description: 'SWIGGY FOOD ORDER', amount: 350, type: 'debit', date: '2024-01-20' }),
+    ];
+    const result = verifyStatement(columnarRawText, txns, { kind: 'bank', openingBalance: 50000, closingBalance: 98351 });
+    expect(result.verified.length).toBe(3);
+    expect(result.reconciliation.passed).toBe(true);
+  });
+
+  it('falls back to progressive when structured type contradicts column position', () => {
+    // 1299.00 is in the Debit column but transaction is typed as credit
+    const txns = [
+      makeTransaction({ description: 'AMAZON INDIA PURCHASE', amount: 1299, type: 'credit', date: '2024-01-01' }),
+    ];
+    const result = verifyStatement(columnarRawText, txns, { kind: 'bank', openingBalance: 50000, closingBalance: 98351 });
+    // Structured: amount(34) + date(23) + desc(15) = 72 < 75 → falls back
+    // Progressive: amount(34) + none_type(14) + date(23) + desc(15) = 86 ≥ 75 → verified
+    expect(result.verified.length).toBe(1);
     expect(result.verified[0].verification.typeMatched).toBe(false);
   });
 
-  it('deducts type score for debit transaction with CR suffix after amount', () => {
-    // A debit transaction where raw text has "1500cr" suffix (CR after amount)
-    // This exercises line 651: hasCRSuffix → return false for debit tx
-    const rawText = '2024-01-15 transfer +1500cr inr';
-    const txn = makeTransaction({ description: 'transfer', amount: 1500, type: 'debit', date: '2024-01-15' });
-    const result = verifyStatement(rawText, [txn], {});
-    expect(result.verified.length).toBeGreaterThan(0);
-    // Line 651: hasCRSuffix matches "1500cr" → return false for debit tx
+  it('falls back to progressive when type is ambiguous (both debit and credit columns)', () => {
+    // Ambiguous type: same amount in debit AND credit columns
+    // Need 2+ data rows so structured parser succeeds (parser requires >= 2 data rows)
+    const rawText = [
+      'Date||Description||Debit||Credit||Balance',
+      '01/01/2024||TRANSFER||500.00||500.00||50000.00',
+      '15/01/2024||SALARY CREDIT||||50000.00||100000.00',
+    ].join('\n');
+    const txns = [
+      makeTransaction({ description: 'TRANSFER', amount: 500, type: 'debit', date: '2024-01-01' }),
+    ];
+    const result = verifyStatement(rawText, txns, { kind: 'bank' });
+    // Structured: null type → 72 < 75 → falls back
+    // Progressive: amount(34) + none(14) + date(23) + desc(15) = 86 → verified
+    expect(result.verified.length).toBe(1);
     expect(result.verified[0].verification.typeMatched).toBe(false);
+  });
+});
+
+describe('verifyStatement — progressive raw text matching (fallback)', () => {
+  it('uses position-based consumption for duplicate amounts in free-form text', () => {
+    // Use 753 — not a substring of any balance value (avoids false matches)
+    const rawText = [
+      '2024-01-01 atm withdrawal 753 debit balance 49247',
+      '2024-01-05 atm withdrawal 753 debit balance 48494',
+    ].join('\n');
+    const txns = [
+      makeTransaction({ description: 'atm withdrawal', amount: 753, type: 'debit', date: '2024-01-01' }),
+      makeTransaction({ description: 'atm withdrawal', amount: 753, type: 'debit', date: '2024-01-05' }),
+    ];
+    const result = verifyStatement(rawText, txns, { kind: 'bank' });
+    expect(result.verified.length).toBe(2);
+  });
+
+  it('matches credit transaction with structural CR suffix', () => {
+    const rawText = '01/15/2024 salary credit 50000.00cr balance 98701.00';
+    const txn = makeTransaction({ description: 'salary credit', amount: 50000, type: 'credit', date: '2024-01-15' });
+    const result = verifyStatement(rawText, [txn], { kind: 'bank' });
+    expect(result.verified.length).toBe(1);
+    // Structural CR suffix gives full type weight (28)
+    expect(result.verified[0].confidence).toBeGreaterThanOrEqual(75);
+  });
+
+  it('matches debit transaction with structural DR suffix', () => {
+    const rawText = '01/15/2024 amazon purchase 1299.00dr balance 48701.00';
+    const txn = makeTransaction({ description: 'amazon purchase', amount: 1299, type: 'debit', date: '2024-01-15' });
+    const result = verifyStatement(rawText, [txn], { kind: 'bank' });
+    expect(result.verified.length).toBe(1);
+    expect(result.verified[0].confidence).toBeGreaterThanOrEqual(75);
+  });
+
+  it('matches credit transaction with plus sign prefix', () => {
+    const rawText = '01/15/2024 refund +1500.00 balance 51500.00';
+    const txn = makeTransaction({ description: 'refund', amount: 1500, type: 'credit', date: '2024-01-15' });
+    const result = verifyStatement(rawText, [txn], { kind: 'bank' });
+    expect(result.verified.length).toBe(1);
+  });
+
+  it('matches debit transaction with minus sign prefix', () => {
+    const rawText = '01/15/2024 purchase -1299.00 balance 48701.00';
+    const txn = makeTransaction({ description: 'purchase', amount: 1299, type: 'debit', date: '2024-01-15' });
+    const result = verifyStatement(rawText, [txn], { kind: 'bank' });
+    expect(result.verified.length).toBe(1);
+  });
+
+  it('verifies transaction with keyword type evidence at reduced score', () => {
+    // Keyword-only type evidence gets 14 points (vs 28 for structural)
+    const rawText = '01/15/2024 amazon purchase 1299.00 debit inr balance 48701.00';
+    const txn = makeTransaction({ description: 'amazon purchase', amount: 1299, type: 'debit', date: '2024-01-15' });
+    const result = verifyStatement(rawText, [txn], { kind: 'bank' });
+    expect(result.verified.length).toBe(1);
+    // amount(34) + keyword_type(14) + date(23) = 71, + desc ≥ 15 if desc matches → ≥ 86
+    expect(result.verified[0].confidence).toBeGreaterThanOrEqual(75);
+  });
+
+  it('rejects when only amount matches and no type/date/description evidence', () => {
+    // Amount found in text but nothing else corroborates: no date, no type keywords, no matching description
+    const rawText = 'some random text with 1500.00 and more random words without any date or type info';
+    const txn = makeTransaction({ description: 'completely different merchant', amount: 1500, type: 'debit' });
+    const result = verifyStatement(rawText, [txn], { kind: 'bank' });
+    // amount(34) + none_type(14) = 48 < 75 → rejected
+    expect(result.verified.length).toBe(0);
+    expect(result.rejected.length).toBe(1);
+  });
+
+  it('verifies with structural type + date but no description match (85 >= 75)', () => {
+    const rawText = '01/15/2024 something 1299.00dr balance 48701.00';
+    const txn = makeTransaction({ description: 'totally different merchant name', amount: 1299, type: 'debit', date: '2024-01-15' });
+    const result = verifyStatement(rawText, [txn], { kind: 'bank' });
+    // amount(34) + structural_type(28) + date(23) = 85 ≥ 75 → verified without description
+    expect(result.verified.length).toBe(1);
+    expect(result.verified[0].verification.descriptionMatched).toBe(false);
+  });
+
+  it('skips consumed positions when matching multiple transactions with same amount', () => {
+    // Use 753 — not a substring of any balance value (avoids false matches from toFixed(0) variant)
+    const rawText = [
+      '2024-01-01 atm withdrawal 753 debit balance 49247',
+      '2024-01-05 atm withdrawal 753 debit balance 48494',
+      '2024-01-10 atm withdrawal 753 debit balance 47741',
+    ].join('\n');
+    const txns = [
+      makeTransaction({ description: 'atm withdrawal', amount: 753, type: 'debit', date: '2024-01-01' }),
+      makeTransaction({ description: 'atm withdrawal', amount: 753, type: 'debit', date: '2024-01-05' }),
+      makeTransaction({ description: 'atm withdrawal', amount: 753, type: 'debit', date: '2024-01-10' }),
+    ];
+    const result = verifyStatement(rawText, txns, { kind: 'bank' });
+    // All three must verify — each consuming a different position
+    expect(result.verified.length).toBe(3);
+    expect(result.rejected.length).toBe(0);
+    // Evidence anchors must be distinct (different positions consumed)
+    const anchors = result.verified.map(t => t.evidenceAnchor);
+    expect(new Set(anchors).size).toBe(3);
+  });
+
+  it('rejects third transaction when only two positions are available for same amount', () => {
+    const rawText = [
+      '2024-01-01 atm withdrawal 753 debit balance 49247',
+      '2024-01-05 atm withdrawal 753 debit balance 48494',
+    ].join('\n');
+    const txns = [
+      makeTransaction({ description: 'atm withdrawal', amount: 753, type: 'debit', date: '2024-01-01' }),
+      makeTransaction({ description: 'atm withdrawal', amount: 753, type: 'debit', date: '2024-01-05' }),
+      makeTransaction({ description: 'atm withdrawal', amount: 753, type: 'debit', date: '2024-01-10' }),
+    ];
+    const result = verifyStatement(rawText, txns, { kind: 'bank' });
+    expect(result.verified.length).toBe(2);
+    expect(result.rejected.length).toBe(1);
   });
 });

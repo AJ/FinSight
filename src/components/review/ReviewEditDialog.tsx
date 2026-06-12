@@ -12,8 +12,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Transaction, TransactionType, CategorizedBy } from "@/types";
-import type { TransactionSubType } from "@/models/Transaction";
-import { formatSubType } from "@/models/Transaction";
+import { type TransactionSubType, formatSubType, DEBIT_SUB_TYPES, CREDIT_SUB_TYPES } from "@/models/Transaction";
 import { format } from "date-fns";
 import { DEFAULT_CATEGORIES } from "@/lib/categorization/categories";
 import { parseFormAmount, parseFormDate } from "./reviewEditDialogCompanion";
@@ -25,9 +24,6 @@ const SORTED_CATEGORIES = (() => {
   const other = DEFAULT_CATEGORIES.find((c) => c.id === "other");
   return other ? [...regular, other] : regular;
 })();
-
-const DEBIT_SUBTYPES = ["purchase", "fee", "tax", "interest", "charge", "adjustment"] as const;
-const CREDIT_SUBTYPES = ["payment", "refund", "cashback", "reversal", "adjustment"] as const;
 
 const selectClass =
   "flex h-9 w-full rounded-md border border-input bg-background text-foreground px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50";
@@ -57,15 +53,20 @@ export function ReviewEditDialog({
 
   const currentType = get("type", transaction.type);
   const currentCategory = get("category", transaction.category.id);
-  const subtypes = currentType === "debit" ? DEBIT_SUBTYPES : CREDIT_SUBTYPES;
+  const subtypes = currentType === "debit" ? DEBIT_SUB_TYPES : CREDIT_SUB_TYPES;
 
   const set = (updates: Record<string, unknown>) => {
     setEdits((prev) => ({ ...prev, ...updates }));
   };
 
   const handleSave = () => {
-    if (Object.keys(edits).length > 0) {
-      onSave(transaction.id, edits);
+    const finalEdits = { ...edits };
+    // Always clear suspense flag when user explicitly saves
+    if (transaction.isSuspense) {
+      finalEdits.isSuspense = false;
+    }
+    if (Object.keys(finalEdits).length > 0) {
+      onSave(transaction.id, finalEdits);
     }
     setEdits({});
     onOpenChange(false);
@@ -186,7 +187,7 @@ export function ReviewEditDialog({
           <Button variant="outline" onClick={handleCancel}>
             Cancel
           </Button>
-          <Button onClick={handleSave} disabled={Object.keys(edits).length === 0}>
+          <Button onClick={handleSave} disabled={Object.keys(edits).length === 0 && !transaction.isSuspense}>
             Save
           </Button>
         </DialogFooter>

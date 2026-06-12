@@ -1,105 +1,114 @@
 import { Transaction } from "@/types";
-import type {
-  CCVerificationReport,
-  VerificationReport,
-} from "@/lib/verification/verificationEngine";
-import {
-  verifyCCStatement,
-  verifyStatement,
-} from "@/lib/verification/verificationEngine";
-import type {
-  ExtractionBundle,
-  VerificationInputs,
-} from "@/lib/parsers/contracts";
+import { verifyStatement } from "@/lib/verification/verificationEngine";
+import type { VerificationReport } from "@/lib/verification/verificationEngine";
+import type { ExtractionBundle } from "@/lib/parsers/contracts";
 
 function mergeVerificationConfidence(
   transactions: Transaction[],
   report: VerificationReport,
 ): Transaction[] {
   const verifiedMap = new Map(
-    report.verified.map((transaction) => [transaction.id, transaction.confidence]),
+    report.verified.map((t) => [t.id, t.confidence]),
   );
 
-  return transactions.map((transaction) =>
+  return transactions.map((t) =>
     Transaction.fromJSON({
-      ...transaction.toJSON(),
-      verificationConfidence: verifiedMap.get(transaction.id),
+      ...t.toJSON(),
+      verificationConfidence: verifiedMap.get(t.id),
     }),
   );
 }
 
 function buildVerificationWarning(
-  inputs: VerificationInputs,
-  report: VerificationReport | CCVerificationReport,
+  inputs: ExtractionBundle['verificationInputs'],
+  report: VerificationReport,
 ): string[] {
+  if (!inputs) return [];
+
   if (inputs.kind === "bank") {
-    const bankReport = report as VerificationReport;
-    if (!bankReport.reconciliation.passed) {
-      const diff = bankReport.reconciliation.difference?.toFixed(2) ?? "unknown";
+    if (!report.reconciliation.passed) {
+      // Primary failure: numbers don't balance
+      const diff = report.reconciliation.difference?.toFixed(2) ?? "unknown";
+      const flagged = report.rejected.length;
       return [
-        `Bank statement verification failed: balance reconciliation difference ${diff}. Review carefully before import.`,
+        `Balance reconciliation difference of ${diff}.` +
+        (flagged > 0 ? ` ${flagged} transaction(s) flagged.` : '') +
+        ` Review carefully or re-upload the statement.`,
       ];
     }
+
+    if (report.rejected.length > 0) {
+      // Numbers balance but some transactions unverified
+      return [
+        `Reconciliation balanced but ${report.rejected.length} transaction(s) ` +
+        `could not be verified against source text ` +
+        `(overall confidence: ${report.overallConfidence}%). ` +
+        `Review flagged transactions before import.`,
+      ];
+    }
+
     return [];
   }
 
-  const ccReport = report as CCVerificationReport;
-  if (!ccReport.statementTotals.passed || !ccReport.transactionSums.passed) {
-    return [
-      "Credit card statement verification failed: totals or transaction sums do not fully reconcile. Review carefully before import.",
-    ];
+  // CC: check ccAggregate
+  if (report.ccAggregate) {
+    const totalsPassed = report.ccAggregate.statementTotals.passed;
+    const sumsPassed = report.ccAggregate.transactionSums.passed;
+
+    if (!totalsPassed && !sumsPassed) {
+      const flagged = report.rejected.length;
+      return [
+        `Credit card statement verification failed: totals and transaction sums do not reconcile.` +
+        (flagged > 0 ? ` ${flagged} transaction(s) flagged.` : '') +
+        ` Review carefully before import.`,
+      ];
+    }
+
+    if (!totalsPassed) {
+      return [
+        `Credit card statement totals do not fully reconcile. Review carefully before import.`,
+      ];
+    }
+
+    if (!sumsPassed) {
+      return [
+        `Credit card transaction sums do not fully reconcile. Review flagged transactions before import.`,
+      ];
+    }
+
+    if (report.rejected.length > 0) {
+      return [
+        `Reconciliation balanced but ${report.rejected.length} transaction(s) ` +
+        `could not be verified against source text ` +
+        `(overall confidence: ${report.overallConfidence}%). ` +
+        `Review flagged transactions before import.`,
+      ];
+    }
   }
+
   return [];
 }
 
 export function attachVerificationToExtractionBundle(
   bundle: ExtractionBundle,
-): ExtractionBundle & {
-  verificationReport?: VerificationReport | CCVerificationReport;
-} {
-  if (!bundle.verificationInputs) {
-    return bundle;
-  }
+): ExtractionBundle & { verificationReport?: VerificationReport } {
+  if (!bundle.verificationInputs) return bundle;
 
-  if (bundle.verificationInputs.kind === "bank") {
-    const report = verifyStatement(
-      bundle.verificationInputs.rawText,
-      bundle.verificationInputs.transactions,
-      bundle.verificationInputs.meta,
-    );
+  const inputs = bundle.verificationInputs;
 
-    return {
-      ...bundle,
-      transactions: mergeVerificationConfidence(bundle.transactions, report),
-      verificationReport: report,
-      warnings: [
-        ...bundle.warnings,
-        ...buildVerificationWarning(bundle.verificationInputs, report),
-      ],
-    };
-  }
-
-  const report = verifyCCStatement(
-    bundle.verificationInputs.transactions,
-    bundle.verificationInputs.meta,
-  );
-  const bankStyleReport = verifyStatement(
-    bundle.verificationInputs.rawText,
-    bundle.verificationInputs.transactions,
-    {
-      openingBalance: bundle.verificationInputs.meta.previousBalance,
-      closingBalance: bundle.verificationInputs.meta.totalDue,
-      currency: bundle.verificationInputs.meta.currency,
-    },
+  const report = verifyStatement(
+    inputs.rawText,
+    inputs.transactions,
+    { kind: inputs.kind, ...inputs.meta },
   );
 
   return {
     ...bundle,
-    transactions: mergeVerificationConfidence(bundle.transactions, bankStyleReport),
+    transactions: mergeVerificationConfidence(bundle.transactions, report),
     verificationReport: report,
     warnings: [
       ...bundle.warnings,
-      ...buildVerificationWarning(bundle.verificationInputs, report),
+      ...buildVerificationWarning(inputs, report),
     ],
   };
 }

@@ -1,30 +1,19 @@
-import type { VerificationReport, CCVerificationReport } from '@/lib/verification/verificationEngine';
-
-export type AnyVerificationReport = VerificationReport | CCVerificationReport;
+import type { VerificationReport } from '@/lib/verification/verificationEngine';
 
 export function classifyVerificationReport(
-  report: AnyVerificationReport,
+  report: VerificationReport,
 ): 'bank' | 'credit_card' {
-  // CCVerificationReport has a top-level `passed` boolean;
-  // VerificationReport has `reconciliation.passed` instead.
-  return 'passed' in report && 'statementTotals' in report
-    ? 'credit_card'
-    : 'bank';
+  return report.ccAggregate !== undefined ? 'credit_card' : 'bank';
 }
 
 export function getVerificationPassed(
-  report: AnyVerificationReport,
+  report: VerificationReport,
   kind: 'bank' | 'credit_card',
 ): boolean {
-  return kind === 'credit_card'
-    ? (report as CCVerificationReport).passed
-    : (report as VerificationReport).reconciliation.passed;
+  if (kind === 'credit_card') {
+    return report.ccAggregate
+      ? report.ccAggregate.statementTotals.passed && report.ccAggregate.transactionSums.passed
+      : report.reconciliation.passed;
+  }
+  return report.reconciliation.passed;
 }
-
-export function getConfidenceBadgeVariant(confidence: number): 'default' | 'secondary' | 'destructive' {
-  if (confidence >= 80) return 'default';
-  if (confidence >= 50) return 'secondary';
-  return 'destructive';
-}
-
-export const HIGH_CONFIDENCE_THRESHOLD = 80;

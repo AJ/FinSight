@@ -15,6 +15,7 @@ import { Currency } from "@/types";
 import { formatCurrency } from "@/lib/currencyFormatter";
 import { format } from "date-fns";
 import { CategoryBadge } from "@/components/transactions/CategoryBadge";
+import { AlertTriangle } from "lucide-react";
 
 interface ReviewTransactionRowProps {
   transaction: Transaction;
@@ -33,14 +34,15 @@ function ReviewTransactionRowInner({
     <TableRow
       className={cn(
         "border-b-2",
-        transaction.verificationConfidence !== undefined &&
+        transaction.isSuspense && "bg-amber-500/10 dark:bg-amber-500/10 border-amber-500/50",
+        !transaction.isSuspense && transaction.verificationConfidence !== undefined &&
           transaction.verificationConfidence < 0.5 &&
           "border-orange-400 border-dashed",
-        transaction.verificationConfidence !== undefined &&
+        !transaction.isSuspense && transaction.verificationConfidence !== undefined &&
           transaction.verificationConfidence >= 0.5 &&
           transaction.verificationConfidence < 0.75 &&
           "border-yellow-400 border-dashed",
-        transaction.llmConfidence !== undefined &&
+        !transaction.isSuspense && transaction.llmConfidence !== undefined &&
           transaction.verificationConfidence !== undefined &&
           Math.abs(transaction.llmConfidence - transaction.verificationConfidence) > 0.3 &&
           "border-red-400 border-dotted",
@@ -101,8 +103,21 @@ function ReviewTransactionRowInner({
       </TableCell>
 
       {/* Category */}
-      <TableCell className="flex justify-center">
-        <CategoryBadge categoryId={transaction.category.id} />
+      <TableCell className="text-center">
+        <div className="flex items-center justify-center gap-1">
+          {transaction.isSuspense ? (
+            <button
+              type="button"
+              onClick={() => onEdit(transaction.id)}
+              className="inline-flex items-center gap-1 rounded-full bg-amber-500 text-white hover:bg-amber-600 transition-colors text-xs px-2 py-1 font-medium"
+            >
+              <AlertTriangle className="w-3 h-3" />
+              Set category
+            </button>
+          ) : (
+            <CategoryBadge categoryId={transaction.category.id} />
+          )}
+        </div>
       </TableCell>
 
       {/* Actions */}

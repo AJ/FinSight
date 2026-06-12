@@ -1,3 +1,7 @@
+// Retained alongside tests/e2e/balanceReconciliationLive.spec.ts — this file provides
+// fast, deterministic CI coverage for review page UI rendering with controlled inputs,
+// while the live E2E tests exercise the full pipeline with a real LLM (non-deterministic).
+
 import { test, expect } from '@playwright/test';
 import { setupTestContext, mockCategorizationAPI } from '../e2e/helpers/e2eHelpers';
 import { clearAllStorage } from '../utils/storageHelpers';
@@ -25,9 +29,9 @@ test.describe('Review page — balance reconciliation', () => {
         warnings: ['Bank statement verification failed: balance reconciliation difference 32000.00'],
         verificationReport: {
           verified: [
-            { id: 't1', date: '2024-01-05', description: 'Opening Deposit', amount: 50000, type: 'credit', category: 'income', merchant: 'Bank', needsReview: false, confidence: 95, verification: { amountMatched: true, dateMatched: true, descriptionMatched: true, contextMatched: true, currencyMatched: true } },
-            { id: 't2', date: '2024-01-10', description: 'Rent Payment', amount: 15000, type: 'debit', category: 'housing', merchant: 'Landlord', needsReview: false, confidence: 90, verification: { amountMatched: true, dateMatched: true, descriptionMatched: true, contextMatched: true, currencyMatched: true } },
-            { id: 't3', date: '2024-01-20', description: 'Grocery Store', amount: 3000, type: 'debit', category: 'groceries', merchant: 'BigBasket', needsReview: false, confidence: 88, verification: { amountMatched: true, dateMatched: true, descriptionMatched: true, contextMatched: true, currencyMatched: true } },
+            { id: 't1', date: '2024-01-05', description: 'Opening Deposit', amount: 50000, type: 'credit', category: 'income', merchant: 'Bank', needsReview: false, confidence: 95, verification: { amountMatched: true, dateMatched: true, descriptionMatched: true, contextMatched: true } },
+            { id: 't2', date: '2024-01-10', description: 'Rent Payment', amount: 15000, type: 'debit', category: 'housing', merchant: 'Landlord', needsReview: false, confidence: 90, verification: { amountMatched: true, dateMatched: true, descriptionMatched: true, contextMatched: true } },
+            { id: 't3', date: '2024-01-20', description: 'Grocery Store', amount: 3000, type: 'debit', category: 'groceries', merchant: 'BigBasket', needsReview: false, confidence: 88, verification: { amountMatched: true, dateMatched: true, descriptionMatched: true, contextMatched: true } },
           ],
           rejected: [],
           duplicates: [],
@@ -81,8 +85,8 @@ test.describe('Review page — balance reconciliation', () => {
         warnings: [],
         verificationReport: {
           verified: [
-            { id: 't1', date: '2024-01-05', description: 'Salary Credit', amount: 50000, type: 'credit', confidence: 95, verification: { amountMatched: true, dateMatched: true, descriptionMatched: true, contextMatched: true, currencyMatched: true } },
-            { id: 't2', date: '2024-01-10', description: 'Rent Payment', amount: 15000, type: 'debit', confidence: 92, verification: { amountMatched: true, dateMatched: true, descriptionMatched: true, contextMatched: true, currencyMatched: true } },
+            { id: 't1', date: '2024-01-05', description: 'Salary Credit', amount: 50000, type: 'credit', confidence: 95, verification: { amountMatched: true, dateMatched: true, descriptionMatched: true, contextMatched: true } },
+            { id: 't2', date: '2024-01-10', description: 'Rent Payment', amount: 15000, type: 'debit', confidence: 92, verification: { amountMatched: true, dateMatched: true, descriptionMatched: true, contextMatched: true } },
           ],
           rejected: [],
           duplicates: [],
@@ -125,7 +129,7 @@ test.describe('Review page — balance reconciliation', () => {
         verificationReport: {
           statementTotals: {
             passed: false,
-            expectedTotalDue: 25000,
+            statementTotalDue: 25000,
             computedTotalDue: 20000,
             difference: 5000,
             formula: 'Previous(30000) + Debits(5000) - Credits(10000) = 25000',
@@ -178,7 +182,7 @@ test.describe('Review page — balance reconciliation', () => {
         warnings: ['Bank statement verification failed: balance reconciliation difference 2000.'],
         verificationReport: {
           verified: [
-            { id: 't1', date: '2024-01-05', description: 'Valid Txn', amount: 5000, type: 'debit', confidence: 90, verification: { amountMatched: true, dateMatched: true, descriptionMatched: true, contextMatched: true, currencyMatched: true } },
+            { id: 't1', date: '2024-01-05', description: 'Valid Txn', amount: 5000, type: 'debit', confidence: 90, verification: { amountMatched: true, dateMatched: true, descriptionMatched: true, contextMatched: true } },
           ],
           rejected: [
             { id: 't2', date: '2024-01-10', description: 'Another Valid', amount: 3000, type: 'debit', category: 'food', merchant: 'SWIGGY', needsReview: false, localCurrency: { code: 'INR', symbol: '₹', name: 'Indian Rupee' }, sourceType: 'bank' },

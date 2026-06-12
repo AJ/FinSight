@@ -1,4 +1,4 @@
-import type { CCSummary } from "@/lib/parsers/extractSummary";
+import type { CCSummary, BankSummary } from "@/lib/parsers/extractSummary";
 import { reviewSessionRepository } from "@/lib/review/reviewSessionRepository";
 import { teachMerchantRulesFromConfirmedTransactions } from "@/lib/services/merchantRuleService";
 import { runPostImportJobs } from "@/lib/services/postImportJobService";
@@ -65,9 +65,15 @@ export async function finalizeReviewImport(
 
   const sourceFileHash = reviewSession.sourceMetadata?.sourceFileHash;
   const isDuplicateImport = reviewSession.sourceMetadata?.isDuplicateImport;
-  const stampedTransactions = sourceFileHash
+  let stampedTransactions = sourceFileHash
     ? reviewedTransactions.map((t) => t.cloneWith({ sourceFileHash }))
     : reviewedTransactions;
+  // Strip staging-only suspense flag before persisting to the store
+  if (stampedTransactions.some(t => t.isSuspense)) {
+    stampedTransactions = stampedTransactions.map(t =>
+      t.isSuspense ? t.cloneWith({ isSuspense: undefined }) : t
+    );
+  }
 
   dependencies.addTransactions(stampedTransactions, {
     skipDedup: isDuplicateImport === true,
@@ -86,6 +92,28 @@ export async function finalizeReviewImport(
       toCreditCardStatement(creditCardSummary, reviewSession.fileName),
     );
     postImportJobsTriggered.push("credit_card_statement_import");
+  }
+
+  const bankSummary =
+    reviewSession.statementType === "bank" &&
+    reviewSession.statementSummary &&
+    "closingBalance" in reviewSession.statementSummary
+      ? (reviewSession.statementSummary as BankSummary)
+      : null;
+
+  if (bankSummary && bankSummary.closingBalance != null && dependencies.addBankSummary) {
+    dependencies.addBankSummary({
+      id: crypto.randomUUID(),
+      accountNumber: bankSummary.accountNumber ?? null,
+      bankName: bankSummary.bankName ?? null,
+      statementDate: bankSummary.statementDate ?? new Date().toISOString(),
+      openingBalance: bankSummary.openingBalance ?? 0,
+      closingBalance: bankSummary.closingBalance,
+      statementPeriodStart: bankSummary.statementPeriodStart ?? bankSummary.statementDate ?? new Date().toISOString(),
+      statementPeriodEnd: bankSummary.statementPeriodEnd ?? bankSummary.statementDate ?? new Date().toISOString(),
+      sourceFileHash: reviewSession.sourceMetadata?.sourceFileHash,
+    });
+    postImportJobsTriggered.push("bank_statement_summary_import");
   }
 
   postImportJobsTriggered.push(...runPostImportJobs());

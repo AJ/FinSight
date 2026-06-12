@@ -2,6 +2,7 @@ import { extractStatementBundleFromFile } from "@/lib/parsers/extractStatementBu
 import { attachVerificationToExtractionBundle } from "@/lib/services/statementVerificationService";
 import { enrichImportedTransactions } from "@/lib/services/transactionEnrichmentService";
 import { reviewSessionRepository } from "@/lib/review/reviewSessionRepository";
+import { debugLog } from "@/lib/utils/debug";
 import type { Currency } from "@/types";
 import type { LLMProvider } from "@/lib/llm/types";
 import type { StatementType } from "@/types/creditCard";
@@ -47,6 +48,22 @@ export async function runPreReviewPipeline(
     model: input.model,
     statementType: verifiedBundle.statementType || undefined,
   });
+
+  // Log suspense-flagged transactions for observability
+  const suspenseCount = transactions.filter(t => t.isSuspense).length;
+  if (suspenseCount > 0) {
+    debugLog('Suspense', `${suspenseCount} transaction(s) flagged as suspense`);
+    for (const txn of transactions) {
+      if (txn.isSuspense) {
+        debugLog('Suspense', 'Flagged transaction', {
+          description: txn.description?.substring(0, 80),
+          subType: txn.transactionSubType,
+          suggestedCategory: txn.category?.id,
+          confidence: txn.categoryConfidence,
+        });
+      }
+    }
+  }
 
   const reviewSessionPayload: ReviewSessionPayload = {
     transactions,

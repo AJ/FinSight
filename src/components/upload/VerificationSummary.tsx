@@ -1,20 +1,17 @@
 'use client';
 
-import { Badge } from '@/components/ui/badge';
 import { AlertTriangle, XCircle, ChevronDown, ChevronUp } from 'lucide-react';
-import type { VerificationReport, CCVerificationReport } from '@/lib/verification/verificationEngine';
+import type { VerificationReport } from '@/lib/verification/verificationEngine';
 import type { Currency } from '@/types';
 import { formatCurrency } from '@/lib/currencyFormatter';
 import { useState } from 'react';
 import {
   classifyVerificationReport,
   getVerificationPassed,
-  getConfidenceBadgeVariant,
-  HIGH_CONFIDENCE_THRESHOLD,
 } from './verificationSummaryHelpers';
 
 interface VerificationSummaryProps {
-  report: VerificationReport | CCVerificationReport;
+  report: VerificationReport;
   currency: Currency;
 }
 
@@ -39,14 +36,12 @@ export function VerificationSummary({ report, currency }: VerificationSummaryPro
 
   const kind = classifyVerificationReport(report);
   const passed = getVerificationPassed(report, kind);
-  const confidence = report.overallConfidence;
-  const rejected = kind === 'bank' ? (report as VerificationReport).rejected : [];
+  const rejected = report.rejected;
 
-  const ccReport = kind === 'credit_card' ? (report as CCVerificationReport) : null;
-  const bankReport = kind === 'bank' ? (report as VerificationReport) : null;
+  const ccReport = report.ccAggregate ?? null;
 
-  // Don't show anything if verification passed with high confidence
-  if (passed && confidence >= HIGH_CONFIDENCE_THRESHOLD) {
+  // Don't show anything if verification passed cleanly
+  if (passed && rejected.length === 0) {
     return null;
   }
 
@@ -68,9 +63,6 @@ export function VerificationSummary({ report, currency }: VerificationSummaryPro
           </span>
         </div>
         <div className="flex items-center gap-2">
-          <Badge variant={getConfidenceBadgeVariant(confidence)}>
-            {confidence}%
-          </Badge>
           {isExpanded ? (
             <ChevronUp className="h-4 w-4" />
           ) : (
@@ -94,8 +86,8 @@ export function VerificationSummary({ report, currency }: VerificationSummaryPro
               {!ccReport.statementTotals.passed && (
                 <MismatchDetail
                   label="Total Due"
-                  extracted={ccReport.statementTotals.computedTotalDue}
-                  expected={ccReport.statementTotals.expectedTotalDue}
+                  extracted={ccReport.statementTotals.statementTotalDue}
+                  expected={ccReport.statementTotals.computedTotalDue}
                   currency={currency}
                 />
               )}
@@ -108,24 +100,24 @@ export function VerificationSummary({ report, currency }: VerificationSummaryPro
               {!ccReport.transactionSums.passed && ccReport.transactionSums.totalDebits !== undefined && ccReport.transactionSums.statementPurchases !== undefined && (
                 <MismatchDetail
                   label="Purchases & Charges"
-                  extracted={ccReport.transactionSums.totalDebits}
-                  expected={ccReport.transactionSums.statementPurchases}
+                  extracted={ccReport.transactionSums.statementPurchases}
+                  expected={ccReport.transactionSums.totalDebits}
                   currency={currency}
                 />
               )}
               {!ccReport.transactionSums.passed && ccReport.transactionSums.totalCredits !== undefined && ccReport.transactionSums.statementPayments !== undefined && (
                 <MismatchDetail
                   label="Payments"
-                  extracted={ccReport.transactionSums.totalCredits}
-                  expected={ccReport.transactionSums.statementPayments}
+                  extracted={ccReport.transactionSums.statementPayments}
+                  expected={ccReport.transactionSums.totalCredits}
                   currency={currency}
                 />
               )}
               {!ccReport.transactionSums.passed && ccReport.transactionSums.statementFees !== undefined && (
                 <MismatchDetail
                   label="Fees & Interest"
-                  extracted={ccReport.transactionSums.totalFees}
-                  expected={ccReport.transactionSums.statementFees}
+                  extracted={ccReport.transactionSums.statementFees}
+                  expected={ccReport.transactionSums.totalFees}
                   currency={currency}
                 />
               )}
@@ -133,7 +125,7 @@ export function VerificationSummary({ report, currency }: VerificationSummaryPro
           )}
 
           {/* Bank report details */}
-          {bankReport && !bankReport.reconciliation.passed && bankReport.reconciliation.computedClosing !== undefined && bankReport.reconciliation.expectedClosing !== undefined && (
+          {!ccReport && !report.reconciliation.passed && report.reconciliation.computed !== undefined && report.reconciliation.fromStatement !== undefined && (
             <>
               <div className="flex items-center justify-between">
                 <span className="text-muted-foreground">Reconciliation</span>
@@ -141,8 +133,8 @@ export function VerificationSummary({ report, currency }: VerificationSummaryPro
               </div>
               <MismatchDetail
                 label="Closing Balance"
-                extracted={bankReport.reconciliation.computedClosing}
-                expected={bankReport.reconciliation.expectedClosing}
+                extracted={report.reconciliation.fromStatement}
+                expected={report.reconciliation.computed}
                 currency={currency}
               />
             </>

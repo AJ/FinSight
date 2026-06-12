@@ -212,7 +212,7 @@ test.describe('Balance Reconciliation -- Live LLM E2E', () => {
     console.log(
       `[cc-1] statementTotals: passed=${statementTotals!.passed}, ` +
       `computedTotalDue=${statementTotals!.computedTotalDue}, ` +
-      `expectedTotalDue=${statementTotals!.expectedTotalDue}`,
+      `statementTotalDue=${statementTotals!.statementTotalDue}`,
     );
 
     // KNOWN GAP: CC reconciliation rarely passes with current LLM extraction accuracy.
@@ -269,7 +269,7 @@ test.describe('Balance Reconciliation -- Live LLM E2E', () => {
 
     expect(typeof statementTotals!.passed).toBe('boolean');
     expect(typeof statementTotals!.computedTotalDue).toBe('number');
-    expect(typeof statementTotals!.expectedTotalDue).toBe('number');
+    expect(typeof statementTotals!.statementTotalDue).toBe('number');
 
     expect(typeof transactionSums!.totalPurchases).toBe('number');
     expect(typeof transactionSums!.totalPayments).toBe('number');
