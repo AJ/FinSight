@@ -42,7 +42,7 @@ export function normalizeCCTransactionSubTypes(transactions: Transaction[]): Tra
     if (!transaction.isCredit) {
       return transaction;
     }
-    if (transaction.transactionSubType !== 'bill_payment') {
+    if (transaction.transactionSubType !== 'debt_payment') {
       return transaction;
     }
 

@@ -7,6 +7,7 @@
 
 import { getClient } from '@/lib/llm/index';
 import type { LLMRuntimeConfig } from '@/lib/llm/types';
+import { calculateMaxTokens } from '@/lib/llm/contextWindow';
 import { parseLLMJsonResponse } from '@/lib/utils/llm-response-parser';
 import { TYPE_DETECTION_PROMPT } from './prompts';
 
@@ -44,18 +45,21 @@ export async function detectStatementType(
   normalizedText: string,
   llmConfig: LLMRuntimeConfig,
   signal?: AbortSignal,
+  contextWindowTokens?: number,
 ): Promise<TypeDetectionResult> {
   const contextSlice = normalizedText.length > 1000
     ? `${normalizedText.slice(0, 500)}\n\n... [document truncated for brevity] ...\n\n${normalizedText.slice(-500)}`
     : normalizedText;
 
   const prompt = TYPE_DETECTION_PROMPT.replace('{RAW_TEXT}', contextSlice);
+  const maxTokens = calculateMaxTokens(contextWindowTokens, prompt);
+
   const client = getClient(llmConfig.provider);
   const rawResponse = await client.generate(
     llmConfig.baseUrl,
     llmConfig.model,
     prompt,
-    { stage: 'type_detection', maxTokens: 512, signal },
+    { stage: 'type_detection', maxTokens, signal },
   );
 
   try {

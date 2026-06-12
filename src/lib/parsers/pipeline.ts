@@ -88,7 +88,7 @@ export async function processStatement(
     if (options.statementType) {
       resolvedStatementType = options.statementType;
     } else {
-      const typeResult = await detectStatementType(normalized, options.llmConfig, options.signal);
+      const typeResult = await detectStatementType(normalized, options.llmConfig, options.signal, contextWindowTokens);
       bankName = typeResult.bankName;
 
       if (typeResult.confidence < CONFIDENCE_THRESHOLD) {
@@ -534,6 +534,15 @@ function buildExtractionBundle(input: {
   format: StatementFormat;
   fileName: string;
 }): ExtractionBundle {
+
+  if (input.statementType === 'bank') {
+    debugLog('[pipeline]', 'Bank summary (normalized):', {
+      openingBalance: (input.extracted.summary as BankSummary)?.openingBalance,
+      closingBalance: (input.extracted.summary as BankSummary)?.closingBalance,
+      accountNumber: (input.extracted.summary as BankSummary)?.accountNumber,
+      bankName: (input.extracted.summary as BankSummary)?.bankName,
+    });
+  }
   const validationResult = validateTransactions({ transactions: input.extracted.transactions });
   if (!validationResult.valid || !validationResult.data) {
     throw new Error(`Transaction validation failed: ${validationResult.errors.join(', ')}`);

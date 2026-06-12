@@ -84,7 +84,7 @@ describe('extractStatementBundleFromRawText', () => {
     const expectedBundle = await loadExpectedBundle(path.join('credit-card', 'basic-cc.expected-bundle.json'));
     const expectedVerification = JSON.parse(
       await loadFixture(path.join('credit-card', 'basic-cc.expected-verification.json')),
-    ) as { passed: boolean };
+    ) as { passed: boolean; reconciliationPassed?: boolean };
     const server = await createMockOllamaServer('credit_card');
 
     try {
@@ -118,9 +118,11 @@ describe('extractStatementBundleFromRawText', () => {
 
       const verifiedBundle = attachVerificationToExtractionBundle(bundle);
       expect(verifiedBundle.verificationReport).toBeDefined();
-      expect('passed' in verifiedBundle.verificationReport!).toBe(true);
-      if ('passed' in verifiedBundle.verificationReport!) {
-        expect(verifiedBundle.verificationReport.passed).toBe(expectedVerification.passed);
+      expect('reconciliation' in verifiedBundle.verificationReport!).toBe(true);
+      if ('reconciliation' in verifiedBundle.verificationReport!) {
+        expect(verifiedBundle.verificationReport.reconciliation.passed).toBe(
+          expectedVerification.reconciliationPassed ?? expectedVerification.passed,
+        );
       }
     } finally {
       await server.close();

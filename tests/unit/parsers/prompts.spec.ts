@@ -39,6 +39,6 @@ describe('prompt templates', () => {
 
   it('CC transaction prompt requires reasoning for classification transparency', () => {
     expect(CC_TRANSACTIONS_PROMPT).toContain('reasoning');
-    expect(CC_TRANSACTIONS_PROMPT).toContain('RULE 7 — REASONING');
+    expect(CC_TRANSACTIONS_PROMPT).toContain('RULE 9 — REASONING');
   });
 });

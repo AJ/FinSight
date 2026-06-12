@@ -28,9 +28,9 @@ export function normalizeStatementText(raw: string): string {
   text = currencyResult.text;
 
   // Layer 3: Whitespace and numeric repair
-  // Replace pipe characters with spaces — PDF column separators that the LLM
-  // misinterprets as part of data (e.g. "2025-10-04|00:00" → "2025-10-04 00:00")
-  text = text.replace(/\|/g, ' ');
+  // Replace single pipe characters with spaces (PDF column separators like "2025-10-04|00:00")
+  // but preserve double-pipe "||" used as column delimiters by our extraction code
+  text = text.replace(/(?<!\|)\|(?!\|)/g, ' ');
 
   text = normalizeWhitespace(text);
   text = fixBrokenNumbers(text);

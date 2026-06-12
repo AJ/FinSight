@@ -5,6 +5,10 @@
  * Organized by extraction pass.
  */
 
+import { TRANSACTION_SUB_TYPES } from '@/models/Transaction';
+
+const SUBTYPE_ENUM = TRANSACTION_SUB_TYPES.map(t => `"${t}"`).join(' | ');
+
 /* ── Type Detection Prompt ────────────────────────────────── */
 
 export const TYPE_DETECTION_PROMPT = `Analyze this document and determine if it is a bank statement or a credit card statement.
@@ -130,6 +134,9 @@ Extract the following fields STRICTLY from summary sections:
 
   "purchasesAndCharges": number | null,
 
+  "interestCharged": number | null,
+  "lateFee": number | null,
+
   "cashbackEarned": number | null
 }
 
@@ -172,16 +179,25 @@ Parse as:
 - Includes cashback, valueback, reward-equivalent
 - If not present → null
 
-5. Dates:
+5. interestCharged:
+- Look for: Finance Charges, Interest Charges, Interest Billed, Service Tax on Interest
+- This is the interest component charged on outstanding balance
+- If not present → null
+
+6. lateFee:
+- Look for: Late Payment Charges, Late Fee, Over Limit Fee, Penalty
+- If not present → null
+
+7. Dates:
 - Convert to YYYY-MM-DD if possible
 - Else return null
 
-6. Amounts:
+8. Amounts:
 - Remove commas
 - Convert to number
 - No currency symbols
 
-7. Missing values:
+9. Missing values:
 - Return null (NOT 0)
 - 0 is ONLY valid if the statement explicitly shows "0" or "0.00"
 
@@ -216,6 +232,9 @@ OUTPUT FORMAT (STRICT JSON ONLY)
   "paymentsReceived": number | null,
 
   "purchasesAndCharges": number | null,
+
+  "interestCharged": number | null,
+  "lateFee": number | null,
 
   "cashbackEarned": number | null
 }
@@ -252,7 +271,7 @@ Return ONLY valid JSON. No explanation. No extra text. No markdown.
       "amount": number,
       "reasoning": "brief explanation of why this is debit or credit, and why this subType was chosen",
       "type": "debit" | "credit",
-      "transactionSubType": "purchase" | "bill_payment" | "refund" | "cashback" | "tax" | "interest" | "charge" | "adjustment" | "reversal" | "fee",
+      "transactionSubType": Sub Types are more granular types to describe transactions. Sub Types must be one of ${SUBTYPE_ENUM},
       "localCurrency": "statement local currency ISO code such as USD, EUR, SGD, or INR",
       "isInternationalTransaction": boolean,
       "originalCurrency": "USD" (omit if domestic),
@@ -292,11 +311,14 @@ RULE 2 — NUMBER FORMATTING
 - Remove ALL commas: 1,23,456.78 → 123456.78
 - Output as plain decimal without commas
 
-RULE 3 - Keyword-based extraction:
+RULE 3 — COLUMN STRUCTURE
+The input text may contain || separators that divide it into explicitly labeled columns. When present, identify the column headers from the first row. When || is not present, infer column boundaries from text alignment, spacing, or repeated patterns across rows. In either case, each column is strictly independent — map each column to at most one output field. Do not merge content from one column into another. Columns that don't map to any output field should be discarded entirely.
+
+RULE 4 - Keyword-based extraction:
 - Keywords MAY support classification but MUST NOT override transaction context or type.
 - Keywords MAY support classification but are hints only. Transaction context, type, and structural position (e.g. amount prefix, column position) always take priority over keyword matching.
 
-RULE 4 — DEBIT VS CREDIT (CRITICAL)
+RULE 5 — DEBIT VS CREDIT (CRITICAL)
 Debit (money charged TO card):
 - Purchases, shopping, dining, subscriptions
 - Fees, interest, taxes, penalties
@@ -337,7 +359,7 @@ Example:
 - "20/10/2025| 00:00 URBAN COMPANY LIMITEDGURUGRAM -10 + 304.00" - the -10 is reward points redeemed/reduced, +304.00 is the cash amount, so this row is a *credit* and likely a *refund*
 - "20/10/2025| 16:43 URBAN COMPANY LIMITEDGURUGRAM +10 304.00" - the +10 is reward points earned, 304.00 is the cash amount, so this row is a *debit* and likely a *purchase*
 
-RULE 5 — AMOUNT EXTRACTION (CRITICAL)
+RULE 6 — AMOUNT EXTRACTION (CRITICAL)
 The amount is ALWAYS in a separate column or position from the description.
 
 DO NOT extract numbers that are part of the description text:
@@ -361,23 +383,22 @@ Description: "IGST-VPS2627827578828-RATE 18.0 -29 (Ref# VT123456)"
 Amount: "12.35" (in a separate column, NOT the -29 from the description)
 `
 /*
-RULE 6 — SUBTYPES (bill_payment, refund, cashback, tax, fee, interest, adjustment, reversal, charge)
+RULE 7 — SUBTYPES (purchase, fee, charge, refund, rewards, interest, debt_payment, investment, withdrawal, adjustment, transfer)
 1. Assign the most appropriate subtype:
 IF type == "credit" (Important check)
-   - "cashback": Reward cash credited (Look for: CASHBACK, VALUEBACK, REWARD CASH)
+   - "rewards": Reward cash credited (Look for: CASHBACK, VALUEBACK, REWARD CASH)
    - "adjustment": Account adjustments
-   - "bill_payment": Credit card bill payment (Look for: PAYMENT, PAID, PAYZAPP, UPI, NEFT, IMPS)
-   - "refund": Money back from merchant (Look for: REFUND, RETURN, REVERSAL, CANCEL - but also any credit from a merchant)
-   - "reversal": Reversed transactions
+   - "debt_payment": Credit card bill payment (Look for: PAYMENT, PAID, PAYZAPP, UPI, NEFT, IMPS)
+   - "refund": Money back from merchant (Look for: REFUND, RETURN, CANCEL - but also any credit from a merchant)
 
 
 
 IF type = "debit":
-   - "tax": Tax charged on transactions. Look for: GST, IGST, CGST, SGST, UGST, VAT, CESS, DUTY, TAX, TDS in the description.
-   - "fee": Bank charges ONLY (HINTS: FEE, CHARGE, PENALTY, LATE FEE, ANNUAL FEE, SERVICE FEE). NEVER assign this subtype if the description contains IGST, CGST, SGST, UGST, GST, TDS, or VAT — those are always "tax".
+   - "fee": Bank charges ONLY (HINTS: FEE, CHARGE, PENALTY, LATE FEE, ANNUAL FEE, SERVICE FEE). NEVER assign this subtype if the description contains IGST, CGST, SGST, UGST, GST, TDS, or VAT — those are always a "charge".
    - "interest": Interest charged (HINTS: INTEREST, IGP, FINANCE CHARGE)
    - "purchase": Regular spending at merchants
    - "charge": Other charges not covered above
+   - "investment": SIP debits, mutual fund purchases, stock purchases, crypto purchases
 
 2. Keywords are hints, not requirements - use context. E.g., a credit from "URBAN COMPANY" is likely a refund even without the word "REFUND"
 3. If no subtype keyword matches, use the most logical default
@@ -389,41 +410,50 @@ IF type = "debit":
 IMPORTANT: Determine type FIRST, then subtype:
 1. FIRST determine if type is "debit" or "credit" using the rules above (+ prefix = credit, etc.)
 2. THEN assign the most appropriate subtype:
-   - "cashback": Reward cash credited (HINTS: CASHBACK, VALUEBACK, REWARD CASH)
+   - "rewards": Reward cash credited (HINTS: CASHBACK, VALUEBACK, REWARD CASH)
    - "refund": Any credit from a merchant for returned/cancelled/reversed spend; this includes merchant credits where the row structure shows a credit amount even if the word "REFUND" is absent
-   - "bill_payment": Use only for card payments from bank/account rails such as PAYMENT, PAYZAPP, UPI, NEFT, IMPS, autopay, or bank transfer-like descriptions
-   - "tax" is a subtype of "debit" and indicates tax charged on a purchase. It is NOT the total amount of the transaction, but the tax component. Look for tax keywords in the description to identify this subtype (*Non exclusive HINTS*: GST, IGST, CGST, SGST, UGST, VAT, CESS, DUTY, TAX, TDS)
+   - "debt_payment": Use only for card payments from bank/account rails such as PAYMENT, PAYZAPP, UPI, NEFT, IMPS, autopay, or bank transfer-like descriptions
    - "purchase": Regular spending at merchants (most common for debits)
    - "FCY MARKUP FEE" is not a bank fee but a currency conversion charge, so classify it as "charge" subtype, not "fee". FCY markup fees are NOT international transactions — set isInternationalTransaction = false.
-   - "fee": Bank charges ONLY (HINTS: FEE, CHARGE, PENALTY, LATE FEE, ANNUAL FEE, SERVICE FEE). NEVER assign this subtype if the description contains IGST, CGST, SGST, UGST, GST, TDS, or VAT — those are always "tax".
+   - "fee": Bank charges ONLY (HINTS: FEE, CHARGE, PENALTY, LATE FEE, ANNUAL FEE, SERVICE FEE). NEVER assign this subtype if the description contains IGST, CGST, SGST, UGST, GST, TDS, or VAT — those are always a "charge".
    - "interest": Interest charged (HINTS: INTEREST, IGP, FINANCE CHARGE)
    - "adjustment": Account adjustments
-   - "reversal": Reversed transactions
    - "charge": Other charges not covered above
+   - "investment": SIP debits, mutual fund purchases, stock purchases, crypto purchases
 3. Keywords are hints, not requirements - use context. E.g., a credit from "URBAN COMPANY" is likely a refund even without the word "REFUND"
 4. If no subtype keyword matches, use the most logical default (e.g., merchant debit = "purchase")
 */
 +
 `
-RULE 6 - Non-Bank FEEs:
+RULE 8 - Non-Bank FEEs:
 - "FCY MARKUP FEE" is not a bank fee but a currency conversion charge and MUST be classifed as "charge" subtype, not "fee". It is NOT an international transaction — it is a fee charged in the statement's local currency, so set isInternationalTransaction = false. Same for: forex charges, dynamic currency conversion (DCC) charges, international transaction fees, foreign transaction fees.
-- "payment": Credit card bill payment; Look for but not exclusive to: PAYMENT, PAID, PAYZAPP, UPI, NEFT, IMPS).
+`
+/*
+- "debt_payment": Credit card bill payment; Look for but not exclusive to: PAYMENT, PAID, PAYZAPP, UPI, NEFT, IMPS).
+- "investment": SIP debits, mutual fund purchases, stock purchases, crypto purchases.
 
-RULE 7 — REASONING (REQUIRED)
+*/
++
+`
+RULE 9 — REASONING (REQUIRED)
 - Every transaction MUST include a "reasoning" field explaining your type and subType classification.
 - For debit: explain what about the row indicates a charge (prefix, column position, context).
 - For credit: explain what indicates money credited to the card (CR marker, payment keyword, refund context).
 - For subType: explain the keyword or context that led to your choice.
 - Example: "Amount has no prefix and description is a merchant → debit/purchase"
-- Example: "Description contains PAYMENT and amount reduces card balance → credit/bill_payment"
-
-RULE 8 — DATE FORMAT
+`
+/*
+- Example: "Description contains PAYMENT and amount reduces card balance → credit/debt_payment"
+*/
++
+`
+RULE 10 — DATE FORMAT
 - Convert all dates to YYYY-MM-DD
 - "15 Jan 2024" → "2024-01-15"
 - "15/01/24" → "2024-01-15"
 - CRITICAL: Do NOT include time, pipe characters, or other separators (e.g., output MUST BE "2025-10-04", AND MUST NOT be "2025-10-04|00:00")
 
-RULE 9 — INTERNATIONAL TRANSACTIONS
+RULE 11 — INTERNATIONAL TRANSACTIONS
 - If TWO amounts shown (e.g., "GBP 38.60 = SGD 65.12"):
   - amount: 65.12 (the statement-local amount)
   - originalAmount: 38.60 (the foreign amount)
@@ -450,7 +480,7 @@ IMPORTANT:
 - Reward points are not part of either amount
 
 
-RULE 10 — WHAT IS A TRANSACTION
+RULE 12 — WHAT IS A TRANSACTION
 A transaction MUST have ALL THREE:
 1. A specific DATE (not a date range, not a due date)
 2. A MERCHANT NAME or specific payee
@@ -663,10 +693,22 @@ Return ONLY valid JSON. No explanation. No extra text. No markdown.
       "date": "YYYY-MM-DD",
       "description": "merchant/description",
       "amount": number,
+      "reasoning": "brief explanation of why this is debit or credit, and why this subType was chosen",
       "type": "debit" | "credit",
-      "balance": number | null
+      "transactionSubType": Sub Types are more granular types to describe transactions. Sub Types must be one of ${SUBTYPE_ENUM},
+      "balance": number | null,
+      "confidence": 0.0 to 1.0 (optional)
     }
-  ]
+  ],
+  "_debug": {
+    "totalCount": number,
+    "droppedTransactions": [
+      {
+        "reason": "why dropped (e.g., amount unclear, date missing)",
+        "rawText": "the problematic text"
+      }
+    ]
+  }
 }
 
 --------------------------------
@@ -678,29 +720,33 @@ RULE 1 — EXTRACT EVERY TRANSACTION
 - Extract EVERY transaction — do NOT skip any
 - Do NOT merge transactions — each row is separate
 
-RULE 2 — NUMBER FORMATTING
+RULE 2 — COLUMN STRUCTURE
+The input text may contain || separators that divide it into explicitly labeled columns. When present, identify the column headers from the first row. When || is not present, infer column boundaries from text alignment, spacing, or repeated patterns across rows. In either case, each column is strictly independent — map each column to at most one output field. Do not merge content from one column into another. Columns that don't map to any output field should be discarded entirely.
+
+RULE 3 — NUMBER FORMATTING
 - Indian statements use lakh format: 1,23,456.78
 - Remove ALL commas: 1,23,456.78 → 123456.78
 - Output as plain decimal without commas
 
-RULE 3 — DATE FORMAT
+RULE 4 — DATE FORMAT
 - Convert all dates to YYYY-MM-DD
 - "15 Jan 2024" → "2024-01-15"
 - "15/01/24" → "2024-01-15"
 - CRITICAL: Do NOT include time, pipe characters, or other separators (e.g., output MUST BE "2025-10-04", AND MUST NOT be "2025-10-04|00:00")
 
-RULE 4 — DEBIT VS CREDIT (IN ORDER OF PRIORITY)
-1. SEPARATE COLUMNS: "Debit" column = "debit", "Credit" column = "credit"
-2. KEYWORDS for DEBIT: DEBIT, DR, WITHDRAWAL, PAID, SENT, OUT, PAYMENT TO, TRANSFER TO
-3. KEYWORDS for CREDIT: CREDIT, CR, DEPOSIT, RECEIVED, IN, REFUND, TRANSFER FROM
-4. Negative amounts or amounts in parentheses = debit
+RULE 5 — DEBIT VS CREDIT (IN ORDER OF PRIORITY)
+1. PIPE-DELIMITED COLUMNS: The text uses pipe characters to separate columns. Identify the column headers first. Count pipe positions — if an amount appears in the Debit column position, it is "debit"; if it appears in the Credit column position, it is "credit". An empty Debit column with an amount in the Credit column means type="credit".
+2. SEPARATE COLUMNS: "Debit" column = "debit", "Credit" column = "credit"
+3. KEYWORDS for DEBIT: DEBIT, DR, WITHDRAWAL, PAID, SENT, OUT, PAYMENT TO, TRANSFER TO
+4. KEYWORDS for CREDIT: CREDIT, CR, DEPOSIT, RECEIVED, IN, REFUND, TRANSFER FROM
+5. Negative amounts or amounts in parentheses = debit
 
-RULE 5 — IGNORE RUNNING BALANCE COLUMN
+RULE 6 — IGNORE RUNNING BALANCE COLUMN
 Many statements have a "Balance" column showing running balance.
 - DO NOT extract running balance values as transaction amounts
 - Only extract amounts from Debit/Credit columns
 
-RULE 6 — WHAT IS A TRANSACTION
+RULE 7 — WHAT IS A TRANSACTION
 A transaction MUST have ALL THREE:
 1. A specific DATE
 2. A MERCHANT NAME or description
@@ -712,11 +758,48 @@ DO NOT EXTRACT:
 - Bank contact information
 - Header text, column headers, section titles
 
-RULE 7 — RUNNING BALANCE (IF PRESENT)
+RULE 8 — RUNNING BALANCE (IF PRESENT)
 Many statements include a "Balance" column showing running balance.
 - If present, extract the balance value for each transaction
 - Balance is the account balance AFTER the transaction is applied
 - If not present, return null for balance field
+
+RULE 9 — SUBTYPE CLASSIFICATION
+Assign the most appropriate transactionSubType for each transaction.
+`
+/*
+IF type == "debit":
+   - "purchase": Regular spending at merchants (shopping, dining, online orders)
+   - "transfer": Generic transfers via payment rails — IMPS, NEFT, UPI, RTGS (HINTS: NEFT, IMPS, UPI, RTGS, TRANSFER TO, SENT TO)
+   - "debt_payment": ONLY when narration EXPLICITLY says CC bill payment or loan EMI (HINTS: CC BILL, CREDIT CARD BILL, CARD BILL, BILLPAY, LOAN EMI, EMI, LOAN REPAYMENT, AUTOPAY). A bank name alone (HDFC, ICICI, AXIS) is NOT sufficient — IMPS to HDFC could be paying anyone.
+   - "investment": SIP debits, mutual fund purchases, stock purchases, crypto purchases (HINTS: SIP, MF, MUTUAL FUND, STOCK, SHARE, DEMAT, ZERODHA, GROWW)
+   - "fee": Bank charges (HINTS: FEE, CHARGE, PENALTY, SERVICE CHARGE)
+   - "interest": Interest debited
+   - "withdrawal": ATM cash withdrawals
+   - "charge": Other debits not covered above
+
+PRIORITY: If a debit narration contains IMPS/NEFT/UPI/RTGS without explicit CC BILL, EMI, or LOAN keywords, classify as "transfer" — NOT "debt_payment".
+
+IF type == "credit":
+   - "interest": Interest credited on savings/FD (HINTS: INTEREST, INT CR, INT P)
+   - "rewards": Cashback credited (HINTS: CASHBACK, CASH BACK, REWARD)
+   - "refund": Refunds from merchants (HINTS: REFUND, RETURN, CANCEL)
+   - "transfer": Transfers from other accounts, cash deposits, salary credits, direct deposits (HINTS: NEFT, IMPS, UPI, RTGS, TRANSFER FROM, RECEIVED FROM, DEPOSIT, SALARY)
+   - "adjustment": Account adjustments
+*/
++
+`
+Keywords are hints, not requirements. Use transaction context to classify.
+If no subType clearly matches, use the most logical default.
+
+RULE 10 — REASONING (REQUIRED)
+- Every transaction MUST include a "reasoning" field explaining your type and subType classification.
+- For debit: explain what indicates money going out (column position, keyword, context).
+- For credit: explain what indicates money coming in (column position, keyword, context).
+- For subType: explain the keyword or context that led to your choice.
+- Example: "Amount in Debit column → debit/purchase"
+- Example: "Amount in Credit column with NEFTINW keyword → credit/transfer"
+- Example: "Description contains CC BILL → debit/debt_payment"
 
 --------------------------------
 END

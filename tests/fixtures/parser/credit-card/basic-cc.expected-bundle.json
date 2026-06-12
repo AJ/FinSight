@@ -14,7 +14,7 @@
       "amount": 500,
       "type": "credit",
       "sourceType": "credit_card",
-      "transactionSubType": "bill_payment"
+      "transactionSubType": "debt_payment"
     },
     {
       "description": "AMAZON.IN",

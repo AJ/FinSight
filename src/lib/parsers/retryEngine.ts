@@ -120,7 +120,7 @@ export async function runWithRetry<T>(
           }
         }
 
-        if (config.stage === 'cc_summary' && attempt === 1) {
+        if (config.stage === 'cc_summary' || config.stage === 'bank_summary') {
           debugLog(config.stage, 'Raw LLM response:', rawResponse);
         }
       } catch (parseErr: unknown) {
