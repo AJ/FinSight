@@ -5,7 +5,7 @@ import type {
   LLMAdapter,
 } from './types';
 import { createAdapterError } from './types';
-import { debugWarn } from '@/lib/utils/debug';
+import { debugWarn, debugError } from '@/lib/utils/debug';
 
 interface OllamaExtra {
   num_ctx?: number;
@@ -98,6 +98,12 @@ export const ollamaAdapter: LLMAdapter = {
     }
 
     const data = await res.json();
+    const text = data.response ?? '';
+
+    if (!text || text.trim().length === 0) {
+      debugError('OllamaAdapter.generate', `Empty response from Ollama:\nModel: ${model},\nDone: ${data.done},\nEval Count: ${data.eval_count ?? 'none'},\nPrompt Eval Count: ${data.prompt_eval_count ?? 'none'},\nTotal Duration: ${data.total_duration ?? 'none'},\nLoad Duration: ${data.load_duration ?? 'none'},\nContext Length: ${data.context?.length ?? 'none'},\nResponse Keys: ${Object.keys(data).join(', ')}`);
+    }
+
     const usage: TokenUsage | undefined =
       data.prompt_eval_count != null
         ? {
@@ -106,7 +112,7 @@ export const ollamaAdapter: LLMAdapter = {
           }
         : undefined;
 
-    return { text: data.response ?? '', usage };
+    return { text, usage };
   },
 
   async *chatStream(baseUrl, model, messages, options) {

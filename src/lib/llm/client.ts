@@ -11,7 +11,7 @@ import { PROVIDERS } from './types';
 import { SYSTEM_PROMPT } from './prompts';
 import { ollamaAdapter } from './ollamaAdapter';
 import { createOpenAIAdapter } from './openaiAdapter';
-import { debugLog } from '@/lib/utils/debug';
+import { debugLog, debugError } from '@/lib/utils/debug';
 
 const GENERATE_TIMEOUT_MS = 15 * 60 * 1000;
 const CHAT_STREAM_TIMEOUT_MS = 180 * 1000;
@@ -116,7 +116,8 @@ export function createClient(provider: LLMProvider): LLMClient {
           const latency = Date.now() - startTime;
 
           if (!result.text || result.text.trim().length === 0) {
-            throw new LLMError(`LLM returned empty response [${stage}]`, false);
+            debugError('LLMClient.generate', `Empty response:\nStage: ${stage},\nProvider: ${config.name},\nModel: ${model},\nAttempt: ${attempt},\nPrompt Length: ${fullPrompt.length},\nUsage: ${result.usage ? `${result.usage.promptTokens}+${result.usage.completionTokens}` : 'none'},\nRaw Text Length: ${result.text?.length ?? 0}`);
+            throw new LLMError(`LLM returned empty response [${stage}] (model: ${model})`, false);
           }
 
           if (result.usage) {

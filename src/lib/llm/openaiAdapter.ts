@@ -1,6 +1,6 @@
 import type { TokenUsage, ChatChunk, LLMAdapter } from './types';
 import { createAdapterError } from './types';
-import { debugWarn } from '@/lib/utils/debug';
+import { debugWarn, debugError } from '@/lib/utils/debug';
 
 function throwWithStatus(message: string, status: number): never {
   throw createAdapterError(message, status);
@@ -80,6 +80,12 @@ export function createOpenAIAdapter(config: OpenAIAdapterConfig): LLMAdapter {
 
       const data = await res.json();
       const text = data.choices?.[0]?.message?.content ?? '';
+
+      if (!text || text.trim().length === 0) {
+        const choice = data.choices?.[0];
+        debugError('OpenAIAdapter.generate', `Empty response from ${config.providerName}:\nModel: ${model},\nHTTP Status: ${res.status},\nRequest Messages: ${JSON.stringify((body.messages as { role: string; content: string }[] | undefined)?.map(m => ({ role: m.role, contentLength: m.content?.length ?? 0 })))},\nRequest Temperature: ${body.temperature},\nRequest Max Tokens: ${body.max_tokens ?? 'unset'},\nChoices Count: ${data.choices?.length ?? 0},\nFirst Choice Keys: ${choice ? Object.keys(choice).join(', ') : 'none'},\nMessage Keys: ${choice?.message ? Object.keys(choice.message).join(', ') : 'none'},\nContent Null: ${choice?.message?.content == null},\nFinish Reason: ${choice?.finish_reason ?? 'none'},\nUsage: ${data.usage ? `${data.usage.prompt_tokens}+${data.usage.completion_tokens}` : 'none'}`);
+      }
+
       const usage: TokenUsage | undefined = data.usage
         ? { promptTokens: data.usage.prompt_tokens ?? 0, completionTokens: data.usage.completion_tokens ?? 0 }
         : undefined;

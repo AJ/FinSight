@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { getContextWindowInfo } from '@/lib/llm/contextWindow';
+import { getContextWindowInfo, calculateMaxTokens } from '@/lib/llm/contextWindow';
 import type { ModelInfo } from '@/lib/llm/types';
 
 // Mock settings store
@@ -218,5 +218,33 @@ describe('getContextWindowInfo', () => {
     expect(result1.contextLength).toBe(8192);
     expect(result2.contextLength).toBe(16244);
     expect(mockGetState).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('calculateMaxTokens', () => {
+  it('returns undefined when contextWindowTokens is undefined', () => {
+    expect(calculateMaxTokens(undefined, 'test prompt')).toBeUndefined();
+  });
+
+  it('calculates budget: contextWindow - system prompt - stage prompt - buffers', () => {
+    // 16000 context - ~110 system prompt tokens - 250 stage tokens - 200 input - 300 output = ~15140
+    const stagePrompt = 'a'.repeat(1000); // ~250 tokens
+    const result = calculateMaxTokens(16000, stagePrompt);
+    expect(result).toBeGreaterThan(14000);
+    expect(result).toBeLessThan(16000);
+  });
+
+  it('returns minimum 256 tokens when budget would be smaller', () => {
+    // 500 context window with a 1000-char prompt should still return 256
+    const stagePrompt = 'a'.repeat(1000);
+    expect(calculateMaxTokens(500, stagePrompt)).toBe(256);
+  });
+
+  it('accounts for longer prompts by reducing available output tokens', () => {
+    const shortPrompt = 'short';
+    const longPrompt = 'a'.repeat(10000);
+    const resultShort = calculateMaxTokens(16000, shortPrompt);
+    const resultLong = calculateMaxTokens(16000, longPrompt);
+    expect(resultShort!).toBeGreaterThan(resultLong!);
   });
 });
