@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
+import { debugLog } from "@/lib/utils/debug";
 import {
   applyMerchantRuleDecision,
   findMatchingMerchantRule,
@@ -61,21 +62,33 @@ export const useMerchantRuleStore = create<MerchantRuleStoreState>()(
               rule.sourceType === decision.sourceType,
           );
 
-          if (matchIndex === -1) {
+          const isNew = matchIndex === -1;
+          let updatedRule: ReturnType<typeof applyMerchantRuleDecision>;
+
+          if (isNew) {
+            updatedRule = applyMerchantRuleDecision(undefined, decision, now);
+            debugLog('MerchantRules', '[UPSERTED]', {
+              merchantKey: decision.merchantKey,
+              isNew: true,
+              status: updatedRule.status,
+              activeCategoryId: updatedRule.activeCategoryId,
+            });
             return {
-              rules: sortAndTrimRules([
-                applyMerchantRuleDecision(undefined, decision, now),
-                ...state.rules,
-              ]),
+              rules: sortAndTrimRules([updatedRule, ...state.rules]),
             };
           }
 
+          updatedRule = applyMerchantRuleDecision(state.rules[matchIndex], decision, now);
+          debugLog('MerchantRules', '[UPSERTED]', {
+            merchantKey: decision.merchantKey,
+            isNew: false,
+            status: updatedRule.status,
+            activeCategoryId: updatedRule.activeCategoryId,
+            totalConfirmations: updatedRule.totalConfirmations,
+          });
+
           const updatedRules = [...state.rules];
-          updatedRules[matchIndex] = applyMerchantRuleDecision(
-            state.rules[matchIndex],
-            decision,
-            now,
-          );
+          updatedRules[matchIndex] = updatedRule;
 
           return {
             rules: sortAndTrimRules(updatedRules),

@@ -6,6 +6,7 @@ import {
   buildStoredTransactionCategoryUpdate,
   handleStoredTransactionManualCategoryEdit,
 } from '@/lib/services/storedTransactionEditService';
+import type { BankStatementSummary } from '@/models/BankStatementSummary';
 import '@/lib/categorization/categories'; // Ensure categories are registered before store hydrates
 
 /**
@@ -38,6 +39,7 @@ function rehydrateTransactions(txns: Transaction[]): Transaction[] {
 
 interface TransactionStore {
   transactions: Transaction[];
+  bankSummaries: BankStatementSummary[];
   selectedIds: string[];
   isCategorizing: boolean;
   categorizeProgress: string;
@@ -49,6 +51,8 @@ interface TransactionStore {
   getTransactionsByCategory: (category: string) => Transaction[];
   getTotalIncome: (startDate?: Date, endDate?: Date) => number;
   getTotalExpenses: (startDate?: Date, endDate?: Date) => number;
+  addBankSummary: (summary: BankStatementSummary) => void;
+  getMostRecentBalance: () => { closing: number; date: Date } | null;
   // Selection actions
   toggleSelection: (id: string) => void;
   selectAll: () => void;
@@ -72,6 +76,7 @@ export const useTransactionStore = create<TransactionStore>()(
   persist(
     (set, get) => ({
       transactions: [],
+      bankSummaries: [],
       selectedIds: [],
       isCategorizing: false,
       categorizeProgress: '',
@@ -85,8 +90,13 @@ export const useTransactionStore = create<TransactionStore>()(
           if (toAdd.length < rehydrated.length) {
             console.log(`[Store] Filtered ${rehydrated.length - toAdd.length} duplicate transaction(s)`);
           }
+          // Defensive: strip staging-only isSuspense flag before persisting.
+          // The pipeline should have already cleared it, but guard against leaks.
+          const cleaned = toAdd.some(t => t.isSuspense)
+            ? toAdd.map(t => t.isSuspense ? t.cloneWith({ isSuspense: undefined }) : t)
+            : toAdd;
           return {
-            transactions: [...state.transactions, ...toAdd],
+            transactions: [...state.transactions, ...cleaned],
           };
         }),
 
@@ -155,7 +165,26 @@ export const useTransactionStore = create<TransactionStore>()(
           transactions: state.transactions.filter((txn) => txn.id !== id),
         })),
 
-      clearAll: () => set({ transactions: [], selectedIds: [] }),
+      clearAll: () => set({ transactions: [], bankSummaries: [], selectedIds: [] }),
+
+      addBankSummary: (summary) =>
+        set((state) => {
+          const existing = state.bankSummaries.find(
+            (s) => s.sourceFileHash && s.sourceFileHash === summary.sourceFileHash,
+          );
+          if (existing) return state;
+          return { bankSummaries: [...state.bankSummaries, summary] };
+        }),
+
+      getMostRecentBalance: () => {
+        const summaries = get().bankSummaries;
+        if (summaries.length === 0) return null;
+        const sorted = [...summaries].sort(
+          (a, b) => new Date(b.statementDate).getTime() - new Date(a.statementDate).getTime(),
+        );
+        const mostRecent = sorted[0];
+        return { closing: mostRecent.closingBalance, date: new Date(mostRecent.statementDate) };
+      },
 
       getTransactionsByDateRange: (startDate, endDate) => {
         return get().transactions.filter((txn) => {
@@ -278,6 +307,7 @@ export const useTransactionStore = create<TransactionStore>()(
     }),
     {
       name: 'transaction-storage',
+      version: 4,
       merge: (persistedState, currentState) => {
         const merged = { ...currentState, ...(persistedState as Partial<typeof currentState>) };
         if (merged.transactions) {

@@ -3,6 +3,7 @@
  */
 
 import { Transaction } from "@/types";
+import { CategoryType } from "@/models/CategoryType";
 import { getCategoryById } from "./categorization/categories";
 
 /**
@@ -44,9 +45,9 @@ export function deduplicateTransactions(
  */
 export function getCategoryType(
   transaction: Transaction
-): "income" | "expense" | "excluded" {
+): CategoryType {
   const category = getCategoryById(transaction.category.id);
-  return category?.type ?? "expense";
+  return category?.type ?? CategoryType.Expense;
 }
 
 /**

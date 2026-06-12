@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
+import { format } from 'date-fns';
 import { useBudgetStore } from '@/lib/store/budgetStore';
 import { makeTransaction, makeCategory } from '@tests/unit/factories';
 import { CategoryType } from '@/types';
@@ -433,7 +434,8 @@ describe('useBudgetStore (redesigned)', () => {
       const notification = useBudgetStore.getState().getNotification();
       const dayOfMonth = new Date().getDate();
       if (dayOfMonth >= 28) {
-        const nextMonth = new Date(new Date().getFullYear(), new Date().getMonth() + 1, 1).toISOString().slice(0, 7);
+        const today = new Date();
+        const nextMonth = format(new Date(today.getFullYear(), today.getMonth() + 1, 1), 'yyyy-MM');
         expect(notification).toEqual({ type: 'eom', month: nextMonth });
       }
       // Otherwise we can't force the eom path without date mocking

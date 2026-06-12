@@ -259,13 +259,14 @@ describe('detectRecurringPayments', () => {
   });
 
   it('sorts active payments before inactive, then by amount descending', () => {
+    const now = new Date();
     const activeTxns = Array.from({ length: 3 }, (_, i) =>
       makeTransaction({
         id: `active${i}`,
         description: 'ACTIVE SMALL',
         amount: 100,
         type: TransactionType.Debit,
-        date: new Date(2026, i, 1),
+        date: new Date(now.getFullYear(), now.getMonth() - i, 1),
         category: makeCategory('entertainment'),
       })
     );
@@ -275,7 +276,7 @@ describe('detectRecurringPayments', () => {
         description: 'INACTIVE LARGE',
         amount: 999,
         type: TransactionType.Debit,
-        date: new Date(2023, i, 1),
+        date: new Date(now.getFullYear() - 3, i, 1),
         category: makeCategory('entertainment'),
       })
     );

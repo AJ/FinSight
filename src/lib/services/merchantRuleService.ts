@@ -1,6 +1,7 @@
 import type { Transaction } from "@/types";
 import { getMerchantRuleDecision, getMerchantRuleInput } from "@/lib/categorization/merchantRules";
 import { useMerchantRuleStore } from "@/lib/store/merchantRuleStore";
+import { debugLog } from "@/lib/utils/debug";
 
 export function findMerchantRuleForTransaction(transaction: Transaction) {
   return useMerchantRuleStore.getState().getRule(getMerchantRuleInput(transaction));
@@ -11,6 +12,12 @@ export function teachMerchantRuleFromTransaction(transaction: Transaction): bool
   if (!decision) {
     return false;
   }
+
+  debugLog('MerchantRules', '[LEARNED]', {
+    merchantKey: decision.merchantKey,
+    categoryId: decision.categoryId,
+    narration: transaction.description?.substring(0, 80),
+  });
 
   useMerchantRuleStore.getState().upsertRule(decision);
   return true;
