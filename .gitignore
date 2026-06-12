@@ -58,6 +58,7 @@ docs/*
 !docs/README.md
 CLAUDE.md
 GEMINI.md
+PLANS.md
 
 # running commit message draft (not for committing)
 docs/COMMIT_MESSAGE_DRAFT.md
@@ -74,3 +75,6 @@ next-env.d.ts
 .playwright-mcp/
 tests\fixtures\cc_statement.pdf
 tests/fixtures/cc_statement.pdf
+
+
+.superpowers/
