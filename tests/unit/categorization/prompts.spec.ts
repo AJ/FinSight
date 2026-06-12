@@ -49,10 +49,10 @@ describe('buildCategorizationPrompt', () => {
 
   it('includes transactionSubType in payload when present', () => {
     const transactions = [
-      { id: '1', description: 'NETFLIX', amount: 15, type: 'debit' as const, transactionSubType: 'bill_payment' as const },
+      { id: '1', description: 'NETFLIX', amount: 15, type: 'debit' as const, transactionSubType: 'debt_payment' as const },
     ];
     const result = buildCategorizationPrompt(transactions);
-    expect(result).toContain('"transactionSubType":"bill_payment"');
+    expect(result).toContain('"transactionSubType":"debt_payment"');
   });
 
   it('omits sourceType from transaction payload when not provided', () => {
@@ -224,10 +224,10 @@ describe('normalizeCategoryId', () => {
   });
 
   it('"bank" maps via partial match to first matching alias', () => {
-    // Object.entries insertion order: "bank_transfer" (line 249) before "bank_interest" (line 269).
-    // "bank_transfer".includes("bank") → true, so result is always "transfer".
+    // "bank_transfer" maps to "other" (transfer variants no longer map to excluded "transfer").
+    // "bank_transfer".includes("bank") → true, so result is "other".
     const result = normalizeCategoryId('bank');
-    expect(result).toBe('transfer');
+    expect(result).toBe('other');
   });
 
   it('category with spaces converts to underscores before matching', () => {

@@ -9,6 +9,7 @@ export interface CategorizationResult {
   category: string;
   confidence: number;
   source: CategorizationSource;
+  isSuspense?: boolean;
 }
 
 export interface CategorizationProgress {

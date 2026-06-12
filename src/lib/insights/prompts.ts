@@ -55,7 +55,7 @@ GOOD insights focus on:
 
 CATEGORY FIELD:
 - Only include if insight is about a specific category
-- Valid values: groceries, dining, transportation, utilities, housing, healthcare, entertainment, shopping, income, interest, transfer, bills, investment, insurance, education, travel, other
+- Valid values: groceries, dining, transportation, utilities, housing, healthcare, entertainment, shopping, income, interest, cashback, transfer, bills, cc_bill_payment, loans, investment, insurance, education, travel, fees, taxes, interest-expense, other
 
 SEVERITY:
 - "positive": Good financial news
@@ -83,7 +83,7 @@ export function buildInsightsPrompt(analytics: TransactionAnalytics, currency: C
 
   // Defensive filter: spending composition should never include income or transfers
   const topCategoriesSummary = (analytics.topCategories || [])
-    .filter((c) => c.category !== 'transfer' && c.category !== 'income')
+    .filter((c) => !['transfer', 'income', 'cc_bill_payment', 'loans'].includes(c.category))
     .map((c) => `${c.category}: ${symbol}${c.total.toFixed(0)} (${c.percentage}%)`)
     .join('\n');
 

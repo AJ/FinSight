@@ -11,29 +11,12 @@ import type { CategorizationSource } from "./types";
  * System prompt for transaction categorization.
  * Instructs the LLM on available categories and output format.
  */
-const CATEGORY_GUIDANCE: Record<string, string> = {
-  groceries: "Supermarkets, grocery stores, fresh produce, food staples, and routine household essentials.",
-  dining: "Restaurants, cafes, coffee shops, bars, takeout, and food delivery.",
-  transportation: "Fuel, public transit, ride-hailing, taxi, parking, tolls, and vehicle upkeep.",
-  utilities: "Electricity, water, gas, internet, mobile, phone, and other utility bills.",
-  housing: "Rent, mortgage, housing maintenance, HOA, and property-related costs.",
-  healthcare: "Pharmacy, doctor, clinic, hospital, medical treatment, and health-related spending.",
-  entertainment: "Streaming, movies, games, concerts, subscriptions, and leisure spending.",
-  shopping: "Retail, e-commerce, electronics, apparel, home goods, and general shopping.",
-  income: "Salary, payroll, freelance income, reimbursements treated as income, and money earned from work.",
-  interest: "Interest credited by a bank or financial institution.",
-  cashback: "Cashback, reward credits, rebates, gift voucher credits, and similar incentive credits.",
-  transfer: "Money moved between accounts or people, including bank transfers and peer-to-peer transfers.",
-  bills: "Credit-card bill payments, loan repayments, EMI, and other bill-payment transactions.",
-  investment: "Brokerage, securities, mutual funds, crypto, dividends, or investment-related flows.",
-  insurance: "Insurance premiums and policy-related payments.",
-  education: "Tuition, courses, books, training, tutoring, and education-related payments.",
-  travel: "Flights, hotels, lodging, rental cars, and trip-related spending.",
-  fees: "Bank fees, service fees, annual fees, processing fees, and similar charges.",
-  taxes: "Tax, GST, VAT, IGST, SGST, duty, cess, and similar tax-related debits.",
-  "interest-expense": "Interest charged as an expense, finance charges, overdue interest, and penal interest.",
-  other: "Use this only when the merchant or purpose is genuinely unclear. Prefer other over guessing.",
-};
+// Generated from Category registry — single source of truth in categories.ts
+const CATEGORY_GUIDANCE: Record<string, string> = Object.fromEntries(
+  DEFAULT_CATEGORIES
+    .filter(c => c.guidance)
+    .map(c => [c.id, c.guidance!])
+);
 
 export const CATEGORIZATION_SYSTEM_PROMPT = `You are a financial transaction categorization assistant. Your task is to categorize transactions into the most appropriate category based on the description, merchant context, amount, direction, source type, and transaction subtype.
 
@@ -55,6 +38,13 @@ Rules:
 8. If the merchant is low-signal and the transaction is ambiguous, prefer "other" with low confidence instead of overconfident guessing
 9. Do NOT infer category from amount alone or from unrelated numeric tokens
 10. If a learned merchant mapping is provided in future prompts, treat it as a strong hint, but still return one of the allowed category IDs
+11. SUSPENSE RULE (CRITICAL): Any bank debit with transactionSubType "transfer" MUST be evaluated for suspense.
+    - Flag as suspense (isSuspense: true) UNLESS the narration explicitly states the PURPOSE beyond just a recipient name or reference number.
+    - Having a recipient name does NOT disqualify from suspense. ALL transfers have recipient names — that does not tell you the purpose.
+    - Only mark isSuspense=false if the narration contains explicit purpose keywords like: "rent", "salary", "SIP", "mutual fund", "EMI", "loan", "insurance premium", "credit card payment", "investment", or similar.
+    - Examples that SHOULD be flagged as suspense: "IMPS-533621763371RANJANA", "NEFT-Transfer to ABC Corp", "UPI-payment@paytm" — you cannot determine if this is rent, a purchase, a loan repayment, or a personal transfer.
+    - When flagging as suspense, still provide your best-guess category (NOT "transfer") and confidence below 0.6.
+    - The "transfer" category is ONLY for confirmed self-transfers (same person's own accounts). Never use it for external payments.
 
 Category guidance:
 ${Object.entries(CATEGORY_GUIDANCE)
@@ -113,7 +103,9 @@ ${statementContext}Categorize these transactions:
 ]
 
 Return a JSON array with this exact format:
-[{"id": "original-id", "category": "category-id", "confidence": 0.95}]
+[{"id": "original-id", "category": "category-id", "confidence": 0.95, "isSuspense": false}]
+
+Set "isSuspense" to true for bank debit transfers where the narration does not explicitly state the purpose. Having a recipient name alone is NOT sufficient — flag as suspense unless you see purpose keywords like "rent", "salary", "SIP", "EMI", "investment", etc.
 
 Important: Return ONLY the JSON array, nothing else.`;
 }
@@ -123,7 +115,7 @@ Important: Return ONLY the JSON array, nothing else.`;
  */
 export function parseCategorizationResponse(
   response: string
-): { id: string; category: string; confidence: number; source: CategorizationSource }[] {
+): { id: string; category: string; confidence: number; source: CategorizationSource; isSuspense?: boolean }[] {
   // Try direct parse
   try {
     const parsed = JSON.parse(response);
@@ -183,7 +175,7 @@ export function parseCategorizationResponse(
  */
 function normalizeResult(
   result: unknown
-): { id: string; category: string; confidence: number; source: CategorizationSource } {
+): { id: string; category: string; confidence: number; source: CategorizationSource; isSuspense?: boolean } {
   const obj = result as Record<string, unknown>;
   const rawCategory = String(obj.category || "other");
   const rawConfidence = obj.confidence;
@@ -208,6 +200,7 @@ function normalizeResult(
     category: normalizeCategoryId(rawCategory),
     confidence,
     source: hasValidAiConfidence ? "ai" : "keyword",
+    isSuspense: obj.isSuspense === true ? true : undefined,
   };
 }
 
@@ -215,7 +208,7 @@ function normalizeResult(
  * Validate a categorization result.
  */
 function isValidResult(
-  result: { id: string; category: string; confidence: number; source: CategorizationSource }
+  result: { id: string; category: string; confidence: number; source: CategorizationSource; isSuspense?: boolean }
 ): boolean {
   const validCategories = DEFAULT_CATEGORIES.map((c) => c.id);
   return (
@@ -236,21 +229,35 @@ const CATEGORY_ALIASES: Record<string, string> = {
   "bill-pay": "bills",
   "billpay": "bills",
   "bill payments": "bills",
-  "loan_payment": "bills",
-  "loan-payment": "bills",
-  "emi": "bills",
-  "credit_card_payment": "bills",
-  "cc_payment": "bills",
 
-  // Transfer variations
-  "imps_transfer": "transfer",
-  "neft_transfer": "transfer",
-  "rtgs_transfer": "transfer",
-  "bank_transfer": "transfer",
-  "money_transfer": "transfer",
-  "fund_transfer": "transfer",
-  "p2p_transfer": "transfer",
-  "wire_transfer": "transfer",
+  // CC bill payment variations
+  "credit_card_payment": "cc_bill_payment",
+  "cc_payment": "cc_bill_payment",
+  "card_payment": "cc_bill_payment",
+  "credit_card_bill": "cc_bill_payment",
+  "card_bill_payment": "cc_bill_payment",
+
+  // Loan variations
+  "loan_payment": "loans",
+  "loan-payment": "loans",
+  "emi": "loans",
+  "loan_emi": "loans",
+  "emi_payment": "loans",
+  "loan_repayment": "loans",
+  "home_loan_emi": "loans",
+  "personal_loan_emi": "loans",
+  "car_loan_emi": "loans",
+
+  // Transfer variations — map to 'other' so they don't auto-assign to Excluded
+  // User must explicitly classify; suspense system handles the review gate
+  "imps_transfer": "other",
+  "neft_transfer": "other",
+  "rtgs_transfer": "other",
+  "bank_transfer": "other",
+  "money_transfer": "other",
+  "fund_transfer": "other",
+  "p2p_transfer": "other",
+  "wire_transfer": "other",
 
   // Insurance variations
   "insurance_payment": "insurance",

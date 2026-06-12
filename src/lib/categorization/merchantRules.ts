@@ -1,5 +1,6 @@
 import { normalizeMerchantName } from "@/lib/categorizer";
 import type { SourceType, Transaction } from "@/types";
+import { debugLog } from "@/lib/utils/debug";
 
 export type MerchantRuleDirection = "credit" | "debit" | "any";
 export type MerchantRuleSourceType = SourceType | "any";
@@ -176,6 +177,13 @@ export function applyMerchantRuleDecision(
   );
   const resolvedState = resolveMerchantRuleState(categoryVotes);
 
+  debugLog('MerchantRules', '[DISAMBIGUATION]', {
+    merchantKey: existingRule.merchantKey,
+    beforeStatus: existingRule.status,
+    afterStatus: resolvedState.status,
+    categoryId: decision.categoryId,
+  });
+
   return {
     merchantKey: existingRule.merchantKey,
     direction: existingRule.direction,
@@ -291,6 +299,13 @@ export function findMatchingMerchantRule(
   if (tied.some((rule) => rule.activeCategoryId !== best.activeCategoryId)) {
     return null;
   }
+
+  debugLog('MerchantRules', '[MATCH]', {
+    inputKey: input.merchantKey,
+    inputDirection: input.direction,
+    candidateCount: candidates.length,
+    selectedKey: best.merchantKey,
+  });
 
   return best;
 }

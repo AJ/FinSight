@@ -4,6 +4,7 @@ import { getClient } from "@/lib/llm/index";
 import { LLMProvider } from "@/lib/llm/types";
 import { getContextWindowInfo } from "@/lib/llm/contextWindow";
 import { findMerchantRuleForTransaction } from "@/lib/services/merchantRuleService";
+import { debugLog } from "@/lib/utils/debug";
 import type { StatementType } from "@/types/creditCard";
 import {
   batchTransactions,
@@ -76,6 +77,10 @@ export async function categorizeTransactions(
 
     const matchedRule = findMerchantRuleForTransaction(transaction);
     if (matchedRule) {
+      debugLog('MerchantRules', '[APPLIED]', {
+        merchantKey: matchedRule.merchantKey,
+        categoryId: matchedRule.activeCategoryId,
+      });
       ruleResults.push({
         id: transaction.id,
         category: matchedRule.activeCategoryId!,
@@ -161,6 +166,7 @@ export function applyCategorizationResults(
       categoryConfidence: result.confidence,
       needsReview,
       categorizedBy,
+      isSuspense: result.isSuspense ?? false,
     });
   });
 }

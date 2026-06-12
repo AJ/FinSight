@@ -9,9 +9,13 @@ vi.stubGlobal('fetch', mockFetch);
 
 // Mock getContextWindowInfo so no listModels fetch call is needed
 const mockGetContextWindowInfo = vi.fn();
-vi.mock('@/lib/llm/contextWindow', () => ({
-  getContextWindowInfo: (...args: unknown[]) => mockGetContextWindowInfo(...args),
-}));
+vi.mock('@/lib/llm/contextWindow', async (importOriginal) => {
+  const original = await importOriginal<typeof import('@/lib/llm/contextWindow')>();
+  return {
+    ...original,
+    getContextWindowInfo: (...args: unknown[]) => mockGetContextWindowInfo(...args),
+  };
+});
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
