@@ -1,11 +1,11 @@
 /**
- * Economic type of a category for aggregation purposes.
- * - Income: Money received (salary, cashback, interest earned)
- * - Expense: Money spent (groceries, dining, bills)
- * - Excluded: Asset transfers that don't affect income/expense totals (transfers, investments)
+ * Economic type of a category for routing and aggregation.
+ * Each type maps directly to a routing bucket — no separate override needed.
  */
 export enum CategoryType {
   Income = "income",
   Expense = "expense",
+  DebtPayment = "debt",
+  Investment = "investment",
   Excluded = "excluded",
 }

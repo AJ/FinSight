@@ -4,7 +4,7 @@
 
 import { Currency } from '@/types';
 import { Transaction, TransactionSubType } from '@/models/Transaction';
-import { CCVerificationReport } from '@/lib/verification/verificationEngine';
+import { VerificationReport } from '@/lib/verification/verificationEngine';
 
 // Statement type enumeration
 export type StatementType = 'bank' | 'credit_card';
@@ -61,8 +61,8 @@ export interface CreditCardStatement {
     expiringNext?: number;
     expiringNextDate?: Date;
   };
-  // Verification report (Approach B + C)
-  verificationReport?: CCVerificationReport;
+  // Unified verification report.
+  verificationReport?: VerificationReport;
 }
 
 // Extension fields for Transaction interface (to be merged)

@@ -20,6 +20,7 @@ export class Category {
     public readonly icon?: string,
     public readonly color?: string,
     public readonly group?: CategoryGroup,
+    public readonly guidance?: string,
   ) {}
 
   get isIncome(): boolean {
@@ -30,6 +31,12 @@ export class Category {
   }
   get isExcluded(): boolean {
     return this.type === CategoryType.Excluded;
+  }
+  get isDebtPayment(): boolean {
+    return this.type === CategoryType.DebtPayment;
+  }
+  get isInvestment(): boolean {
+    return this.type === CategoryType.Investment;
   }
 
   static register(category: Category): void {

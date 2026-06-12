@@ -58,12 +58,12 @@ describe('Transaction.fromExtracted', () => {
     expect(txn.category.id).toBe('other');
   });
 
-  it('maps payment subType to bill_payment', () => {
+  it('maps payment subType to debt_payment', () => {
     const txn = Transaction.fromExtracted({
       date: '2024-01-15', description: 'Test', amount: 100, type: 'debit',
       balance: null, localCurrency: 'INR', transactionSubType: 'payment', confidence: 0.9,
     }, inrCurrency, SourceType.Bank);
-    expect(txn.transactionSubType).toBe('bill_payment');
+    expect(txn.transactionSubType).toBe('debt_payment');
   });
 
   it('preserves other subtypes', () => {
@@ -449,10 +449,10 @@ describe('TRANSACTION_SUB_TYPES', () => {
 
   it('contains expected sub-types', () => {
     expect(TRANSACTION_SUB_TYPES).toContain('purchase');
-    expect(TRANSACTION_SUB_TYPES).toContain('bill_payment');
+    expect(TRANSACTION_SUB_TYPES).toContain('debt_payment');
     expect(TRANSACTION_SUB_TYPES).toContain('refund');
     expect(TRANSACTION_SUB_TYPES).toContain('fee');
-    expect(TRANSACTION_SUB_TYPES).toContain('transfer_in');
-    expect(TRANSACTION_SUB_TYPES).toContain('transfer_out');
+    expect(TRANSACTION_SUB_TYPES).toContain('transfer');
+    expect(TRANSACTION_SUB_TYPES).toContain('rewards');
   });
 });

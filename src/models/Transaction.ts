@@ -9,15 +9,38 @@ import { Currency } from '@/types';
 import { ExtractedTransaction } from '@/types/extractedTransaction';
 import { getCurrencyByCode } from '@/lib/currencyFormatter';
 
-// All possible transaction sub-types (for LLM prompts and validation)
+// Consolidated transaction sub-types (11 values)
+// Merges: bill_payment→debt_payment, deposit→transfer, transfer_in/transfer_out→transfer,
+// cashback→rewards, reversal/reimbursement→refund, debt→debt_payment
 export const TRANSACTION_SUB_TYPES = [
-  'purchase', 'bill_payment', 'refund', 'interest', 'fee',
-  'deposit', 'transfer_in', 'transfer_out',
-  'cashback', 'rewards', 'withdrawal',
-  'charge', 'adjustment', 'reversal'
+  'purchase', 'fee', 'charge', 'refund', 'rewards',
+  'interest', 'debt_payment', 'investment', 'withdrawal',
+  'adjustment', 'transfer',
 ] as const;
 
 export type TransactionSubType = typeof TRANSACTION_SUB_TYPES[number];
+
+// SubTypes valid for each transaction direction (derived from routing table)
+export const DEBIT_SUB_TYPES: readonly TransactionSubType[] = [
+  'purchase', 'fee', 'charge', 'withdrawal', 'interest',
+  'investment', 'debt_payment', 'transfer', 'adjustment',
+];
+
+export const CREDIT_SUB_TYPES: readonly TransactionSubType[] = [
+  'interest', 'rewards', 'refund', 'debt_payment', 'transfer', 'adjustment',
+];
+
+const EXTRACTED_SUBTYPE_MAP: Record<string, TransactionSubType> = {
+  payment: 'debt_payment',
+  bill_payment: 'debt_payment',
+  deposit: 'transfer',
+  transfer_in: 'transfer',
+  transfer_out: 'transfer',
+  cashback: 'rewards',
+  reversal: 'refund',
+  reimbursement: 'refund',
+  debt: 'debt_payment',
+};
 
 export function formatSubType(subType: string): string {
   return subType.charAt(0).toUpperCase() + subType.slice(1).replace(/_/g, " ");
@@ -59,6 +82,7 @@ export interface TransactionJSON {
   llmConfidence?: number;           // LLM's self-reported confidence (0.0-1.0)
   verificationConfidence?: number;  // Our verification confidence (0.0-1.0)
   sourceFileHash?: string;          // SHA-256 hash of the source file for duplicate detection
+  isSuspense?: boolean;             // Staging-only: flagged during review for ambiguous transfers
 }
 
 /**
@@ -102,6 +126,8 @@ export class Transaction {
     public readonly verificationConfidence?: number,  // Our verification confidence (0.0-1.0)
     // Source file hash for duplicate detection
     public readonly sourceFileHash?: string,
+    // Staging-only: flagged during review for ambiguous transfers (never persisted to store)
+    public isSuspense?: boolean,
   ) {}
 
   // Direction getters (from TransactionType)
@@ -121,6 +147,12 @@ export class Transaction {
   }
   get isExcluded(): boolean {
     return this.category.isExcluded;
+  }
+  get isDebtPayment(): boolean {
+    return this.category?.isDebtPayment ?? false;
+  }
+  get isInvestment(): boolean {
+    return this.category?.isInvestment ?? false;
   }
 
   // Signed amount for calculations (negative for debits)
@@ -161,6 +193,7 @@ export class Transaction {
       llmConfidence: this.llmConfidence,
       verificationConfidence: this.verificationConfidence,
       sourceFileHash: this.sourceFileHash,
+      isSuspense: this.isSuspense,
     };
   }
 
@@ -208,6 +241,7 @@ export class Transaction {
       json.llmConfidence,
       json.verificationConfidence,
       json.sourceFileHash,
+      json.isSuspense,
     );
   }   
   /**
@@ -259,9 +293,9 @@ export class Transaction {
         undefined, // anomalyTypes
         undefined, // anomalyDetails
         undefined, // anomalyDismissed
-        (extracted.transactionSubType === 'payment'
-          ? 'bill_payment'
-          : extracted.transactionSubType) as TransactionSubType | undefined, // transactionSubType
+        (extracted.transactionSubType
+          ? (EXTRACTED_SUBTYPE_MAP[extracted.transactionSubType] ?? extracted.transactionSubType)
+          : undefined) as TransactionSubType | undefined, // transactionSubType
         undefined, // suggestedCategory
         extracted.confidence, // llmConfidence
         undefined // verificationConfidence
