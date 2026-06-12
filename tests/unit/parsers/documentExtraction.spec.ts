@@ -230,7 +230,7 @@ describe('documentExtraction password helpers', () => {
       isPasswordError({ name: 'PasswordException', code: PASSWORD_REASON.NEED_PASSWORD }),
     ).toBe(true);
     expect(isPasswordError({ message: 'PDF requires a password' })).toBe(true);
-    expect(isPasswordError({ code: PASSWORD_REASON.INCORRECT_PASSWORD })).toBe(true);
+    expect(isPasswordError(new PDFPasswordError('test', PASSWORD_REASON.INCORRECT_PASSWORD))).toBe(true);
   });
 
   it('non-password errors are rejected', () => {
@@ -288,15 +288,15 @@ describe('extractTextFromPDF', () => {
     expect(accountLine).toBeDefined();
   });
 
-  it('inserts tab separators when column gap exceeds threshold', async () => {
+  it('separates columns with double-pipe when headers are detected', async () => {
     const { extractTextFromPDF } = await import('@/lib/parsers/documentExtraction');
     setupPdfMock(noisyPdfPages);
 
     const text = await extractTextFromPDF(makePdfFile());
 
-    // Transaction rows have Date at x=40, Description at x=120, Amount at x=340+
-    // The gap between Description end and next column should trigger tab insertion
-    expect(text).toContain('\t');
+    // Header row (Date, Description, Debit, Credit, Balance) triggers column detection
+    // All lines use column-based formatting with || separator
+    expect(text).toContain('||');
   });
 
   it('filters out empty and whitespace-only text items', async () => {
@@ -372,8 +372,8 @@ describe('extractTextFromPDF', () => {
 
     expect(text).toContain('Single Page Content');
     expect(text).toContain('More Text');
-    // Single page should have exactly one page break
-    expect(text.split('--- PAGE BREAK ---').length).toBe(2);
+    // Single-page PDFs have no page break markers
+    expect(text).not.toContain('--- PAGE BREAK ---');
   });
 
   it('handles PDF with no text items on a page', async () => {
@@ -384,7 +384,8 @@ describe('extractTextFromPDF', () => {
 
     const text = await extractTextFromPDF(makePdfFile());
 
-    expect(text.trim()).toBe('--- PAGE BREAK ---');
+    // No text items → empty output (page breaks are only between content pages)
+    expect(text).toBe('');
   });
 });
 
