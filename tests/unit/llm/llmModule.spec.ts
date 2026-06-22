@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 
-import { getClient, getDefaultUrl, DEFAULT_URLS } from '@/lib/llm/index';
+import { getClient, getDefaultUrl, PROVIDERS } from '@/lib/llm/index';
 
 describe('getDefaultUrl', () => {
   it('returns correct URL for ollama', () => {
@@ -44,9 +44,9 @@ describe('getClient', () => {
   });
 });
 
-describe('DEFAULT_URLS', () => {
-  it('has entries for both providers', () => {
-    expect(DEFAULT_URLS.ollama).toBeTruthy();
-    expect(DEFAULT_URLS.lmstudio).toBeTruthy();
+describe('PROVIDERS default URLs', () => {
+  it('has a default URL for both providers', () => {
+    expect(PROVIDERS.ollama.defaultUrl).toBeTruthy();
+    expect(PROVIDERS.lmstudio.defaultUrl).toBeTruthy();
   });
 });

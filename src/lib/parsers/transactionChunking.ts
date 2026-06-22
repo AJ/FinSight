@@ -1,20 +1,22 @@
 import type { ExtractedTransaction } from '@/types/extractedTransaction';
 import { debugLog } from '@/lib/utils/debug';
+import { CHARS_PER_TOKEN, calculateMaxItems } from '@/lib/llm/contextWindow';
 
 const CHUNK_TRIGGER_CHAR_THRESHOLD = 12000;
 const CHUNK_TRIGGER_LINE_THRESHOLD = 250;
 const CHUNK_TARGET_LINE_COUNT = 180;
 const CHUNK_OVERLAP_LINE_COUNT = 12;
 
-// Dynamic sizing constants — used when contextWindowTokens is provided
-// PROMPT_OVERHEAD_TOKENS: covers system prompt + transactions template instructions.
-// Measured ~2500 for cc_transactions (worst case) via token budget instrumentation.
-const PROMPT_OVERHEAD_TOKENS = 2500;
-const CHUNK_SIZE_DIVISOR = 2.5;
-// CHARS_PER_TOKEN: measured ~2.36 for bank statement text (qwen3-4b tokenizer).
-// Using 2.3 for slight conservative overestimate of token count.
-const CHARS_PER_TOKEN = 2.3;
+// Linear-coupled sizing (spec §6) — the "item" is a line: each input line yields input tokens
+// (its chars) and output tokens (the extracted JSON it produces). Per-line estimates are
+// starting values (spec §13) — calibrate live.
 const AVG_CHARS_PER_LINE = 55;
+const INPUT_TOKENS_PER_LINE = AVG_CHARS_PER_LINE / CHARS_PER_TOKEN; // ≈ 24
+const OUTPUT_TOKENS_PER_LINE = 5; // extracted-JSON tokens per input line (~15/txn ÷ ~3 lines/txn)
+// Fixed (non-variable) input for a transactions chunk: the system prompt + transactions
+// template instructions, measured ~2500 tokens for cc_transactions via token-budget
+// instrumentation. Passed to calculateMaxItems as the F in i + o ≤ C.
+const TRANSACTIONS_PROMPT_OVERHEAD_TOKENS = 2500;
 
 export interface TransactionChunkPlan {
   chunkingUsed: boolean;
@@ -66,12 +68,16 @@ export function createTransactionChunkPlan(normalizedText: string, contextWindow
   let targetLineCount: number;
 
   if (contextWindowTokens) {
-    const budgetTokens = Math.max(
-      Math.floor((contextWindowTokens - PROMPT_OVERHEAD_TOKENS) / CHUNK_SIZE_DIVISOR),
-      500,
-    );
-    const budgetChars = Math.floor(budgetTokens * CHARS_PER_TOKEN);
-    const budgetLines = Math.floor(budgetChars / AVG_CHARS_PER_LINE);
+    // Linear-coupled sizing (spec §6): each line adds input (its chars) and output (the
+    // extracted JSON it yields). Max lines that fit, given the measured prompt overhead.
+    const maxLines = calculateMaxItems(
+      contextWindowTokens,
+      TRANSACTIONS_PROMPT_OVERHEAD_TOKENS,
+      INPUT_TOKENS_PER_LINE,
+      OUTPUT_TOKENS_PER_LINE,
+    ) ?? 0;
+    const budgetLines = Math.max(maxLines, 1);
+    const budgetChars = Math.floor(budgetLines * AVG_CHARS_PER_LINE);
     charThreshold = budgetChars;
     lineThreshold = budgetLines;
     targetLineCount = budgetLines;

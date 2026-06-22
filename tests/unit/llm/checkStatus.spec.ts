@@ -10,9 +10,9 @@ vi.stubGlobal('fetch', mockFetch);
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
 function ollamaConnectedSequence(models: Array<{ name: string }> = []) {
-  mockFetch
-    .mockResolvedValueOnce({ ok: true, status: 200 }) // root URL check
-    .mockResolvedValueOnce({ ok: true, status: 200, json: () => Promise.resolve({ models }) }); // /api/tags
+  // checkStatus hits /api/tags for connectivity, then listModels hits /api/tags again.
+  const tags = { ok: true, status: 200, json: () => Promise.resolve({ models }) };
+  mockFetch.mockResolvedValueOnce(tags).mockResolvedValueOnce(tags);
 }
 
 function lmstudioConnectedSequence(models: Array<{ id: string }> = []) {
@@ -44,9 +44,9 @@ describe('checkLLMStatus', () => {
     const result = await checkLLMStatus();
 
     const settings = useSettingsStore.getState();
-    // Root URL check uses the store's server URL
+    // checkStatus hits /api/tags (semantic endpoint) on the store's server URL.
     expect(mockFetch).toHaveBeenCalledWith(
-      settings.llmServerUrl,
+      `${settings.llmServerUrl}/api/tags`,
       expect.objectContaining({ cache: 'no-store' }),
     );
     expect(result.connected).toBe(true);
@@ -57,9 +57,9 @@ describe('checkLLMStatus', () => {
 
     await checkLLMStatus('http://custom:9999', 'ollama');
 
-    // Root URL check uses the provided URL
+    // checkStatus hits /api/tags on the provided URL.
     expect(mockFetch).toHaveBeenCalledWith(
-      'http://custom:9999',
+      'http://custom:9999/api/tags',
       expect.objectContaining({ cache: 'no-store' }),
     );
   });

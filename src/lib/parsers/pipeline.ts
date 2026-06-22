@@ -17,6 +17,13 @@ import { detectStatementType } from './typeDetection';
 import { buildSummaryPrompt } from './extractSummary';
 import { buildTransactionsPrompt } from './extractTransactions';
 import { buildRewardsPrompt } from './extractRewards';
+import {
+  CC_SUMMARY_SCHEMA,
+  CC_REWARDS_SCHEMA,
+  CC_TRANSACTIONS_SCHEMA,
+  BANK_SUMMARY_SCHEMA,
+  BANK_TRANSACTIONS_SCHEMA,
+} from './prompts';
 import type { CCSummary, BankSummary, Summary } from './extractSummary';
 import type { TransactionsOutput } from './extractTransactions';
 import type { RewardsOutput } from './extractRewards';
@@ -139,6 +146,8 @@ async function processCreditCard(
       maxRetries: MAX_RETRIES,
       stage: 'cc_summary',
       contextWindowTokens,
+      responseSchema: CC_SUMMARY_SCHEMA,
+      schemaName: 'cc_summary',
       signal: options.signal,
       llmConfig: options.llmConfig,
       onValidationFailure: (parsed) => {
@@ -156,7 +165,10 @@ async function processCreditCard(
   );
 
   if (!summaryResult.success) {
-    warnings.push(`Summary extraction had issues: ${summaryResult.errors.join(', ')}`);
+    // Summary failure is a hard error (spec §9): balances are essential — verification
+    // has no anchor without them — so a failed summary (overflow or validation) fails
+    // the import rather than silently producing a statement with empty balances.
+    errors.push(`Summary extraction failed: ${summaryResult.errors.join(', ')}`);
   }
 
   const transactionsResult = await runTransactionExtraction(
@@ -185,6 +197,8 @@ async function processCreditCard(
           maxRetries: MAX_RETRIES,
           stage: 'cc_rewards',
           contextWindowTokens,
+          responseSchema: CC_REWARDS_SCHEMA,
+          schemaName: 'cc_rewards',
           signal: options.signal,
           llmConfig: options.llmConfig,
         },
@@ -192,6 +206,8 @@ async function processCreditCard(
     : { success: true, data: null, errors: [], warnings: [], attempts: 0 };
 
   if (!rewardsResult.success) {
+    // Rewards are non-essential — a failure (overflow or validation) stays a soft
+    // warning and the import continues with null rewards (spec §9).
     warnings.push(`Rewards extraction had issues: ${rewardsResult.errors.join(', ')}`);
   }
 
@@ -243,6 +259,8 @@ async function processBank(
       maxRetries: MAX_RETRIES,
       stage: 'bank_summary',
       contextWindowTokens,
+      responseSchema: BANK_SUMMARY_SCHEMA,
+      schemaName: 'bank_summary',
       signal: options.signal,
       llmConfig: options.llmConfig,
       onValidationFailure: (parsed) => {
@@ -257,7 +275,8 @@ async function processBank(
   );
 
   if (!summaryResult.success) {
-    warnings.push(`Summary extraction had issues: ${summaryResult.errors.join(', ')}`);
+    // Summary failure is a hard error (spec §9) — see processCreditCard for rationale.
+    errors.push(`Summary extraction failed: ${summaryResult.errors.join(', ')}`);
   }
 
   const transactionsResult = await runTransactionExtraction(
@@ -315,6 +334,8 @@ async function runTransactionExtraction(
   contextWindowTokens?: number,
 ) {
   const stage = statementType === 'credit_card' ? 'cc_transactions' : 'bank_transactions';
+  const responseSchema = statementType === 'credit_card' ? CC_TRANSACTIONS_SCHEMA : BANK_TRANSACTIONS_SCHEMA;
+  const schemaName = stage;
 
   const chunkPlan = createTransactionChunkPlan(normalizedText, contextWindowTokens);
 
@@ -328,6 +349,8 @@ async function runTransactionExtraction(
         maxRetries: MAX_RETRIES,
         stage,
         contextWindowTokens,
+        responseSchema,
+        schemaName,
         signal,
         llmConfig,
         onValidationFailure: (parsed) => {
@@ -354,6 +377,7 @@ async function runTransactionExtraction(
   const transactionErrors: string[] = [];
   let totalAttempts = 0;
   let successfulChunks = 0;
+  let contextOverflow = false;
 
   for (const chunk of chunkPlan.chunks) {
     const transactionsPrompt = buildTransactionsPrompt(chunk.text, statementType, bankName);
@@ -365,6 +389,8 @@ async function runTransactionExtraction(
         maxRetries: MAX_RETRIES,
         stage,
         contextWindowTokens,
+        responseSchema,
+        schemaName,
         signal,
         llmConfig,
         onValidationFailure: (parsed) => {
@@ -403,6 +429,14 @@ async function runTransactionExtraction(
 
     if (chunkResult.warnings.length > 0) {
       transactionWarnings.push(`Chunk ${chunk.index + 1}/${chunk.totalChunks}: ${chunkResult.warnings.join(', ')}`);
+    }
+
+    // Overflow propagates: every later chunk is at least as big, so it would overflow
+    // too. Record it and stop — the caller treats transaction overflow as a hard failure.
+    if (chunkResult.contextOverflow) {
+      contextOverflow = true;
+      transactionErrors.push(`Chunk ${chunk.index + 1}/${chunk.totalChunks} overflowed the context window`);
+      break;
     }
   }
 
@@ -446,11 +480,12 @@ async function runTransactionExtraction(
   }
 
   return {
-    success: hasUsableData || mergedErrors.length === 0,
+    success: !contextOverflow && (hasUsableData || mergedErrors.length === 0),
     data: mergedValidation.data,
     errors: mergedErrors,
     warnings: mergedWarnings,
     attempts: totalAttempts,
+    contextOverflow,
     debugInfo: {
       chunkingUsed: true,
       chunkTriggerReason: chunkPlan.chunkTriggerReason,

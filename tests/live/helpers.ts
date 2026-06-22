@@ -1,6 +1,28 @@
 import * as fs from 'fs';
 import * as path from 'path';
 
+// Load .env.test.live if present (manual parse — no dotenv dependency). Mirrors the pattern
+// in tokenBudget.spec.ts so any live test using these helpers runs with `npm run test:live`
+// without requiring the caller to export env vars in their shell. Already-set env vars win.
+try {
+  const envPath = path.resolve(process.cwd(), '.env.test.live');
+  if (fs.existsSync(envPath)) {
+    for (const line of fs.readFileSync(envPath, 'utf-8').split('\n')) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith('#')) continue;
+      const eq = trimmed.indexOf('=');
+      if (eq < 0) continue;
+      const key = trimmed.slice(0, eq).trim();
+      const val = trimmed.slice(eq + 1).trim();
+      if (key && process.env[key] === undefined) {
+        process.env[key] = val;
+      }
+    }
+  }
+} catch {
+  // No .env.test.live or unreadable — fall through to process.env only.
+}
+
 const LIVE_LLM_URL = process.env.LIVE_LLM_URL;
 const LIVE_LLM_MODEL = process.env.LIVE_LLM_MODEL || 'llama3';
 

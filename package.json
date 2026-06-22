@@ -10,6 +10,7 @@
     "test:unit": "vitest run",
     "test:unit:watch": "vitest",
     "test:unit:coverage": "vitest run --coverage",
+    "test:live": "vitest run --config vitest.config.live.ts",
     "test:integration": "npx playwright test tests/integration/",
     "test:e2e": "npx playwright test tests/e2e/",
     "test:all": "npx playwright test && vitest run",

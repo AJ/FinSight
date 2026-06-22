@@ -6,8 +6,14 @@
  */
 
 import { TRANSACTION_SUB_TYPES } from '@/models/Transaction';
+import type { JSONSchema } from '@/lib/llm/types';
 
-const SUBTYPE_ENUM = TRANSACTION_SUB_TYPES.map(t => `"${t}"`).join(' | ');
+const SUBTYPE_ENUM = TRANSACTION_SUB_TYPES.map((t) => `"${t}"`).join(' | ');
+
+// Nullable helpers used by the co-located schema constants below (kept as documentation;
+// not sent on the wire — see the schema-enforcement RCA).
+const nullableString = (): JSONSchema => ({ type: ['string', 'null'] });
+const nullableNumber = (): JSONSchema => ({ type: ['number', 'null'] });
 
 /* ── Type Detection Prompt ────────────────────────────────── */
 
@@ -804,3 +810,146 @@ RULE 10 — REASONING (REQUIRED)
 --------------------------------
 END
 --------------------------------`;
+
+/* ── Structured-output schemas (co-located with their prompts) ───────────────
+ * Permissive JSON Schemas sent on the wire for grammar-constrained decoding
+ * (spec §5/§6). additionalProperties: true; only always-present fields are
+ * `required`. The dormant subtype prose above is intentionally NOT restored
+ * (spec §8.1) — the transactionSubType enum below enforces the allowed set.
+ */
+
+export const TYPE_DETECTION_SCHEMA: JSONSchema = {
+  type: 'object',
+  properties: {
+    type: { type: 'string', enum: ['bank', 'credit_card', 'unknown'] },
+    confidence: { type: 'number' },
+    reason: { type: 'string' },
+    bankName: { type: 'string' },
+  },
+  required: ['type', 'confidence'],
+  additionalProperties: true,
+};
+
+export const CC_SUMMARY_SCHEMA: JSONSchema = {
+  type: 'object',
+  properties: {
+    previousBalanceCandidates: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: { label: { type: 'string' }, value: { type: 'number' } },
+        required: ['label', 'value'],
+        additionalProperties: true,
+      },
+    },
+    cardLastFour: nullableString(), cardIssuer: nullableString(), cardHolder: nullableString(),
+    statementDate: nullableString(), statementPeriodStart: nullableString(), statementPeriodEnd: nullableString(),
+    paymentDueDate: nullableString(),
+    totalDue: nullableNumber(), minimumDue: nullableNumber(), creditLimit: nullableNumber(),
+    availableCredit: nullableNumber(), previousBalance: nullableNumber(), paymentsReceived: nullableNumber(),
+    purchasesAndCharges: nullableNumber(), interestCharged: nullableNumber(), lateFee: nullableNumber(),
+    cashbackEarned: nullableNumber(),
+  },
+  required: ['previousBalanceCandidates'],
+  additionalProperties: true,
+};
+
+const transactionBase: Record<string, JSONSchema> = {
+  date: { type: 'string' },
+  description: { type: 'string' },
+  amount: { type: 'number' },
+  reasoning: { type: 'string' },
+  type: { type: 'string', enum: ['debit', 'credit'] },
+  transactionSubType: { type: 'string', enum: [...TRANSACTION_SUB_TYPES] },
+  confidence: { type: 'number' },
+};
+
+const debugSchema: JSONSchema = {
+  type: 'object',
+  properties: {
+    totalCount: { type: 'number' },
+    droppedTransactions: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: { reason: { type: 'string' }, rawText: { type: 'string' } },
+        required: ['reason', 'rawText'],
+        additionalProperties: true,
+      },
+    },
+  },
+  additionalProperties: true,
+};
+
+export const CC_TRANSACTIONS_SCHEMA: JSONSchema = {
+  type: 'object',
+  properties: {
+    transactions: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          ...transactionBase,
+          localCurrency: { type: 'string' },
+          isInternationalTransaction: { type: 'boolean' },
+          originalCurrency: { type: 'string' },
+          originalAmount: { type: 'number' },
+        },
+        required: ['date', 'description', 'amount', 'type'],
+        additionalProperties: true,
+      },
+    },
+    _debug: debugSchema,
+  },
+  required: ['transactions'],
+  additionalProperties: true,
+};
+
+export const BANK_TRANSACTIONS_SCHEMA: JSONSchema = {
+  type: 'object',
+  properties: {
+    transactions: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          ...transactionBase,
+          balance: { type: ['number', 'null'] },
+        },
+        required: ['date', 'description', 'amount', 'type'],
+        additionalProperties: true,
+      },
+    },
+    _debug: debugSchema,
+  },
+  required: ['transactions'],
+  additionalProperties: true,
+};
+
+export const CC_REWARDS_SCHEMA: JSONSchema = {
+  type: 'object',
+  properties: {
+    cashback: nullableNumber(),
+    rewardPoints: {
+      type: ['object', 'null'],
+      properties: {
+        opening: nullableNumber(), earned: nullableNumber(),
+        redeemed: nullableNumber(), closing: nullableNumber(),
+      },
+      additionalProperties: true,
+    },
+  },
+  additionalProperties: true,
+};
+
+export const BANK_SUMMARY_SCHEMA: JSONSchema = {
+  type: 'object',
+  properties: {
+    statementDate: nullableString(), statementPeriodStart: nullableString(), statementPeriodEnd: nullableString(),
+    accountNumber: nullableString(), accountHolderName: nullableString(), bankName: nullableString(),
+    accountType: nullableString(), openingBalance: nullableNumber(), closingBalance: nullableNumber(),
+  },
+  required: ['statementDate', 'statementPeriodStart', 'statementPeriodEnd', 'accountNumber',
+    'accountHolderName', 'bankName', 'accountType', 'openingBalance', 'closingBalance'],
+  additionalProperties: true,
+};

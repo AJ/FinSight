@@ -1,9 +1,11 @@
 import { getClient } from '@/lib/llm/index';
+import { LLMError } from '@/lib/llm/types';
 import type { LLMProvider } from '@/lib/llm/types';
-import { getContextWindowInfo } from '@/lib/llm/contextWindow';
+import { getContextWindowInfo, calculateMaxOutputTokens, overflowKind } from '@/lib/llm/contextWindow';
+import { EXTRACTION_SYSTEM_PROMPT } from '@/lib/llm/prompts';
 import type { Currency } from '@/types';
 import type { Insight, InsightType, InsightSeverity, TransactionAnalytics } from './types';
-import { buildInsightsPrompt, parseInsightsResponse } from './prompts';
+import { buildInsightsPrompt, parseInsightsResponse, INSIGHTS_SCHEMA } from './prompts';
 
 const VALID_INSIGHT_TYPES = new Set<string>([
   'category_trend', 'day_pattern', 'merchant_insight',
@@ -44,18 +46,30 @@ export async function generateInsights(options: GenerateInsightsOptions): Promis
     model,
   });
 
-  const estimatedPromptTokens = Math.ceil(prompt.length / 4);
-  // Insights output should be concise — cap at 2000 tokens even though the
-  // pipeline deliberately omits maxTokens to let the server use remaining context.
-  const reserveTokens = 2000;
-  const maxTokens = contextInfo.contextLength
-    ? Math.min(reserveTokens, contextInfo.contextLength - estimatedPromptTokens)
-    : undefined;
+  // Unified context-aware budget on the full input actually sent (system prompt + insights
+  // prompt). The 2000 cap preserves the "insights should be concise" design goal — the model
+  // rarely needs more. On tight budgets it produces fewer insights (graceful degradation).
+  const computedMaxTokens = calculateMaxOutputTokens(
+    contextInfo.contextLength,
+    `${EXTRACTION_SYSTEM_PROMPT}\n\n${prompt}`,
+  );
+  if (computedMaxTokens === 0) {
+    throw new LLMError(
+      "Insights prompt exceeds the model's context window.",
+      overflowKind(contextInfo.contextLength),
+    );
+  }
+  const maxOutputTokens = computedMaxTokens ? Math.min(2000, computedMaxTokens) : undefined;
 
   const response = await client.generate(baseUrl, model, prompt, {
     temperature: 0.05,
     stage: 'insights',
-    maxTokens: maxTokens && maxTokens > 0 ? maxTokens : undefined,
+    maxOutputTokens,
+    contextWindow: contextInfo.contextLength,
+    responseFormat: 'json',
+    responseSchema: INSIGHTS_SCHEMA,
+    schemaName: 'insights',
+    systemPrompt: EXTRACTION_SYSTEM_PROMPT,
   });
 
   const parsed = parseInsightsResponse(response);

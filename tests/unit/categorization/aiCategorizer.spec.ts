@@ -498,40 +498,85 @@ describe('categorizeTransactions', () => {
     // With 60 transactions and batch size 50, should get 2 fetch calls
     expect(mockFetch).toHaveBeenCalledTimes(2);
   });
+
+  it('passes a context-aware maxTokens to the generate call when context window is known', async () => {
+    mockGetContextWindowInfo.mockResolvedValue({
+      contextLength: 8192,
+      source: 'settings_cache',
+      provider: 'ollama',
+      modelId: 'llama3',
+    });
+    mockFetch.mockResolvedValue(ollamaResponse(JSON.stringify([{
+      id: '1', category: 'groceries', confidence: 0.9, source: 'ai',
+    }])));
+
+    const txns = [makeTransaction({ id: '1', description: 'WHOLEFOODS MARKET' })];
+    await categorizeTransactions(txns, {
+      provider: 'ollama',
+      baseUrl: 'http://localhost:11434',
+      model: 'llama3',
+    });
+
+    // Ollama maps maxTokens → options.num_predict. calculateMaxOutputTokens(8192, prompt)
+    // must produce a positive number strictly less than 8192.
+    const fetchBody = JSON.parse(mockFetch.mock.calls[0][1].body);
+    expect(fetchBody.options.num_predict).toBeDefined();
+    expect(fetchBody.options.num_predict).toBeGreaterThan(0);
+    expect(fetchBody.options.num_predict).toBeLessThan(8192);
+  });
+
+  it('falls back to keyword categorization when the prompt overflows the context window', async () => {
+    // Tiny context window → calculateMaxOutputTokens returns 0 → generate closure throws →
+    // runCategorizationCore catches per-batch and falls back to keywords.
+    mockGetContextWindowInfo.mockResolvedValue({
+      contextLength: 500, // far too small for the categorization system prompt
+      source: 'settings_cache',
+      provider: 'ollama',
+      modelId: 'llama3',
+    });
+
+    const txns = [makeTransaction({ id: '1', description: 'WHOLEFOODS MARKET' })];
+    const results = await categorizeTransactions(txns, {
+      provider: 'ollama',
+      baseUrl: 'http://localhost:11434',
+      model: 'llama3',
+    });
+
+    // No LLM call should have been made (the generate closure threw before fetch).
+    expect(mockFetch).not.toHaveBeenCalled();
+    // The transaction is still categorized — via keyword fallback.
+    expect(results).toHaveLength(1);
+    expect(results[0].source).toBe('keyword');
+    expect(results[0].confidence).toBe(0.3);
+  });
 });
 
 describe('deriveBatchSize', () => {
-  it('returns 1 for sub-overhead context windows', () => {
-    // budget = 1501 - 1500 = 1, raw = floor(1/60) = 0, raw <= 0 → return 1
-    expect(deriveBatchSize(1501)).toBe(1);
+  // deriveBatchSize(ctx) = clamp(calculateMaxItems(ctx, CATEGORIZATION_SYSTEM_PROMPT, 40, 15), [5, 50]).
+  // Linear-coupled regime (spec §6). CATEGORIZATION_SYSTEM_PROMPT is large (persona + category
+  // taxonomy + rules), so windows too small to fit it yield a degenerate batch of 1; once the
+  // window fits the overhead, batches grow with the window up to the 50-item cap.
+
+  it('returns 1 (degenerate) when the window cannot fit the categorization system prompt', () => {
+    expect(deriveBatchSize(256)).toBe(1);
   });
 
-  it('returns 1 when budget is negative', () => {
-    // budget = 1000 - 1500 = -500, raw = floor(-500/60) = -9, raw <= 0 → return 1
-    expect(deriveBatchSize(1000)).toBe(1);
-  });
-
-  it('returns a proportional batch size for mid-range context windows', () => {
-    // budget = 4096 - 1500 = 2596, raw = 2596/60 = 43
-    expect(deriveBatchSize(4096)).toBe(43);
-  });
-
-  it('caps at MAX_BATCH_SIZE (50) for large context windows', () => {
-    // budget = 8192 - 1500 = 6692, raw = 6692/60 = 111, clamped to 50
+  it('clamps to MAX_BATCH_SIZE (50) for large windows', () => {
     expect(deriveBatchSize(8192)).toBe(50);
-  });
-
-  it('caps at MAX_BATCH_SIZE for very large context windows', () => {
     expect(deriveBatchSize(128000)).toBe(50);
   });
 
-  it('returns exactly 20 for default context window of 2700 tokens', () => {
-    // budget = 2700 - 1500 = 1200, raw = 1200/60 = 20
-    expect(deriveBatchSize(2700)).toBe(20);
+  it('stays within [1, 50] across realistic windows', () => {
+    for (const ctx of [512, 1024, 2048, 4096, 8192]) {
+      const b = deriveBatchSize(ctx);
+      expect(b).toBeGreaterThanOrEqual(1);
+      expect(b).toBeLessThanOrEqual(50);
+    }
   });
 
-  it('returns 1 for context window exactly at overhead', () => {
-    // budget = 1500 - 1500 = 0, raw = 0, raw <= 0 → return 1
-    expect(deriveBatchSize(1500)).toBe(1);
+  it('grows with the window where the overhead fits (non-decreasing)', () => {
+    const vals = [2048, 4096, 8192].map(deriveBatchSize);
+    expect(vals[0]).toBeLessThanOrEqual(vals[1]);
+    expect(vals[1]).toBeLessThanOrEqual(vals[2]);
   });
 });

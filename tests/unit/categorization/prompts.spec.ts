@@ -1,9 +1,12 @@
 import { describe, it, expect } from 'vitest';
 import {
   buildCategorizationPrompt,
+  CATEGORIZATION_SYSTEM_PROMPT,
   parseCategorizationResponse,
   normalizeCategoryId,
+  CATEGORIZATION_SCHEMA,
 } from '@/lib/categorization/prompts';
+import { DEFAULT_CATEGORIES } from '@/lib/categorization/categories';
 import { SourceType } from '@/types';
 
 describe('buildCategorizationPrompt', () => {
@@ -31,12 +34,15 @@ describe('buildCategorizationPrompt', () => {
     expect(result).toContain('Bank');
   });
 
-  it('includes all category IDs in system prompt', () => {
+  it('category IDs live in the system message, not the user prompt', () => {
+    // The taxonomy moved to CATEGORIZATION_SYSTEM_PROMPT (the system message); the user
+    // prompt built here carries only the transaction batch + output-format note.
     const txns = [{ id: '1', description: 'AMAZON', amount: 1299, type: 'debit' as const }];
-    const result = buildCategorizationPrompt(txns);
-    expect(result).toContain('"groceries"');
-    expect(result).toContain('"dining"');
-    expect(result).toContain('"shopping"');
+    const userPrompt = buildCategorizationPrompt(txns);
+    expect(CATEGORIZATION_SYSTEM_PROMPT).toContain('"groceries"');
+    expect(CATEGORIZATION_SYSTEM_PROMPT).toContain('"dining"');
+    expect(CATEGORIZATION_SYSTEM_PROMPT).toContain('"shopping"');
+    expect(userPrompt).not.toContain('"groceries"');
   });
 
   it('includes sourceType in payload when present', () => {
@@ -234,5 +240,32 @@ describe('normalizeCategoryId', () => {
     // "bill payment" → "bill_payment" → exact alias match → "bills"
     const result = normalizeCategoryId('bill payment');
     expect(result).toBe('bills');
+  });
+});
+
+describe('CATEGORIZATION_SCHEMA', () => {
+  it('is an array whose items constrain category to the registry IDs', () => {
+    expect(CATEGORIZATION_SCHEMA.type).toBe('array');
+    expect(CATEGORIZATION_SCHEMA.items?.properties?.category?.enum).toEqual(
+      DEFAULT_CATEGORIES.map((c) => c.id),
+    );
+    expect(CATEGORIZATION_SCHEMA.items?.required).toEqual(['id', 'category', 'confidence']);
+    expect(CATEGORIZATION_SCHEMA.items?.additionalProperties).toBe(true);
+  });
+});
+
+describe('categorization prompt skeleton (restored)', () => {
+  it('includes the "Return ONLY the JSON array" boilerplate', () => {
+    const p = buildCategorizationPrompt([
+      { id: '1', description: 'x', amount: 1, type: 'debit' },
+    ]);
+    expect(p).toContain('Return ONLY the JSON array');
+  });
+
+  it('still carries the suspense guidance (semantic, not shape)', () => {
+    const p = buildCategorizationPrompt([
+      { id: '1', description: 'x', amount: 1, type: 'debit' },
+    ]);
+    expect(p).toContain('isSuspense');
   });
 });

@@ -7,14 +7,20 @@
 
 import { parseLLMJsonResponse } from '@/lib/utils/llm-response-parser';
 import { getClient } from '@/lib/llm/index';
-import type { LLMRuntimeConfig } from '@/lib/llm/types';
+import { LLMError } from '@/lib/llm/types';
+import type { LLMRuntimeConfig, JSONSchema } from '@/lib/llm/types';
+import { calculateMaxOutputTokens, overflowKind } from '@/lib/llm/contextWindow';
+import { EXTRACTION_SYSTEM_PROMPT } from '@/lib/llm/prompts';
 import { debugLog } from '@/lib/utils/debug';
 
 export interface RetryConfig {
   maxRetries: number;
   stage: string;
-  maxTokens?: number;
   contextWindowTokens?: number;
+  // Required: retryEngine always runs in json mode, and json mode requires a schema (the
+  // adapter guard enforces the pairing). Each stage supplies its own shape.
+  responseSchema: JSONSchema;
+  schemaName: string;
   onValidationFailure?: (parsed: unknown, errors: string[]) => void;
   signal?: AbortSignal;
   llmConfig: LLMRuntimeConfig;
@@ -27,6 +33,13 @@ export interface RetryResult<T> {
   warnings: string[];
   attempts: number;
   debugInfo?: unknown;
+  /**
+   * True when the pre-flight guard detected that the prompt (system + stage + input
+   * buffer) already meets/exceeds the model's context window. Callers use this to
+   * distinguish overflow (doomed call, no point retrying) from validation failures.
+   * Set by the retry loop when calculateMaxOutputTokens returns 0 before a call is attempted.
+   */
+  contextOverflow?: boolean;
 }
 
 export interface ValidationResult<T> {
@@ -79,10 +92,13 @@ export async function runWithRetry<T>(
   let lastParsedData: T | null = null;
   let lastValidationWarnings: string[] = [];
   let lastDebugInfo: unknown;
+  let contextOverflow = false;
+  let attemptsMade = 0;
 
   const client = getClient(config.llmConfig.provider);
 
   for (let attempt = 1; attempt <= config.maxRetries; attempt++) {
+    attemptsMade = attempt;
     try {
       const prompt = attempt === 1
         ? basePrompt.replace('{RAW_TEXT}', normalizedText)
@@ -94,11 +110,35 @@ export async function runWithRetry<T>(
         debugLog(config.stage, '--- END NORMALIZED TEXT ---');
       }
 
+      // Context-aware output budget on the FULL input actually sent (system prompt +
+      // stage prompt). Recomputed per attempt — retry prompts are larger (previous output
+      // + validation errors appended), so the budget shrinks.
+      //   undefined → context unknown, skip guard, omit maxOutputTokens
+      //   0         → full input already ≥ context window → OVERFLOW, bail
+      //   > 0       → output budget to pass as maxOutputTokens
+      const maxOutputTokens = calculateMaxOutputTokens(
+        config.contextWindowTokens,
+        `${EXTRACTION_SYSTEM_PROMPT}\n\n${prompt}`,
+      );
+      if (maxOutputTokens === 0) {
+        // Pre-flight overflow: the prompt does not fit the context window. Retrying
+        // with an even larger prompt cannot help — record a classified LLMError and bail.
+        contextOverflow = true;
+        const overflow = new LLMError(
+          `Input text exceeds the model's context window (${config.contextWindowTokens} tokens).`,
+          overflowKind(config.contextWindowTokens),
+        );
+        errors.length = 0;
+        errors.push(overflow.message);
+        debugLog(`[Retry Engine ${config.stage}] Pre-flight overflow guard triggered on attempt ${attempt}`);
+        break;
+      }
+
       const rawResponse = await client.generate(
         config.llmConfig.baseUrl,
         config.llmConfig.model,
         prompt,
-        { stage: config.stage, maxTokens: config.maxTokens, signal: config.signal },
+        { stage: config.stage, maxOutputTokens, contextWindow: config.contextWindowTokens, responseFormat: 'json', responseSchema: config.responseSchema, schemaName: config.schemaName, systemPrompt: EXTRACTION_SYSTEM_PROMPT, signal: config.signal },
       );
       lastRawOutput = rawResponse;
 
@@ -161,16 +201,12 @@ export async function runWithRetry<T>(
       if (config.signal?.aborted) {
         throw extractErr;
       }
+      // An LLMError already carries a classified kind (assigned by the adapter/surface);
+      // overflow is handled by the pre-flight guard above, not by string-matching the
+      // message (spec §7). Record the message and let the retry policy decide.
       errors.length = 0;
       const msg = extractErr instanceof Error ? extractErr.message : 'Unknown error';
-      if (msg.toLowerCase().includes('context size')) {
-        const contextHint = config.contextWindowTokens
-          ? ` The model's context window is ${config.contextWindowTokens} tokens. Consider using a model with a larger context window.`
-          : ' Consider using a model with a larger context window.';
-        errors.push(`Statement too large for model context.${contextHint}`);
-      } else {
-        errors.push(`LLM call failed: ${msg}`);
-      }
+      errors.push(`LLM call failed: ${msg}`);
     }
   }
 
@@ -179,7 +215,8 @@ export async function runWithRetry<T>(
     data: lastParsedData,
     errors,
     warnings: lastValidationWarnings,
-    attempts: config.maxRetries,
+    attempts: attemptsMade,
     debugInfo: lastDebugInfo,
+    contextOverflow,
   };
 }

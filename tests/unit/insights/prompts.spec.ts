@@ -4,6 +4,7 @@ import {
   getInsightSystemPrompt,
   buildInsightsPrompt,
   parseInsightsResponse,
+  INSIGHTS_SCHEMA,
 } from '@/lib/insights/prompts';
 import type { TransactionAnalytics } from '@/lib/insights/types';
 
@@ -212,14 +213,16 @@ Hope that helps!`;
     expect(result.insights[0].category).toBe('groceries');
   });
 
-  it('returns empty array for completely unparseable response', () => {
-    const result = parseInsightsResponse('This is not JSON at all');
-    expect(result.insights).toHaveLength(0);
+  it('throws for a completely unparseable response (surfaces to caller, spec §9)', () => {
+    expect(() => parseInsightsResponse('This is not JSON at all')).toThrow(
+      'Insights response was not valid JSON and could not be parsed.',
+    );
   });
 
-  it('returns empty array for empty string', () => {
-    const result = parseInsightsResponse('');
-    expect(result.insights).toHaveLength(0);
+  it('throws for an empty string', () => {
+    expect(() => parseInsightsResponse('')).toThrow(
+      'Insights response was not valid JSON and could not be parsed.',
+    );
   });
 
   it('normalizes invalid type to category_trend', () => {
@@ -297,10 +300,11 @@ Hope that helps!`;
     expect(result.insights[0].data).toEqual({ amount: 5000, change: -10 });
   });
 
-  it('handles response with insights not being an array', () => {
+  it('throws when insights is present but not an array (total parse failure)', () => {
     const response = JSON.stringify({ insights: 'not an array' });
-    const result = parseInsightsResponse(response);
-    expect(result.insights).toHaveLength(0);
+    expect(() => parseInsightsResponse(response)).toThrow(
+      'Insights response was not valid JSON and could not be parsed.',
+    );
   });
 
   it('handles multiple insights in one response', () => {
@@ -313,5 +317,32 @@ Hope that helps!`;
     });
     const result = parseInsightsResponse(response);
     expect(result.insights).toHaveLength(3);
+  });
+});
+
+describe('INSIGHTS_SCHEMA', () => {
+  it('requires insights array; items constrain type + severity', () => {
+    expect(INSIGHTS_SCHEMA.required).toEqual(['insights']);
+    const item = INSIGHTS_SCHEMA.properties?.insights?.items;
+    expect(item?.properties?.type?.enum).toEqual([
+      'category_trend', 'day_pattern', 'merchant_insight', 'anomaly',
+      'budget_alert', 'period_comparison', 'savings_opportunity',
+    ]);
+    expect(item?.properties?.severity?.enum).toEqual(['info', 'warning', 'positive']);
+    expect(item?.required).toEqual(['type', 'title', 'description', 'severity']);
+    expect(item?.additionalProperties).toBe(true);
+  });
+});
+
+describe('insights prompt skeleton (restored)', () => {
+  it('system prompt embeds the JSON skeleton + "Output ONLY" boilerplate', () => {
+    const p = getInsightSystemPrompt('$');
+    expect(p).toContain('Output ONLY valid JSON');
+    expect(p).toContain('{"insights":');
+  });
+
+  it('user prompt ends with the "Return ONLY the JSON object" boilerplate', () => {
+    const p = buildInsightsPrompt(makeAnalytics(), { code: 'INR', symbol: '₹', name: 'Indian Rupee' });
+    expect(p).toContain('Return ONLY the JSON object');
   });
 });

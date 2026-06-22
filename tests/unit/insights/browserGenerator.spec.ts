@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 import { generateInsights } from '@/lib/insights/browserGenerator';
+import { calculateMaxOutputTokens } from '@/lib/llm/contextWindow';
 import type { TransactionAnalytics } from '@/lib/insights/types';
 
 // Mock fetch — the only external boundary (LLM HTTP calls go through here)
@@ -231,9 +232,9 @@ describe('generateInsights', () => {
 
     const body = JSON.parse(mockFetch.mock.calls[0][1].body);
     const prompt = body.prompt as string;
-    const estimatedPromptTokens = Math.ceil(prompt.length / 4);
-    const expectedMaxTokens = Math.min(2000, 8192 - estimatedPromptTokens);
-    // Verify the exact formula: min(2000, contextLength - promptTokens)
+    // Uses the shared calculateMaxOutputTokens (system prompt + buffers subtracted),
+    // then capped at 2000 for concise insights output.
+    const expectedMaxTokens = Math.min(2000, calculateMaxOutputTokens(8192, prompt)!);
     expect(body.options.num_predict).toBe(expectedMaxTokens);
   });
 
@@ -247,7 +248,7 @@ describe('generateInsights', () => {
     expect(body.options.num_predict).toBeUndefined();
   });
 
-  it('omits maxTokens when prompt exceeds context window', async () => {
+  it('throws when prompt exceeds context window', async () => {
     mockFetch.mockResolvedValue(insightsResponse({ insights: [] }));
     mockGetContextWindowInfo.mockResolvedValue({
       contextLength: 100, // very small — prompt will exceed it
@@ -256,10 +257,11 @@ describe('generateInsights', () => {
       modelId: 'llama3',
     });
 
-    await generateInsights(baseOptions);
-
-    const body = JSON.parse(mockFetch.mock.calls[0][1].body);
-    expect(body.options.num_predict).toBeUndefined();
+    await expect(generateInsights(baseOptions)).rejects.toThrow(
+      "Insights prompt exceeds the model's context window.",
+    );
+    // No fetch should have been attempted.
+    expect(mockFetch).not.toHaveBeenCalled();
   });
 
   it('calls getContextWindowInfo with correct parameters', async () => {

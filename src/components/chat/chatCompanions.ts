@@ -3,34 +3,30 @@ export interface ChatMessageLike {
   content: string;
 }
 
-export function buildSystemPrompt(statementContext: string): string {
-  return `You are a helpful financial assistant. You have access to the user's bank statement data below. Answer questions accurately and concisely.
-
-${statementContext || 'No statement data available yet.'}
-
-Guidelines:
-- Use ONLY the provided statement context for factual answers. Do not invent or assume missing transactions, balances, merchants, categories, or dates.
-- Be concise and precise with numbers.
-- Format currency amounts properly.
-- If asked for calculations, show your work briefly.
-- If the data doesn't contain enough info, say so clearly.
-- When answering with amounts, trends, counts, or conclusions, mention the relevant transaction dates and/or transactions you used.
-- The relevant transactions section is sampled and not exhaustive. If the sampled context is not enough to support a confident answer, say that explicitly.`;
-}
-
+/**
+ * Build the chat message list: the constant chat system prompt, the recent history, and a
+ * single user message carrying the retrieved statement context plus the question (spec §10 —
+ * per-call data is user content, not system content). The system prompt itself is the
+ * `CHAT_SYSTEM_PROMPT` constant from `lib/llm/prompts`; the caller passes it in. When there
+ * is no context the user message is just the question.
+ */
 export function buildChatMessages(
   messages: ChatMessageLike[],
   historyWindow: number,
   systemPrompt: string,
+  statementContext: string,
   userText: string,
 ): { role: string; content: string }[] {
+  const userContent = statementContext
+    ? `Statement context:\n${statementContext}\n\nQuestion: ${userText}`
+    : userText;
   return [
     { role: 'system', content: systemPrompt },
     ...messages.slice(-historyWindow).map((m) => ({
       role: m.role,
       content: m.content,
     })),
-    { role: 'user', content: userText },
+    { role: 'user', content: userContent },
   ];
 }
 

@@ -1,9 +1,25 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
+// These tests exercise the on-wire schema path, which is currently disabled by the
+// ENFORCE_JSON_SCHEMA_ON_WIRE kill-switch (text mode by default). Force it on here so the
+// schema-sending code stays covered while the feature is dormant.
+vi.mock('@/lib/llm/types', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/llm/types')>();
+  return { ...actual, ENFORCE_JSON_SCHEMA_ON_WIRE: true };
+});
+
 import { ollamaAdapter } from '@/lib/llm/ollamaAdapter';
-import { isAdapterError } from '@/lib/llm/types';
+import { isLLMError } from '@/lib/llm/types';
+import type { JSONSchema } from '@/lib/llm/types';
 
 const mockFetch = vi.fn();
+
+const SAMPLE_SCHEMA: JSONSchema = {
+  type: 'object',
+  properties: { type: { type: 'string', enum: ['bank', 'credit_card'] } },
+  required: ['type'],
+  additionalProperties: true,
+};
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -19,6 +35,7 @@ afterEach(() => {
 function defaultOptions(overrides?: Record<string, unknown>) {
   return {
     temperature: 0,
+    responseFormat: 'text' as const,
     signal: new AbortController().signal,
     ...overrides,
   };
@@ -91,34 +108,60 @@ describe('ollamaAdapter.generate', () => {
     expect(init.method).toBe('POST');
 
     const body = JSON.parse(init.body);
+    // No responseFormat/contextWindow passed → no format, no num_ctx.
     expect(body).toEqual({
       model,
       prompt: 'test prompt',
       stream: false,
-      format: 'json',
       keep_alive: '10m',
       options: {
-        num_ctx: 8192,
         temperature: 0,
       },
     });
   });
 
-  it('maps maxTokens to num_predict', async () => {
+  it('emits format: <schema object> when responseFormat is json', async () => {
+    mockFetch.mockResolvedValueOnce(okResponse({ response: 'ok' }));
+
+    await ollamaAdapter.generate(baseUrl, model, 'prompt', {
+      ...defaultOptions(),
+      responseFormat: 'json',
+      responseSchema: SAMPLE_SCHEMA,
+      schemaName: 'statement_type',
+    });
+
+    const body = JSON.parse(mockFetch.mock.calls[0][1].body);
+    expect(body.format).toEqual(SAMPLE_SCHEMA);
+    expect(body.format).not.toBe('json');
+  });
+
+  it('omits format when responseFormat is text', async () => {
+    mockFetch.mockResolvedValueOnce(okResponse({ response: 'ok' }));
+
+    await ollamaAdapter.generate(baseUrl, model, 'prompt', {
+      ...defaultOptions(),
+      responseFormat: 'text',
+    });
+
+    const body = JSON.parse(mockFetch.mock.calls[0][1].body);
+    expect(body.format).toBeUndefined();
+  });
+
+  it('maps maxOutputTokens to num_predict', async () => {
     mockFetch.mockResolvedValueOnce(
       okResponse({ response: 'ok', prompt_eval_count: 1, eval_count: 1 }),
     );
 
     await ollamaAdapter.generate(baseUrl, model, 'prompt', {
       ...defaultOptions(),
-      maxTokens: 2048,
+      maxOutputTokens: 2048,
     });
 
     const body = JSON.parse(mockFetch.mock.calls[0][1].body);
     expect(body.options.num_predict).toBe(2048);
   });
 
-  it('omits num_predict when maxTokens not provided', async () => {
+  it('omits num_predict when maxOutputTokens not provided', async () => {
     mockFetch.mockResolvedValueOnce(okResponse({ response: 'ok' }));
 
     await ollamaAdapter.generate(baseUrl, model, 'prompt', defaultOptions());
@@ -127,40 +170,34 @@ describe('ollamaAdapter.generate', () => {
     expect(body.options.num_predict).toBeUndefined();
   });
 
-  it('uses num_ctx from options.extra, defaults to 8192', async () => {
+  it('sets num_ctx from contextWindow when provided', async () => {
     mockFetch.mockResolvedValueOnce(okResponse({ response: 'ok' }));
 
     await ollamaAdapter.generate(baseUrl, model, 'prompt', {
       ...defaultOptions(),
-      extra: { num_ctx: 32768 },
+      contextWindow: 32768,
     });
 
     const body = JSON.parse(mockFetch.mock.calls[0][1].body);
     expect(body.options.num_ctx).toBe(32768);
   });
 
-  it('uses default num_ctx when extra has no num_ctx', async () => {
+  it('does not default num_ctx to 8192 when contextWindow is absent', async () => {
     mockFetch.mockResolvedValueOnce(okResponse({ response: 'ok' }));
 
-    await ollamaAdapter.generate(baseUrl, model, 'prompt', {
-      ...defaultOptions(),
-      extra: {},
-    });
+    await ollamaAdapter.generate(baseUrl, model, 'prompt', defaultOptions());
 
     const body = JSON.parse(mockFetch.mock.calls[0][1].body);
-    expect(body.options.num_ctx).toBe(8192);
+    expect(body.options.num_ctx).toBeUndefined();
   });
 
-  it('passes keep_alive from options.extra, defaults to 10m', async () => {
+  it('always sends keep_alive of 10m', async () => {
     mockFetch.mockResolvedValueOnce(okResponse({ response: 'ok' }));
 
-    await ollamaAdapter.generate(baseUrl, model, 'prompt', {
-      ...defaultOptions(),
-      extra: { keep_alive: '30m' },
-    });
+    await ollamaAdapter.generate(baseUrl, model, 'prompt', defaultOptions());
 
     const body = JSON.parse(mockFetch.mock.calls[0][1].body);
-    expect(body.keep_alive).toBe('30m');
+    expect(body.keep_alive).toBe('10m');
   });
 
   it('returns usage when token fields present', async () => {
@@ -191,7 +228,7 @@ describe('ollamaAdapter.generate', () => {
     expect(result.text).toBe('');
   });
 
-  it('throws with status property on non-OK response', async () => {
+  it('throws LLMError with kind server-error on a 500', async () => {
     mockFetch.mockResolvedValueOnce(errorResponse(500, 'internal error'));
 
     try {
@@ -199,13 +236,13 @@ describe('ollamaAdapter.generate', () => {
       expect.fail('should have thrown');
     } catch (err) {
       expect(err).toBeInstanceOf(Error);
-      expect(isAdapterError(err) && err.status).toBe(500);
+      expect(isLLMError(err) && err.kind).toBe('server-error');
       expect((err as Error).message).toContain('Ollama generate error');
       expect((err as Error).message).toContain('internal error');
     }
   });
 
-  it('handles non-JSON error text by using statusText', async () => {
+  it('throws LLMError with kind model-missing on a 404', async () => {
     const response: Response = {
       ok: false,
       status: 404,
@@ -219,16 +256,16 @@ describe('ollamaAdapter.generate', () => {
       expect.fail('should have thrown');
     } catch (err) {
       expect((err as Error).message).toContain('Not Found');
-      expect(isAdapterError(err) && err.status).toBe(404);
+      expect(isLLMError(err) && err.kind).toBe('model-missing');
     }
   });
 
-  it('passes top_p from options.extra to generate body', async () => {
+  it('passes topP to generate body as top_p', async () => {
     mockFetch.mockResolvedValueOnce(okResponse({ response: 'ok' }));
 
     await ollamaAdapter.generate(baseUrl, model, 'prompt', {
       ...defaultOptions(),
-      extra: { top_p: 0.9 },
+      topP: 0.9,
     });
 
     const body = JSON.parse(mockFetch.mock.calls[0][1].body);
@@ -246,8 +283,71 @@ describe('ollamaAdapter.generate', () => {
   });
 });
 
-// ── chatStream ───────────────────────────────────────────────────────────────
+// ── generate — structured output (JSON Schema enforcement) ───────────────────
 
+describe('ollamaAdapter.generate — structured output', () => {
+  const baseUrl = 'http://localhost:11434';
+  const model = 'llama3';
+
+  it('omits format entirely for text mode', async () => {
+    mockFetch.mockResolvedValueOnce(okResponse({ response: 'ok' }));
+
+    await ollamaAdapter.generate(baseUrl, model, 'prompt', defaultOptions());
+
+    const body = JSON.parse(mockFetch.mock.calls[0][1].body);
+    expect(body.format).toBeUndefined();
+  });
+
+  it('throws when json mode has no responseSchema', async () => {
+    await expect(
+      ollamaAdapter.generate(baseUrl, model, 'p', {
+        ...defaultOptions(),
+        responseFormat: 'json',
+        schemaName: 'x',
+      }),
+    ).rejects.toThrow('responseSchema');
+    // Guard throws before any network call.
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it('throws when json mode has no schemaName', async () => {
+    await expect(
+      ollamaAdapter.generate(baseUrl, model, 'p', {
+        ...defaultOptions(),
+        responseFormat: 'json',
+        responseSchema: SAMPLE_SCHEMA,
+      }),
+    ).rejects.toThrow('schemaName');
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it('throws when text mode carries a responseSchema', async () => {
+    await expect(
+      ollamaAdapter.generate(baseUrl, model, 'p', {
+        ...defaultOptions(),
+        responseFormat: 'text',
+        responseSchema: SAMPLE_SCHEMA,
+      }),
+    ).rejects.toThrow();
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it('never emits json_object on the wire', async () => {
+    mockFetch.mockResolvedValueOnce(okResponse({ response: '{}' }));
+
+    await ollamaAdapter.generate(baseUrl, model, 'p', {
+      ...defaultOptions(),
+      responseFormat: 'json',
+      responseSchema: SAMPLE_SCHEMA,
+      schemaName: 'x',
+    });
+
+    const serialized = String(mockFetch.mock.calls[0][1].body);
+    expect(serialized).not.toContain('json_object');
+  });
+});
+
+// ── chatStream ───────────────────────────────────────────────────────────────
 describe('ollamaAdapter.chatStream', () => {
   const baseUrl = 'http://localhost:11434';
   const model = 'llama3';
@@ -286,14 +386,14 @@ describe('ollamaAdapter.chatStream', () => {
     expect(body.messages).toEqual(messages);
   });
 
-  it('uses num_ctx from options.extra', async () => {
+  it('sets num_ctx from contextWindow in chatStream', async () => {
     mockFetch.mockResolvedValueOnce(okResponse({}, ndjsonStream([
       JSON.stringify({ message: { content: '' }, done: true }),
     ])));
 
     for await (const chunk of ollamaAdapter.chatStream(baseUrl, model, messages, {
       ...defaultOptions(),
-      extra: { num_ctx: 16384 },
+      contextWindow: 16384,
     })) {
       void chunk;
     }
@@ -311,7 +411,7 @@ describe('ollamaAdapter.chatStream', () => {
     );
   });
 
-  it('attaches .status to chatStream error', async () => {
+  it('attaches a retryable kind to chatStream error', async () => {
     mockFetch.mockResolvedValueOnce(errorResponse(503, 'unavailable'));
 
     try {
@@ -319,7 +419,8 @@ describe('ollamaAdapter.chatStream', () => {
       await gen[Symbol.asyncIterator]().next();
       expect.fail('should have thrown');
     } catch (err) {
-      expect(isAdapterError(err) && err.status).toBe(503);
+      expect(isLLMError(err) && err.kind).toBe('server-error');
+      expect(isLLMError(err) && err.retryable).toBe(true);
     }
   });
 
@@ -376,30 +477,57 @@ describe('ollamaAdapter.chatStream', () => {
     expect(yielded).toEqual([false, true]);
   });
 
-  it('passes keep_alive from options.extra to chatStream body', async () => {
+  it('populates usage on the done chunk from eval counts', async () => {
+    const chunks: { usage?: { promptTokens: number; completionTokens: number } }[] = [];
+    mockFetch.mockResolvedValueOnce(okResponse({}, ndjsonStream([
+      JSON.stringify({ message: { content: 'hi' }, done: false }),
+      JSON.stringify({ message: { content: '' }, done: true, prompt_eval_count: 42, eval_count: 7 }),
+    ])));
+
+    for await (const chunk of ollamaAdapter.chatStream(baseUrl, model, messages, defaultOptions())) {
+      chunks.push({ usage: chunk.usage });
+    }
+
+    // Only the terminal (done) chunk carries usage.
+    expect(chunks[chunks.length - 1].usage).toEqual({ promptTokens: 42, completionTokens: 7 });
+  });
+
+  it('emits a synthetic terminal chunk when the stream ends without a done frame', async () => {
+    const doneFlags: boolean[] = [];
+    // Stream with content but NO done:true frame — the upstream just ends.
+    mockFetch.mockResolvedValueOnce(okResponse({}, ndjsonStream([
+      JSON.stringify({ message: { content: 'hi' }, done: false }),
+    ])));
+
+    for await (const chunk of ollamaAdapter.chatStream(baseUrl, model, messages, defaultOptions())) {
+      doneFlags.push(chunk.done);
+    }
+
+    // A terminal done:true chunk must still be emitted (bug 10).
+    expect(doneFlags[doneFlags.length - 1]).toBe(true);
+  });
+
+  it('always sends keep_alive of 10m in chatStream', async () => {
     mockFetch.mockResolvedValueOnce(okResponse({}, ndjsonStream([
       JSON.stringify({ message: { content: '' }, done: true }),
     ])));
 
-    for await (const chunk of ollamaAdapter.chatStream(baseUrl, model, messages, {
-      ...defaultOptions(),
-      extra: { keep_alive: '5m' },
-    })) {
+    for await (const chunk of ollamaAdapter.chatStream(baseUrl, model, messages, defaultOptions())) {
       void chunk;
     }
 
     const body = JSON.parse(mockFetch.mock.calls[0][1].body);
-    expect(body.keep_alive).toBe('5m');
+    expect(body.keep_alive).toBe('10m');
   });
 
-  it('passes top_p from options.extra to chatStream body', async () => {
+  it('passes topP to chatStream body as top_p', async () => {
     mockFetch.mockResolvedValueOnce(okResponse({}, ndjsonStream([
       JSON.stringify({ message: { content: '' }, done: true }),
     ])));
 
     for await (const chunk of ollamaAdapter.chatStream(baseUrl, model, messages, {
       ...defaultOptions(),
-      extra: { top_p: 0.95 },
+      topP: 0.95,
     })) {
       void chunk;
     }
@@ -408,14 +536,14 @@ describe('ollamaAdapter.chatStream', () => {
     expect(body.options.top_p).toBe(0.95);
   });
 
-  it('maps maxTokens to num_predict in chatStream', async () => {
+  it('maps maxOutputTokens to num_predict in chatStream', async () => {
     mockFetch.mockResolvedValueOnce(okResponse({}, ndjsonStream([
       JSON.stringify({ message: { content: '' }, done: true }),
     ])));
 
     for await (const chunk of ollamaAdapter.chatStream(baseUrl, model, messages, {
       ...defaultOptions(),
-      maxTokens: 800,
+      maxOutputTokens: 800,
     })) {
       void chunk;
     }
@@ -424,7 +552,7 @@ describe('ollamaAdapter.chatStream', () => {
     expect(body.options.num_predict).toBe(800);
   });
 
-  it('omits num_predict in chatStream when maxTokens not provided', async () => {
+  it('omits num_predict in chatStream when maxOutputTokens not provided', async () => {
     mockFetch.mockResolvedValueOnce(okResponse({}, ndjsonStream([
       JSON.stringify({ message: { content: '' }, done: true }),
     ])));
@@ -443,49 +571,40 @@ describe('ollamaAdapter.chatStream', () => {
 describe('ollamaAdapter.listModels', () => {
   const baseUrl = 'http://localhost:11434';
 
-  it('parses model names and enriches first 5 with context length', async () => {
-    // /api/tags
+  it('returns model names without enrichment when no selectedModel', async () => {
     const names = ['a', 'b', 'c', 'd', 'e', 'f', 'g'];
     mockFetch.mockResolvedValueOnce(
-      okResponse({
-        models: names.map((n) => ({ name: n })),
-      }),
+      okResponse({ models: names.map((n) => ({ name: n })) }),
     );
-    // /api/show for first 5 models (enriched with context length)
-    for (let i = 0; i < 5; i++) {
-      mockFetch.mockResolvedValueOnce(
-        okResponse({ parameters: `num_ctx\t${(i + 1) * 1024}` }),
-      );
-    }
 
     const result = await ollamaAdapter.listModels(baseUrl, new AbortController().signal);
 
     expect(result).toHaveLength(7);
-    // First 5 have contextLength
-    for (let i = 0; i < 5; i++) {
-      expect(result[i].id).toBe(names[i]);
-      expect(result[i].contextLength).toBe((i + 1) * 1024);
+    for (const m of result) {
+      expect(m.contextLength).toBeUndefined();
     }
-    // Remaining 2 do not
-    expect(result[5]).toEqual({ id: 'f' });
-    expect(result[6]).toEqual({ id: 'g' });
+    // No /api/show call was made — only the single /api/tags fetch.
+    expect(mockFetch).toHaveBeenCalledTimes(1);
   });
 
-  it('returns models without context length beyond first 5', async () => {
+  it('enriches the selected model on demand even past index 5', async () => {
     const names = ['m1', 'm2', 'm3', 'm4', 'm5', 'm6'];
+    // /api/tags
     mockFetch.mockResolvedValueOnce(
       okResponse({ models: names.map((n) => ({ name: n })) }),
     );
-    // /api/show for first 5
-    for (let i = 0; i < 5; i++) {
-      mockFetch.mockResolvedValueOnce(okResponse({ parameters: '' }));
-    }
+    // /api/show for the selected model (m6), only.
+    mockFetch.mockResolvedValueOnce(
+      okResponse({ parameters: 'num_ctx\t4096' }),
+    );
 
-    const result = await ollamaAdapter.listModels(baseUrl, new AbortController().signal);
+    const result = await ollamaAdapter.listModels(baseUrl, new AbortController().signal, 'm6');
 
-    expect(result).toHaveLength(6);
-    expect(result[5]).toEqual({ id: 'm6' });
-    expect(result[5].contextLength).toBeUndefined();
+    const m6 = result.find((m) => m.id === 'm6');
+    expect(m6?.contextLength).toBe(4096);
+    // The other five were not enriched.
+    expect(result.find((m) => m.id === 'm1')?.contextLength).toBeUndefined();
+    expect(mockFetch).toHaveBeenCalledTimes(2); // /api/tags + one /api/show
   });
 
   it('returns empty on non-OK response', async () => {
@@ -504,40 +623,14 @@ describe('ollamaAdapter.listModels', () => {
     expect(result).toEqual([]);
   });
 
-  it('handles /api/show failure gracefully', async () => {
+  it('leaves contextLength undefined when /api/show fails for the selected model', async () => {
     mockFetch.mockResolvedValueOnce(
       okResponse({ models: [{ name: 'model1' }] }),
     );
     // /api/show fails
     mockFetch.mockRejectedValueOnce(new Error('timeout'));
 
-    const result = await ollamaAdapter.listModels(baseUrl, new AbortController().signal);
-
-    expect(result).toEqual([{ id: 'model1', contextLength: undefined }]);
-  });
-
-  it('handles malformed /api/show response', async () => {
-    mockFetch.mockResolvedValueOnce(
-      okResponse({ models: [{ name: 'model1' }] }),
-    );
-    // /api/show returns non-standard structure
-    mockFetch.mockResolvedValueOnce(
-      okResponse({ totally_wrong: 'data' }),
-    );
-
-    const result = await ollamaAdapter.listModels(baseUrl, new AbortController().signal);
-
-    expect(result).toEqual([{ id: 'model1', contextLength: undefined }]);
-  });
-
-  it('handles /api/show returning non-OK status gracefully', async () => {
-    mockFetch.mockResolvedValueOnce(
-      okResponse({ models: [{ name: 'model1' }] }),
-    );
-    // /api/show returns 404 — fetchModelContextLength should return undefined
-    mockFetch.mockResolvedValueOnce(errorResponse(404, 'model not found'));
-
-    const result = await ollamaAdapter.listModels(baseUrl, new AbortController().signal);
+    const result = await ollamaAdapter.listModels(baseUrl, new AbortController().signal, 'model1');
 
     expect(result).toEqual([{ id: 'model1', contextLength: undefined }]);
   });
@@ -555,41 +648,21 @@ describe('ollamaAdapter.listModels', () => {
       }),
     );
 
-    const result = await ollamaAdapter.listModels(baseUrl, new AbortController().signal);
+    const result = await ollamaAdapter.listModels(baseUrl, new AbortController().signal, 'qwen');
 
     expect(result[0].contextLength).toBe(32768);
   });
 
-  it('returns undefined context length when parameters has no num_ctx and model_info is empty', async () => {
+  it('does not enrich when selectedModel is not in the list', async () => {
     mockFetch.mockResolvedValueOnce(
-      okResponse({ models: [{ name: 'mymodel' }] }),
-    );
-    mockFetch.mockResolvedValueOnce(
-      okResponse({ parameters: 'temperature 0.7', model_info: {} }),
+      okResponse({ models: [{ name: 'm1' }, { name: 'm2' }] }),
     );
 
-    const result = await ollamaAdapter.listModels(baseUrl, new AbortController().signal);
+    const result = await ollamaAdapter.listModels(baseUrl, new AbortController().signal, 'absent');
 
-    expect(result[0].contextLength).toBeUndefined();
-  });
-
-  it('returns undefined context length when model_info has no context_length keys', async () => {
-    mockFetch.mockResolvedValueOnce(
-      okResponse({ models: [{ name: 'mymodel' }] }),
-    );
-    mockFetch.mockResolvedValueOnce(
-      okResponse({
-        parameters: undefined,
-        model_info: {
-          'mymodel.architecture': 'transformer',
-          'mymodel.parameter_count': '7B',
-        },
-      }),
-    );
-
-    const result = await ollamaAdapter.listModels(baseUrl, new AbortController().signal);
-
-    expect(result[0].contextLength).toBeUndefined();
+    // No /api/show call: the selected model wasn't found, so nothing to enrich.
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+    expect(result).toEqual([{ id: 'm1' }, { id: 'm2' }]);
   });
 });
 
@@ -599,19 +672,15 @@ describe('ollamaAdapter.checkStatus', () => {
   const baseUrl = 'http://localhost:11434';
 
   it('returns connected with models on success', async () => {
-    // root fetch
-    mockFetch.mockResolvedValueOnce(okResponse('Ollama is running'));
-    // /api/tags
+    // checkStatus hits /api/tags for connectivity …
     mockFetch.mockResolvedValueOnce(okResponse({ models: [{ name: 'llama3' }] }));
-    // /api/show for llama3
-    mockFetch.mockResolvedValueOnce(
-      okResponse({ parameters: 'num_ctx\t4096' }),
-    );
+    // … then listModels fetches /api/tags again (no selectedModel → no enrichment).
+    mockFetch.mockResolvedValueOnce(okResponse({ models: [{ name: 'llama3' }] }));
 
     const result = await ollamaAdapter.checkStatus(baseUrl, new AbortController().signal);
 
     expect(result.connected).toBe(true);
-    expect(result.models).toEqual([{ id: 'llama3', contextLength: 4096 }]);
+    expect(result.models).toEqual([{ id: 'llama3' }]);
     expect(result.selectedModel).toBe('llama3');
   });
 
@@ -632,7 +701,8 @@ describe('ollamaAdapter.checkStatus', () => {
   });
 
   it('returns null selectedModel when no models', async () => {
-    mockFetch.mockResolvedValueOnce(okResponse('ok'));
+    // checkStatus /api/tags (ok, but we pass an empty list via the second fetch).
+    mockFetch.mockResolvedValueOnce(okResponse({ models: [] }));
     mockFetch.mockResolvedValueOnce(okResponse({ models: [] }));
 
     const result = await ollamaAdapter.checkStatus(baseUrl, new AbortController().signal);

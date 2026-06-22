@@ -19,8 +19,8 @@ import { useSettingsStore } from '@/lib/store/settingsStore';
 import { useTransactionStore } from '@/lib/store/transactionStore';
 import { usePersistHydrated } from '@/lib/store/usePersistHydrated';
 import { buildChatContextForQuestion } from '@/lib/chat/contextBuilder';
-import { buildChatOptimizationPlan } from '@/lib/llm/chatOptimization';
-import { getContextWindowInfo } from '@/lib/llm/contextWindow';
+import { getContextWindowInfo, calculateMaxOutputTokens, calculateMaxInputTokens, CHARS_PER_TOKEN } from '@/lib/llm/contextWindow';
+import { CHAT_SYSTEM_PROMPT } from '@/lib/llm/prompts';
 import { ChatMessage } from '@/types';
 import { AbortManager } from '@/lib/utils/AbortManager';
 import {
@@ -34,7 +34,7 @@ import {
 } from 'lucide-react';
 import { getClient } from '@/lib/llm/index';
 import { debugError } from '@/lib/utils/debug';
-import { buildSystemPrompt, buildChatMessages, classifyStreamError } from './chatCompanions';
+import { buildChatMessages, classifyStreamError } from './chatCompanions';
 
 const messageVariants = {
   hidden: (isUser: boolean) => ({
@@ -181,32 +181,38 @@ export function ChatPanel() {
         }
 
         const contextInfo = await getContextWindowInfo();
-        const contextLength = contextInfo.contextLength;
+        const contextWindow = contextInfo.contextLength;
 
-        const optimizationPlan = buildChatOptimizationPlan(llmProvider, text, messages, {
-          modelContextLength: contextLength ?? undefined,
-        });
+        const systemPrompt = CHAT_SYSTEM_PROMPT; // constant persona — no per-call data (spec §10)
+        const historyText = messages.slice(-6).map((m) => m.content).join('\n');
+        const fixedInput = `${systemPrompt}\n\n${historyText}\n\n${text}`;
 
-        // Build messages for LLM
+        // Non-linear regime (spec §6): cap the reply, give the rest of the window to retrieved
+        // context. Sizes how many chars of transaction context fit alongside the system prompt,
+        // recent history, the question, and the reserved output.
+        const maxContextChars =
+          (calculateMaxInputTokens(contextWindow, fixedInput, 800) ?? 8000) * CHARS_PER_TOKEN;
         const statementContext = buildChatContextForQuestion(transactions, currency, text, {
-          maxChars: optimizationPlan.contextMaxChars,
+          maxChars: maxContextChars,
         });
 
-        const systemPrompt = buildSystemPrompt(statementContext);
+        const chatMessages = buildChatMessages(messages, 6, systemPrompt, statementContext, text);
 
-        const chatMessages = buildChatMessages(
-          messages,
-          optimizationPlan.historyWindow,
-          systemPrompt,
-          text,
-        );
+        // Output budget for the actual call — budget on the FULL dispatched input (system
+        // prompt + history + retrieved context + question), per the consistency rule (spec §6).
+        // Capped 800, floored 200.
+        const dispatchedInput = `${systemPrompt}\n\n${historyText}\n\n${statementContext}\n\n${text}`;
+        const outputRoom = calculateMaxOutputTokens(contextWindow, dispatchedInput) ?? 800;
+        const maxOutputTokens = Math.min(800, Math.max(200, outputRoom));
 
-        // Stream directly from browser → LLM
+        // Stream directly from browser → LLM.
         const stream = client.chatStream(llmServerUrl, selectedModel, chatMessages, {
-          temperature: optimizationPlan.temperature,
-          maxTokens: optimizationPlan.maxTokens,
+          temperature: 0.05,
+          topP: 0.9,
+          maxOutputTokens,
+          contextWindow,
+          responseFormat: 'text',
           signal: streamSignal,
-          extra: optimizationPlan.extra,
         });
 
         for await (const chunk of stream) {

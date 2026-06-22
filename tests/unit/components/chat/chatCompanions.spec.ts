@@ -1,6 +1,5 @@
 import { describe, it, expect } from 'vitest';
 import {
-  buildSystemPrompt,
   buildChatMessages,
   classifyStreamError,
   resolveModelSelection,
@@ -8,27 +7,6 @@ import {
   type ChatMessageLike,
   type ModelInfoLike,
 } from '@/components/chat/chatCompanions';
-
-describe('buildSystemPrompt', () => {
-  it('includes statement context when provided', () => {
-    const result = buildSystemPrompt('You spent ₹5000 on groceries');
-    expect(result).toContain('You spent ₹5000 on groceries');
-    expect(result).toContain('financial assistant');
-    expect(result).toContain('Guidelines:');
-  });
-
-  it('shows fallback when no context', () => {
-    const result = buildSystemPrompt('');
-    expect(result).toContain('No statement data available yet.');
-    expect(result).toContain('Guidelines:');
-  });
-
-  it('includes all guideline rules', () => {
-    const result = buildSystemPrompt('ctx');
-    expect(result).toContain('Do not invent or assume');
-    expect(result).toContain('sampled and not exhaustive');
-  });
-});
 
 describe('buildChatMessages', () => {
   const messages: ChatMessageLike[] = [
@@ -38,30 +16,42 @@ describe('buildChatMessages', () => {
     { role: 'assistant', content: '₹5000' },
   ];
 
-  it('prepends system prompt and appends user text', () => {
-    const result = buildChatMessages(messages, 10, 'system-prompt', 'new question');
+  it('prepends the system prompt and appends the user message (no context)', () => {
+    const result = buildChatMessages(messages, 10, 'system-prompt', '', 'new question');
 
     expect(result[0]).toEqual({ role: 'system', content: 'system-prompt' });
     expect(result[result.length - 1]).toEqual({ role: 'user', content: 'new question' });
   });
 
+  it('puts the statement context in the user message, not the system message', () => {
+    const result = buildChatMessages(messages, 10, 'sys', 'CTX-DATA', 'q');
+
+    // The system message holds only the persona — no statement data.
+    expect(result[0]).toEqual({ role: 'system', content: 'sys' });
+    // The context + question land together in the final user message.
+    expect(result[result.length - 1]).toEqual({
+      role: 'user',
+      content: 'Statement context:\nCTX-DATA\n\nQuestion: q',
+    });
+  });
+
   it('slices history to window size', () => {
-    const result = buildChatMessages(messages, 2, 'sys', 'q');
-    // Should have: system + last 2 messages + user text = 4
+    const result = buildChatMessages(messages, 2, 'sys', '', 'q');
+    // system + last 2 messages + user message = 4
     expect(result).toHaveLength(4);
     expect(result[1]).toEqual({ role: 'user', content: 'how much?' });
     expect(result[2]).toEqual({ role: 'assistant', content: '₹5000' });
   });
 
   it('handles empty messages', () => {
-    const result = buildChatMessages([], 5, 'sys', 'q');
+    const result = buildChatMessages([], 5, 'sys', '', 'q');
     expect(result).toHaveLength(2);
     expect(result[0].role).toBe('system');
     expect(result[1].role).toBe('user');
   });
 
   it('handles window larger than message count', () => {
-    const result = buildChatMessages(messages.slice(0, 1), 100, 'sys', 'q');
+    const result = buildChatMessages(messages.slice(0, 1), 100, 'sys', '', 'q');
     expect(result).toHaveLength(3);
   });
 });

@@ -253,10 +253,10 @@ describe('createTransactionChunkPlan', () => {
     });
 
     it('sizes chunks using dynamic target line count', () => {
-      // 16K context: target ≈ 225 lines
-      // 400 lines with overlap 12 → 2 chunks
+      // 8K context, linear-coupled sizing (spec §6): per-line input ≈ 24, output ≈ 5,
+      // overhead 2500 → target ≈ 170 lines. 400 lines with overlap 12 → multiple chunks.
       const text = makeLines(400, 'a'.repeat(60));
-      const plan = createTransactionChunkPlan(text, 16000);
+      const plan = createTransactionChunkPlan(text, 8192);
 
       expect(plan.chunkingUsed).toBe(true);
       expect(plan.chunks.length).toBeGreaterThanOrEqual(2);

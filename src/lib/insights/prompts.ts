@@ -8,6 +8,7 @@
 import { TransactionAnalytics } from './types';
 import { Currency } from '@/types';
 import { debugError } from '@/lib/utils/debug';
+import type { JSONSchema } from '@/lib/llm/types';
 
 /**
  * Get the system prompt for insight generation.
@@ -200,9 +201,10 @@ export function parseInsightsResponse(response: string): {
     }
   }
 
-  // Return empty if all parsing fails
+  // Total parse failure: surface to the caller (spec §9) — a malformed reply must be
+  // distinguishable from a genuine empty result, so throw rather than swallow to [].
   debugError('Insights', 'Failed to parse LLM response');
-  return { insights: [] };
+  throw new Error('Insights response was not valid JSON and could not be parsed.');
 }
 
 /**
@@ -242,3 +244,38 @@ function normalizeInsight(insight: unknown): {
     data: obj.data && typeof obj.data === 'object' ? obj.data as Record<string, unknown> : undefined,
   };
 }
+
+/**
+ * Permissive JSON Schema for the insights response (spec §6). Co-located with the prompt.
+ * type/severity enums mirror normalizeInsight's valid sets so the decoder cannot emit a
+ * value the normalizer would have to default. `data` is an open object (additionalProperties).
+ */
+export const INSIGHTS_SCHEMA: JSONSchema = {
+  type: 'object',
+  properties: {
+    insights: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          type: {
+            type: 'string',
+            enum: [
+              'category_trend', 'day_pattern', 'merchant_insight', 'anomaly',
+              'budget_alert', 'period_comparison', 'savings_opportunity',
+            ],
+          },
+          title: { type: 'string' },
+          description: { type: 'string' },
+          severity: { type: 'string', enum: ['info', 'warning', 'positive'] },
+          category: { type: 'string' },
+          data: { type: 'object', additionalProperties: true },
+        },
+        required: ['type', 'title', 'description', 'severity'],
+        additionalProperties: true,
+      },
+    },
+  },
+  required: ['insights'],
+  additionalProperties: true,
+};

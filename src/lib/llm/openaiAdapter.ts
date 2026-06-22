@@ -1,9 +1,49 @@
 import type { TokenUsage, ChatChunk, LLMAdapter } from './types';
-import { createAdapterError } from './types';
+import { LLMError, type FailureKind } from './types';
+import { ENFORCE_JSON_SCHEMA_ON_WIRE } from './types';
 import { debugWarn, debugError } from '@/lib/utils/debug';
 
-function throwWithStatus(message: string, status: number): never {
-  throw createAdapterError(message, status);
+function statusToKind(status: number): FailureKind {
+  if (status === 404) return 'model-missing';
+  if (status === 408 || status === 504) return 'timeout';
+  if (status >= 500) return 'server-error';
+  return 'request-rejected';
+}
+
+/**
+ * Enforce the structured-output option pairing at the adapter boundary (spec §7). A plain
+ * Error (not LLMError): these are programmer mistakes, not provider outcomes. The single
+ * choke point both providers pass through catches a forgotten schema before it reaches the
+ * network.
+ */
+function assertStructuredOptions(options: {
+  responseFormat: 'json' | 'text';
+  responseSchema?: unknown;
+  schemaName?: string;
+}): void {
+  if (options.responseFormat === 'json' && !options.responseSchema) {
+    throw new Error('responseFormat "json" requires responseSchema');
+  }
+  if (options.responseFormat === 'json' && !options.schemaName) {
+    throw new Error('responseFormat "json" requires schemaName');
+  }
+  if (options.responseFormat === 'text' && options.responseSchema) {
+    throw new Error('responseFormat "text" must not include responseSchema');
+  }
+}
+
+/**
+ * The provider's reply was a non-OK response. Derive a failure kind: start from
+ * the HTTP status, then override to model-missing when the body says the model
+ * is not loaded / not found / unloaded (these appear at various status codes).
+ */
+function classifyProviderError(responseText: string, status: number): FailureKind {
+  let kind = statusToKind(status);
+  const lower = responseText.toLowerCase();
+  if (lower.includes('not found') || lower.includes('failed to load') || lower.includes('unloaded')) {
+    kind = 'model-missing';
+  }
+  return kind;
 }
 
 function parseProviderError(responseText: string, providerName: string): string {
@@ -56,14 +96,36 @@ interface NativeLMStudioModelEntry {
 export function createOpenAIAdapter(config: OpenAIAdapterConfig): LLMAdapter {
   return {
     async generate(baseUrl, model, prompt, options) {
+      assertStructuredOptions(options);
+      // System prompt delivered as a real system-role message, not concatenated into the
+      // user prompt (spec §8, bug 17).
+      const messages: { role: string; content: string }[] = [];
+      if (options.systemPrompt) {
+        messages.push({ role: 'system', content: options.systemPrompt });
+      }
+      messages.push({ role: 'user', content: prompt });
+
       const body: Record<string, unknown> = {
         model,
-        messages: [{ role: 'user', content: prompt }],
+        messages,
         stream: false,
         temperature: options.temperature,
       };
-      if (options.maxTokens !== undefined) {
-        body.max_tokens = options.maxTokens;
+      if (options.maxOutputTokens !== undefined) {
+        body.max_tokens = options.maxOutputTokens;
+      }
+      if (options.topP != null) {
+        body.top_p = options.topP;
+      }
+      if (ENFORCE_JSON_SCHEMA_ON_WIRE && options.responseFormat === 'json') {
+        body.response_format = {
+          type: 'json_schema',
+          json_schema: {
+            name: options.schemaName,
+            strict: false,
+            schema: options.responseSchema,
+          },
+        };
       }
 
       const res = await fetch(`${baseUrl}/v1/chat/completions`, {
@@ -75,7 +137,10 @@ export function createOpenAIAdapter(config: OpenAIAdapterConfig): LLMAdapter {
 
       if (!res.ok) {
         const text = await res.text().catch(() => res.statusText);
-        throwWithStatus(parseProviderError(text, config.providerName), res.status);
+        throw new LLMError(
+          parseProviderError(text, config.providerName),
+          classifyProviderError(text, res.status),
+        );
       }
 
       const data = await res.json();
@@ -94,14 +159,28 @@ export function createOpenAIAdapter(config: OpenAIAdapterConfig): LLMAdapter {
     },
 
     async *chatStream(baseUrl, model, messages, options) {
+      assertStructuredOptions(options);
       const body: Record<string, unknown> = {
         model,
         messages,
         stream: true,
         temperature: options.temperature,
       };
-      if (options.maxTokens !== undefined) {
-        body.max_tokens = options.maxTokens;
+      if (options.maxOutputTokens !== undefined) {
+        body.max_tokens = options.maxOutputTokens;
+      }
+      if (options.topP != null) {
+        body.top_p = options.topP;
+      }
+      if (ENFORCE_JSON_SCHEMA_ON_WIRE && options.responseFormat === 'json') {
+        body.response_format = {
+          type: 'json_schema',
+          json_schema: {
+            name: options.schemaName,
+            strict: false,
+            schema: options.responseSchema,
+          },
+        };
       }
 
       const res = await fetch(`${baseUrl}/v1/chat/completions`, {
@@ -113,13 +192,18 @@ export function createOpenAIAdapter(config: OpenAIAdapterConfig): LLMAdapter {
 
       if (!res.ok) {
         const text = await res.text().catch(() => res.statusText);
-        throwWithStatus(parseProviderError(text, config.providerName), res.status);
+        throw new LLMError(
+          parseProviderError(text, config.providerName),
+          classifyProviderError(text, res.status),
+        );
       }
       if (!res.body) throw new Error(`No response body from ${config.providerName}`);
 
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
       let buffer = '';
+      let lastUsage: TokenUsage | undefined;
+      let sawDone = false;
 
       try {
         while (true) {
@@ -136,25 +220,40 @@ export function createOpenAIAdapter(config: OpenAIAdapterConfig): LLMAdapter {
 
             const data = trimmed.slice(6);
             if (data === '[DONE]') {
-              yield { delta: '', done: true, usage: undefined } as ChatChunk;
+              // Attach the last-seen usage (bug 12) so a consumer reading the
+              // terminal chunk still gets token counts.
+              sawDone = true;
+              yield { delta: '', done: true, usage: lastUsage } as ChatChunk;
               return;
             }
 
             try {
               const parsed = JSON.parse(data);
               const delta = parsed.choices?.[0]?.delta?.content ?? '';
-              yield { delta, done: false, usage: undefined } as ChatChunk;
+              if (parsed.usage) {
+                lastUsage = {
+                  promptTokens: parsed.usage.prompt_tokens ?? 0,
+                  completionTokens: parsed.usage.completion_tokens ?? 0,
+                };
+              }
+              yield { delta, done: false, usage: lastUsage } as ChatChunk;
             } catch {
               // Skip malformed lines
             }
           }
         }
+        // Stream ended without an explicit [DONE] (e.g. mid-stream disconnect on an
+        // OpenAI-compatible server) — emit a synthetic terminal chunk (spec §8, bug 10).
+        if (!sawDone) yield { delta: '', done: true, usage: lastUsage } as ChatChunk;
       } finally {
         reader.releaseLock();
       }
     },
 
     async listModels(baseUrl, signal) {
+      // LM Studio's endpoints already return context_length natively, so the
+      // selectedModel hint (3rd param on the interface) is not needed here and is
+      // omitted — a narrower signature still satisfies LLMAdapter.listModels.
       // Try native LM Studio API for richer model info (context_length)
       try {
         const res = await fetch(`${baseUrl}/api/v1/models`, { signal, cache: 'no-store' });

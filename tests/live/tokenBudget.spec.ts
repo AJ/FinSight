@@ -27,7 +27,8 @@ import {
   BANK_TRANSACTIONS_PROMPT,
   TYPE_DETECTION_PROMPT,
 } from '@/lib/parsers/prompts';
-import { SYSTEM_PROMPT } from '@/lib/llm/prompts';
+import { EXTRACTION_SYSTEM_PROMPT } from '@/lib/llm/prompts';
+import { CHARS_PER_TOKEN } from '@/lib/llm/contextWindow';
 import { normalizeStatementText } from '@/lib/parsers/normalization';
 
 // Load .env.test.live if present (manual parse — no dotenv dependency)
@@ -51,8 +52,7 @@ const LIVE_LLM_URL = process.env.LIVE_LLM_URL || '';
 const LIVE_LLM_MODEL = process.env.LIVE_LLM_MODEL || '';
 const CC_PDF_PASSWORD = process.env.CC_PDF_PASSWORD || '';
 
-// Our estimation constants (from transactionChunking.ts)
-const CHARS_PER_TOKEN = 2.3;
+// Our estimation constants (CHARS_PER_TOKEN now imported from contextWindow.ts).
 const PROMPT_OVERHEAD_TOKENS = 2500;
 const CHUNK_SIZE_DIVISOR = 2.5;
 const AVG_CHARS_PER_LINE = 55;
@@ -286,7 +286,7 @@ function computeBudget(
   const p_constant = PROMPT_OVERHEAD_TOKENS;
 
   // Per-template precise estimate: system prompt + template instructions (without raw text)
-  const systemPromptTokens = estimateTokens(SYSTEM_PROMPT.length);
+  const systemPromptTokens = estimateTokens(EXTRACTION_SYSTEM_PROMPT.length);
   const templateInstructionTokens = estimateTokens(templateWithoutRawText.length);
   const p_precise_est = systemPromptTokens + templateInstructionTokens;
 
@@ -341,7 +341,7 @@ function printBudgetTable(budgets: StageBudget[]): void {
     console.log(`  p: const=${b.p_constant} estimated=${b.p_precise_est} actual=${pActual} delta=${pDelta}`);
     console.log(`  y: est=${b.y_estimated}tok  chars=${b.normalizedTextLength}  lines=${b.normalizedTextLines}`);
     console.log(`  z: budget=${zBudget}  actual=${zActual}  status=${over}`);
-    console.log(`  template: ${b.templateWithoutRawTextLength}chars  sys_prompt: ${SYSTEM_PROMPT.length}chars  full: ${b.templateWithRawTextLength}chars`);
+    console.log(`  template: ${b.templateWithoutRawTextLength}chars  sys_prompt: ${EXTRACTION_SYSTEM_PROMPT.length}chars  full: ${b.templateWithRawTextLength}chars`);
 
     if (b.error) {
       console.log(`  error: ${b.error.substring(0, 200)}`);
@@ -451,7 +451,7 @@ describe.skipIf(shouldSkip())('Token Budget Instrumentation', () => {
     console.log(`  y_max_lines  = ${currentChars} / ${AVG_CHARS_PER_LINE} = ${currentLines}`);
 
     // Per-template formulas
-    const systemPromptEst = estimateTokens(SYSTEM_PROMPT.length);
+    const systemPromptEst = estimateTokens(EXTRACTION_SYSTEM_PROMPT.length);
     const templates = [
       { name: 'CC_TRANSACTIONS', tpl: CC_TRANSACTIONS_PROMPT },
       { name: 'CC_SUMMARY', tpl: CC_SUMMARY_PROMPT },
@@ -551,8 +551,8 @@ REDACTED`,
       return;
     }
 
-    // Prepend SYSTEM_PROMPT (same as client.ts does)
-    const fullPrompt = `${SYSTEM_PROMPT}\n\n${ccTx.templateWithRawText}`;
+    // Prepend EXTRACTION_SYSTEM_PROMPT (same as client.ts does)
+    const fullPrompt = `${EXTRACTION_SYSTEM_PROMPT}\n\n${ccTx.templateWithRawText}`;
 
     console.log('');
     console.log('--- CC_TRANSACTIONS WITHOUT max_tokens ---');
@@ -619,5 +619,7 @@ REDACTED`,
     console.log('');
     console.log('--- END PRODUCTION SIMULATION ---');
     console.log('');
-  }, 300_000);
+  }, 1_200_000); // two sequential full CC extractions (no max_tokens + with max_tokens);
+  // a single unconstrained extraction can run 5-10 min on a small local model, so this
+  // double-call test needs well above the 600s live-config default.
 });

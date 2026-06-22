@@ -1,4 +1,4 @@
-import { LLMProvider, DEFAULT_URLS } from './types';
+import { LLMProvider, PROVIDERS } from './types';
 import { createClient } from './client';
 import type { LLMClient } from './types';
 
@@ -6,7 +6,7 @@ export * from './types';
 export { createClient } from './client';
 
 export function getDefaultUrl(provider: LLMProvider): string {
-  return DEFAULT_URLS[provider];
+  return PROVIDERS[provider].defaultUrl;
 }
 
 const clientCache = new Map<LLMProvider, LLMClient>();

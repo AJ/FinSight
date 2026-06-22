@@ -1,4 +1,4 @@
-import { LLMError, isAdapterError } from './types';
+import { LLMError } from './types';
 import type {
   LLMCallOptions,
   LLMClient,
@@ -8,7 +8,6 @@ import type {
   StatusResult,
 } from './types';
 import { PROVIDERS } from './types';
-import { SYSTEM_PROMPT } from './prompts';
 import { ollamaAdapter } from './ollamaAdapter';
 import { createOpenAIAdapter } from './openaiAdapter';
 import { debugLog, debugError } from '@/lib/utils/debug';
@@ -43,32 +42,27 @@ function createAbortSignal(
   };
 }
 
+/**
+ * Wrap a non-LLMError throw as an LLMError with a classified kind. An LLMError from the
+ * adapter already carries a kind (assigned where the provider outcome was observed) and is
+ * passed through unchanged. Spec §7: timeout/server-unreachable/server-error are transport-
+ * retryable; everything else is terminal here (application retry is the retry engine's job).
+ */
 function classifyError(e: unknown, providerName: string, externalSignal?: AbortSignal): LLMError {
   if (e instanceof LLMError) return e;
 
   if (e instanceof Error && e.name === 'AbortError') {
-    if (externalSignal?.aborted) {
-      return new LLMError(`${providerName} call was cancelled`, false);
-    }
-    return new LLMError(`${providerName} call timed out`, true);
+    return externalSignal?.aborted
+      ? new LLMError(`${providerName} call was cancelled`, 'cancelled')
+      : new LLMError(`${providerName} call timed out`, 'timeout');
   }
 
   if (e instanceof TypeError) {
-    return new LLMError(`${providerName} network error: ${e.message}`, true);
-  }
-
-  if (isAdapterError(e)) {
-    if (e.status === 404) {
-      return new LLMError(`Model not found (${providerName})`, false);
-    }
-    if (e.status >= 500) {
-      return new LLMError(`${providerName} server error: ${e.message}`, true);
-    }
-    return new LLMError(`${providerName} error: ${e.message}`, false);
+    return new LLMError(`${providerName} network error: ${e.message}`, 'server-unreachable');
   }
 
   const message = e instanceof Error ? e.message : String(e);
-  return new LLMError(`${providerName} error: ${message}`, false);
+  return new LLMError(`${providerName} error: ${message}`, 'unknown');
 }
 
 const openaiAdapters = new Map<string, ReturnType<typeof createOpenAIAdapter>>();
@@ -90,48 +84,52 @@ export function createClient(provider: LLMProvider): LLMClient {
   const adapter = getAdapter(provider);
 
   return {
-    async generate(baseUrl, model, prompt, options?: LLMCallOptions): Promise<string> {
-      const temperature = options?.temperature ?? 0;
-      const maxTokens = options?.maxTokens;
-      const stage = options?.stage ?? 'unknown';
-      const fullPrompt = `${SYSTEM_PROMPT}\n\n${prompt}`;
-
+    async generate(baseUrl, model, prompt, options: LLMCallOptions): Promise<string> {
+      const temperature = options.temperature ?? 0;
+      const stage = options.stage ?? 'unknown';
       let lastError: LLMError | null = null;
 
       for (let attempt = 1; attempt <= 2; attempt++) {
         const { signal, cleanup } = createAbortSignal(
-          options?.timeout ?? GENERATE_TIMEOUT_MS,
-          options?.signal,
+          options.timeout ?? GENERATE_TIMEOUT_MS,
+          options.signal,
         );
         const startTime = Date.now();
 
         try {
-          const result = await adapter.generate(baseUrl, model, fullPrompt, {
+          // The surface owns no prompt content: the bare `prompt` (user content) and the
+          // caller-supplied `systemPrompt` are forwarded separately — the adapter delivers
+          // the system prompt as a system message (spec §10). No concatenation.
+          const result = await adapter.generate(baseUrl, model, prompt, {
             temperature,
-            maxTokens,
+            topP: options.topP,
+            maxOutputTokens: options.maxOutputTokens,
+            contextWindow: options.contextWindow,
+            responseFormat: options.responseFormat,
+            responseSchema: options.responseSchema,
+            schemaName: options.schemaName,
+            systemPrompt: options.systemPrompt,
             signal,
-            extra: options?.extra,
           });
 
           const latency = Date.now() - startTime;
 
           if (!result.text || result.text.trim().length === 0) {
-            debugError('LLMClient.generate', `Empty response:\nStage: ${stage},\nProvider: ${config.name},\nModel: ${model},\nAttempt: ${attempt},\nPrompt Length: ${fullPrompt.length},\nUsage: ${result.usage ? `${result.usage.promptTokens}+${result.usage.completionTokens}` : 'none'},\nRaw Text Length: ${result.text?.length ?? 0}`);
-            throw new LLMError(`LLM returned empty response [${stage}] (model: ${model})`, false);
+            debugError('LLMClient.generate', `Empty response [${stage}] model: ${model}`);
+            throw new LLMError(`LLM returned empty response [${stage}] (model: ${model})`, 'unknown');
           }
 
           if (result.usage) {
-            const total = result.usage.promptTokens + result.usage.completionTokens;
             debugLog(
-              `[${config.name} ${stage}] Tokens: ${result.usage.promptTokens} + ${result.usage.completionTokens} = ${total}, Latency: ${latency}ms`,
+              `[${config.name} ${stage}] Tokens: ${result.usage.promptTokens} + ${result.usage.completionTokens}, Latency: ${latency}ms`,
             );
           }
 
           return result.text.trim();
         } catch (e: unknown) {
-          const error = classifyError(e, config.name, options?.signal);
+          const error = classifyError(e, config.name, options.signal);
 
-          if (options?.signal?.aborted) throw error;
+          if (options.signal?.aborted) throw error;
           if (!error.retryable) throw error;
           if (attempt === 2) throw error;
 
@@ -142,47 +140,52 @@ export function createClient(provider: LLMProvider): LLMClient {
         }
       }
 
-      throw lastError ?? new LLMError('Unexpected retry loop exit', false);
+      throw lastError ?? new LLMError('Unexpected retry loop exit', 'unknown');
     },
 
-    async *chatStream(baseUrl, model, messages, options?: LLMCallOptions): AsyncIterable<ChatChunk> {
-      const temperature = options?.temperature ?? 0.7;
+    async *chatStream(baseUrl, model, messages, options: LLMCallOptions): AsyncIterable<ChatChunk> {
+      // Frozen (spec §12): chat temperature default 0.7; chat always passes 0.05.
+      const temperature = options.temperature ?? 0.7;
       const { signal, cleanup } = createAbortSignal(
-        options?.timeout ?? CHAT_STREAM_TIMEOUT_MS,
-        options?.signal,
+        options.timeout ?? CHAT_STREAM_TIMEOUT_MS,
+        options.signal,
       );
 
       try {
+        // No systemPrompt here — chat supplies its own system message inside `messages`;
+        // the surface forwards the array unchanged (spec §10).
         const stream = adapter.chatStream(baseUrl, model, messages, {
           temperature,
-          maxTokens: options?.maxTokens,
+          topP: options.topP,
+          maxOutputTokens: options.maxOutputTokens,
+          contextWindow: options.contextWindow,
+          responseFormat: options.responseFormat,
           signal,
-          extra: options?.extra,
         });
 
         for await (const chunk of stream) {
           yield chunk;
         }
       } catch (e: unknown) {
-        throw classifyError(e, config.name, options?.signal);
+        throw classifyError(e, config.name, options.signal);
       } finally {
         cleanup();
       }
     },
 
-    async listModels(baseUrl: string): Promise<ModelInfo[]> {
+    async listModels(baseUrl: string, selectedModel?: string): Promise<ModelInfo[]> {
       const { signal, cleanup } = createAbortSignal(5000);
       try {
-        return await adapter.listModels(baseUrl, signal);
+        return await adapter.listModels(baseUrl, signal, selectedModel);
       } finally {
         cleanup();
       }
     },
 
-    async checkStatus(baseUrl: string): Promise<StatusResult> {
+    async checkStatus(baseUrl: string, selectedModel?: string): Promise<StatusResult> {
       const { signal, cleanup } = createAbortSignal(5000);
       try {
-        return await adapter.checkStatus(baseUrl, signal);
+        return await adapter.checkStatus(baseUrl, signal, selectedModel);
       } finally {
         cleanup();
       }

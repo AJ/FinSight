@@ -140,6 +140,34 @@ describe('processStatement — routing', () => {
     expect(mockFetch).toHaveBeenCalledTimes(2); // summary + transactions, no type detection
   });
 
+  it('surfaces summary context overflow as a hard error, not a silent warning', async () => {
+    // Small context window + large statement → summary prompt overflows. The retry
+    // engine's pre-flight guard sets contextOverflow=true and bails before any LLM
+    // call. pipeline must push this to errors[] (success=false), not warnings[],
+    // so it propagates to the user instead of silently producing empty balances.
+    mockGetContextWindowInfo.mockResolvedValue({
+      contextLength: 500,
+      source: 'settings_cache',
+      provider: 'ollama',
+      modelId: 'llama3',
+    });
+    // No fetch mock needed — the overflow guard must prevent any LLM call.
+    mockFetch.mockResolvedValue(ollamaJson('unexpected — guard should prevent this call'));
+
+    const largeText = 'x'.repeat(5000);
+    const result = await processStatement(largeText, {
+      ...defaultOptions,
+      statementType: 'bank', // skip type detection (its guard would also trip)
+    });
+
+    expect(result.success).toBe(false);
+    const overflowError = result.errors.find((e) => e.includes("exceeds the model's context window"));
+    expect(overflowError).toBeDefined();
+    expect(overflowError).toContain('500');
+    // Crucially NOT a warning — verify the overflow message is absent from warnings.
+    expect(result.warnings.some((w) => w.includes("exceeds the model's context window"))).toBe(false);
+  });
+
   it('calls type detection when no explicit type provided', async () => {
     mockFetch
       .mockResolvedValueOnce(ollamaJson(typeDetectionJson('bank', 0.95)))
@@ -356,8 +384,10 @@ describe('processStatement — extraction bundle', () => {
 });
 
 describe('processStatement — warning branches', () => {
-  it('warns when credit card summary extraction fails but transactions succeed', async () => {
-    // Summary: 3 invalid-JSON responses (MAX_RETRIES), then valid transactions + rewards
+  it('fails the import when credit card summary extraction fails', async () => {
+    // Summary: 3 invalid-JSON responses (MAX_RETRIES exhausted). Summary failure is now a
+    // hard error (spec §9) — balances are essential, so the import fails even though the
+    // transaction/rewards calls that follow would otherwise succeed.
     const invalidSummaryResponse = 'NOT VALID JSON {{{';
     mockFetch
       .mockResolvedValueOnce(ollamaJson(invalidSummaryResponse))
@@ -371,12 +401,11 @@ describe('processStatement — warning branches', () => {
       statementType: 'credit_card',
     });
 
-    expect(result.success).toBe(true);
-    expect(result.data?.transactions).toHaveLength(1);
-    expect(result.warnings.some(w => w.includes('Summary extraction had issues'))).toBe(true);
+    expect(result.success).toBe(false);
+    expect(result.errors.some(e => e.includes('Summary extraction failed'))).toBe(true);
   });
 
-  it('warns when bank summary extraction fails but transactions succeed', async () => {
+  it('fails the import when bank summary extraction fails', async () => {
     const invalidSummaryResponse = 'NOT VALID JSON {{{';
     mockFetch
       .mockResolvedValueOnce(ollamaJson(invalidSummaryResponse))
@@ -389,9 +418,8 @@ describe('processStatement — warning branches', () => {
       statementType: 'bank',
     });
 
-    expect(result.success).toBe(true);
-    expect(result.data?.transactions).toHaveLength(1);
-    expect(result.warnings.some(w => w.includes('Summary extraction had issues'))).toBe(true);
+    expect(result.success).toBe(false);
+    expect(result.errors.some(e => e.includes('Summary extraction failed'))).toBe(true);
   });
 
   it('warns on partial extraction when transactions succeed with errors', async () => {

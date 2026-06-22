@@ -1,7 +1,22 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+
+// Exercise the on-wire schema path (disabled by the ENFORCE_JSON_SCHEMA_ON_WIRE
+// kill-switch by default). Force it on so the schema-sending code stays covered.
+vi.mock('@/lib/llm/types', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/llm/types')>();
+  return { ...actual, ENFORCE_JSON_SCHEMA_ON_WIRE: true };
+});
+
 import { createOpenAIAdapter } from '@/lib/llm/openaiAdapter';
-import { isAdapterError } from '@/lib/llm/types';
-import type { AdapterOptions } from '@/lib/llm/types';
+import { isLLMError } from '@/lib/llm/types';
+import type { AdapterOptions, JSONSchema } from '@/lib/llm/types';
+
+const SAMPLE_SCHEMA: JSONSchema = {
+  type: 'object',
+  properties: { type: { type: 'string', enum: ['bank', 'credit_card'] } },
+  required: ['type'],
+  additionalProperties: true,
+};
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -28,6 +43,7 @@ function sseResponse(chunks: string[]): Response {
 function defaultOptions(overrides?: Partial<AdapterOptions>): AdapterOptions {
   return {
     temperature: 0,
+    responseFormat: 'text',
     signal: new AbortController().signal,
     ...overrides,
   };
@@ -61,7 +77,7 @@ describe('createOpenAIAdapter', () => {
         usage: { prompt_tokens: 10, completion_tokens: 5 },
       }));
 
-      const opts = defaultOptions({ temperature: 0, maxTokens: 2048 });
+      const opts = defaultOptions({ temperature: 0, maxOutputTokens: 2048 });
       await adapter.generate(BASE, 'llama3', 'test prompt', opts);
 
       expect(mockFetch).toHaveBeenCalledTimes(1);
@@ -76,6 +92,80 @@ describe('createOpenAIAdapter', () => {
         temperature: 0,
         max_tokens: 2048,
       });
+    });
+
+    it('emits response_format json_schema envelope with strict:false when json', async () => {
+      mockFetch.mockResolvedValue(okResponse({
+        choices: [{ message: { content: '{}' } }],
+      }));
+
+      await adapter.generate(BASE, 'llama3', 'prompt', defaultOptions({
+        responseFormat: 'json',
+        responseSchema: SAMPLE_SCHEMA,
+        schemaName: 'statement_type',
+      }));
+
+      const body = JSON.parse(mockFetch.mock.calls[0][1].body);
+      expect(body.response_format).toEqual({
+        type: 'json_schema',
+        json_schema: { name: 'statement_type', strict: false, schema: SAMPLE_SCHEMA },
+      });
+    });
+
+    it('never emits json_object on the wire', async () => {
+      mockFetch.mockResolvedValue(okResponse({
+        choices: [{ message: { content: '{}' } }],
+      }));
+
+      await adapter.generate(BASE, 'llama3', 'prompt', defaultOptions({
+        responseFormat: 'json',
+        responseSchema: SAMPLE_SCHEMA,
+        schemaName: 'x',
+      }));
+
+      const serialized = String(mockFetch.mock.calls[0][1].body);
+      expect(serialized).not.toContain('json_object');
+    });
+
+    it('throws when json mode has no responseSchema', async () => {
+      await expect(
+        adapter.generate(BASE, 'llama3', 'prompt', defaultOptions({
+          responseFormat: 'json',
+          schemaName: 'x',
+        })),
+      ).rejects.toThrow('responseSchema');
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+
+    it('throws when json mode has no schemaName', async () => {
+      await expect(
+        adapter.generate(BASE, 'llama3', 'prompt', defaultOptions({
+          responseFormat: 'json',
+          responseSchema: SAMPLE_SCHEMA,
+        })),
+      ).rejects.toThrow('schemaName');
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+
+    it('throws when text mode carries a responseSchema', async () => {
+      await expect(
+        adapter.generate(BASE, 'llama3', 'prompt', defaultOptions({
+          responseFormat: 'text',
+          responseSchema: SAMPLE_SCHEMA,
+        })),
+      ).rejects.toThrow();
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+
+    it('omits response_format when responseFormat is text', async () => {
+      mockFetch.mockResolvedValue(okResponse({
+        choices: [{ message: { content: 'ok' } }],
+      }));
+
+      await adapter.generate(BASE, 'llama3', 'prompt', defaultOptions({ responseFormat: 'text' }));
+
+      const body = JSON.parse(mockFetch.mock.calls[0][1].body);
+      expect(body.response_format).toBeUndefined();
     });
 
     it('omits max_tokens when not provided', async () => {
@@ -123,7 +213,7 @@ describe('createOpenAIAdapter', () => {
       expect(result.text).toBe('');
     });
 
-    it('throws with status on non-OK response', async () => {
+    it('throws LLMError with kind server-error on a 500', async () => {
       mockFetch.mockResolvedValue(errorResponse(500, 'Internal Server Error'));
 
       try {
@@ -131,7 +221,20 @@ describe('createOpenAIAdapter', () => {
         expect.unreachable('should have thrown');
       } catch (e) {
         expect(e).toBeInstanceOf(Error);
-        expect(isAdapterError(e) && e.status).toBe(500);
+        expect(isLLMError(e) && e.kind).toBe('server-error');
+        expect(isLLMError(e) && e.retryable).toBe(true);
+      }
+    });
+
+    it('throws LLMError with kind model-missing on a 404', async () => {
+      mockFetch.mockResolvedValue(errorResponse(404, 'model not found: llama3'));
+
+      try {
+        await adapter.generate(BASE, 'llama3', 'prompt', defaultOptions());
+        expect.unreachable('should have thrown');
+      } catch (e) {
+        expect(isLLMError(e) && e.kind).toBe('model-missing');
+        expect(isLLMError(e) && e.retryable).toBe(false);
       }
     });
 
@@ -250,7 +353,7 @@ describe('createOpenAIAdapter', () => {
         expect.unreachable('should have thrown');
       } catch (e) {
         expect(e).toBeInstanceOf(Error);
-        expect(isAdapterError(e) && e.status).toBe(500);
+        expect(isLLMError(e) && e.kind).toBe('server-error');
         // parseProviderError receives the statusText as non-JSON, falls to generic message
         expect((e as Error).message).toContain('LM Studio request failed');
       }
@@ -309,6 +412,37 @@ describe('createOpenAIAdapter', () => {
       ]);
     });
 
+    it('populates usage when the final data chunk carries usage', async () => {
+      const sseData = [
+        'data: {"choices":[{"delta":{"content":"hi"}}]}\n\n',
+        'data: {"choices":[{"delta":{"content":""}}],"usage":{"prompt_tokens":10,"completion_tokens":5}}\n\n',
+        'data: [DONE]\n\n',
+      ];
+      mockFetch.mockResolvedValue(sseResponse(sseData));
+
+      const chunks: { usage?: { promptTokens: number; completionTokens: number } }[] = [];
+      for await (const chunk of adapter.chatStream(BASE, 'llama3', [], defaultOptions())) {
+        chunks.push({ usage: chunk.usage });
+      }
+
+      // Usage appears on the data chunk that carries it and on the terminal chunk.
+      expect(chunks[chunks.length - 1].usage).toEqual({ promptTokens: 10, completionTokens: 5 });
+    });
+
+    it('emits a synthetic terminal chunk when the stream ends without [DONE]', async () => {
+      // No [DONE] line — e.g. a mid-stream disconnect on an OpenAI-compatible server.
+      // A terminal done:true chunk must still be emitted (spec §8, bug 10).
+      const sseData = ['data: {"choices":[{"delta":{"content":"hi"}}]}\n\n'];
+      mockFetch.mockResolvedValue(sseResponse(sseData));
+
+      const doneFlags: boolean[] = [];
+      for await (const chunk of adapter.chatStream(BASE, 'llama3', [], defaultOptions())) {
+        doneFlags.push(chunk.done);
+      }
+
+      expect(doneFlags[doneFlags.length - 1]).toBe(true);
+    });
+
     it('throws on non-OK response', async () => {
       mockFetch.mockResolvedValue(errorResponse(500, 'Server Error'));
 
@@ -316,7 +450,7 @@ describe('createOpenAIAdapter', () => {
       await expect(() => stream[Symbol.asyncIterator]().next()).rejects.toThrow();
     });
 
-    it('attaches .status to chatStream error', async () => {
+    it('attaches a retryable kind to chatStream error', async () => {
       mockFetch.mockResolvedValue(errorResponse(503, 'Service Unavailable'));
 
       try {
@@ -324,7 +458,8 @@ describe('createOpenAIAdapter', () => {
         await stream[Symbol.asyncIterator]().next();
         expect.fail('should have thrown');
       } catch (err) {
-        expect(isAdapterError(err) && err.status).toBe(503);
+        expect(isLLMError(err) && err.kind).toBe('server-error');
+        expect(isLLMError(err) && err.retryable).toBe(true);
       }
     });
 
@@ -339,7 +474,7 @@ describe('createOpenAIAdapter', () => {
         expect.fail('should have thrown');
       } catch (e) {
         expect(e).toBeInstanceOf(Error);
-        expect(isAdapterError(e) && e.status).toBe(502);
+        expect(isLLMError(e) && e.kind).toBe('server-error');
       }
     });
 

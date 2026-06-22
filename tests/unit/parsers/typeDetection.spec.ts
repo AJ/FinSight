@@ -226,4 +226,22 @@ describe('detectStatementType', () => {
 
     expect(result.confidence).toBeUndefined();
   });
+
+  // ── Context overflow guard ────────────────────────────────────────────────────
+
+  it('throws before calling the LLM when the prompt exceeds the context window', async () => {
+    // Tiny context window → calculateMaxOutputTokens returns the 0 overflow sentinel.
+    // System prompt (~121) + input buffer (200) already exceed 100, so overflow is
+    // guaranteed regardless of stage-prompt size. The guard must throw an actionable
+    // error naming the stage and the context size — NOT pass maxTokens:0 through to
+    // the LLM, which would produce an empty response and an opaque "Type detection
+    // failed" error.
+    mockFetch.mockResolvedValue(ollamaResponse(JSON.stringify({ type: 'bank', confidence: 0.9 })));
+
+    await expect(detectStatementType('some text', baseConfig, undefined, 100))
+      .rejects.toThrow(/exceeds the model's context window \(100 tokens\)/);
+
+    // No fetch should have been attempted — the guard bailed before generate().
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
 });

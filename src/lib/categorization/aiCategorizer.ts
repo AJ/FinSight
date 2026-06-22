@@ -1,8 +1,14 @@
 import { Transaction, CategorizedBy } from "@/types";
 import { Category } from "@/models/Category";
 import { getClient } from "@/lib/llm/index";
-import { LLMProvider } from "@/lib/llm/types";
-import { getContextWindowInfo } from "@/lib/llm/contextWindow";
+import { LLMError, LLMProvider } from "@/lib/llm/types";
+import {
+  getContextWindowInfo,
+  calculateMaxOutputTokens,
+  calculateMaxItems,
+  overflowKind,
+} from "@/lib/llm/contextWindow";
+import { CATEGORIZATION_SYSTEM_PROMPT, CATEGORIZATION_SCHEMA } from "./prompts";
 import { findMerchantRuleForTransaction } from "@/lib/services/merchantRuleService";
 import { debugLog } from "@/lib/utils/debug";
 import type { StatementType } from "@/types/creditCard";
@@ -21,15 +27,28 @@ import {
 
 export type { CategorizationProgress, CategorizationResult } from "./types";
 
-const PROMPT_OVERHEAD_TOKENS = 1500;
-const AVG_TOKENS_PER_TRANSACTION = 60;
+// Per-transaction token estimates (linear-coupled regime, spec §6/§13). Starting values —
+// calibrate live. INPUT = description + amount + date in the batch prompt; OUTPUT = category
+// + confidence.
+const INPUT_TOKENS_PER_TRANSACTION = 40;
+const OUTPUT_TOKENS_PER_TRANSACTION = 15;
 const MAX_BATCH_SIZE = 50;
 const MIN_BATCH_SIZE = 5;
 
+/**
+ * Max transactions per batch via the linear-coupled solve (spec §6): input + output both
+ * scale per transaction. `CATEGORIZATION_SYSTEM_PROMPT` is the fixed overhead (the persona +
+ * category taxonomy + rules, delivered as the system message); the [MIN,MAX] clamp absorbs
+ * any undercount.
+ */
 export function deriveBatchSize(contextWindowTokens: number): number {
-  const budget = contextWindowTokens - PROMPT_OVERHEAD_TOKENS;
-  const raw = Math.floor(budget / AVG_TOKENS_PER_TRANSACTION);
-  if (raw <= 0) return 1;
+  const raw = calculateMaxItems(
+    contextWindowTokens,
+    CATEGORIZATION_SYSTEM_PROMPT,
+    INPUT_TOKENS_PER_TRANSACTION,
+    OUTPUT_TOKENS_PER_TRANSACTION,
+  );
+  if (!raw || raw <= 0) return 1;
   return Math.max(MIN_BATCH_SIZE, Math.min(MAX_BATCH_SIZE, raw));
 }
 
@@ -115,8 +134,28 @@ export async function categorizeTransactions(
 
   const aiResults = await runCategorizationCore(remainingInputs, {
     generate: async (prompt) => {
+      // Context-aware output budget on the full input actually sent (system prompt + batch
+      // prompt). On overflow (calculateMaxOutputTokens returns 0), throw an LLMError with a
+      // classified kind — runCategorizationCore catches this per-batch (core.ts) and falls
+      // through to keyword categorization for that batch.
+      const maxOutputTokens = calculateMaxOutputTokens(
+        contextInfo.contextLength,
+        `${CATEGORIZATION_SYSTEM_PROMPT}\n\n${prompt}`,
+      );
+      if (maxOutputTokens === 0) {
+        throw new LLMError(
+          `Categorization prompt exceeds the model's context window (${contextInfo.contextLength} tokens).`,
+          overflowKind(contextInfo.contextLength),
+        );
+      }
       return client.generate(options.baseUrl, options.model!.trim(), prompt, {
         stage: 'categorize',
+        maxOutputTokens,
+        contextWindow: contextInfo.contextLength,
+        responseFormat: 'json',
+        responseSchema: CATEGORIZATION_SCHEMA,
+        schemaName: 'categorization',
+        systemPrompt: CATEGORIZATION_SYSTEM_PROMPT,
       });
     },
     onProgress: options.onProgress

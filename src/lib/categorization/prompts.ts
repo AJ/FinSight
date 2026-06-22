@@ -6,6 +6,7 @@ import type { SourceType } from "@/types";
 import type { TransactionSubType } from "@/models/Transaction";
 import type { StatementType } from "@/types/creditCard";
 import type { CategorizationSource } from "./types";
+import type { JSONSchema } from "@/lib/llm/types";
 
 /**
  * System prompt for transaction categorization.
@@ -94,9 +95,10 @@ export function buildCategorizationPrompt(
     })
     .join(",\n  ");
 
-  return `${CATEGORIZATION_SYSTEM_PROMPT}
-
-${statementContext}Categorize these transactions:
+  // The persona + category taxonomy + rules live in CATEGORIZATION_SYSTEM_PROMPT, delivered
+  // as the system message by aiCategorizer (spec §10). This user prompt carries only the
+  // per-call data (statement context + the transaction batch) and the output-format note.
+  return `${statementContext}Categorize these transactions:
 
 [
   ${txnList}
@@ -312,3 +314,24 @@ export function normalizeCategoryId(categoryId: string): string {
   debugLog('categorize', `Unknown category "${categoryId}", using "other"`);
   return "other";
 }
+
+/**
+ * Permissive JSON Schema for the categorization response (spec §6). Co-located with the
+ * prompt. Root is an array; each item constrains `category` to the registry's exact IDs so
+ * the decoder cannot emit an invented category. `isSuspense` is optional (omitted when
+ * false by the model is fine — parseCategorizationResponse tolerates absence).
+ */
+export const CATEGORIZATION_SCHEMA: JSONSchema = {
+  type: 'array',
+  items: {
+    type: 'object',
+    properties: {
+      id: { type: 'string' },
+      category: { type: 'string', enum: DEFAULT_CATEGORIES.map((c) => c.id) },
+      confidence: { type: 'number' },
+      isSuspense: { type: 'boolean' },
+    },
+    required: ['id', 'category', 'confidence'],
+    additionalProperties: true,
+  },
+};

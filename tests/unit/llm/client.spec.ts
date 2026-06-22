@@ -1,12 +1,20 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+
+// The "forwards responseSchema to the wire" test exercises the schema path, disabled by
+// the ENFORCE_JSON_SCHEMA_ON_WIRE kill-switch by default. Force it on for this file.
+vi.mock('@/lib/llm/types', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/llm/types')>();
+  return { ...actual, ENFORCE_JSON_SCHEMA_ON_WIRE: true };
+});
+
 import { LLMError } from '@/lib/llm/types';
+import type { JSONSchema } from '@/lib/llm/types';
 
 // Mock fetch — the only external boundary (LLM HTTP calls go through here)
 const mockFetch = vi.fn();
 vi.stubGlobal('fetch', mockFetch);
 
 import { createClient } from '@/lib/llm/client';
-import { SYSTEM_PROMPT } from '@/lib/llm/prompts';
 
 // ── Ollama response helpers ──────────────────────────────────────────────────
 
@@ -64,19 +72,39 @@ afterEach(() => {
 describe('createClient.generate', () => {
   const client = createClient('ollama');
 
-  it('prepends system prompt to user prompt', async () => {
+  it('forwards systemPrompt separately — does not concatenate it into the prompt', async () => {
     mockFetch.mockResolvedValue(ollamaGenerateResponse('response'));
 
-    await client.generate('http://localhost:11434', 'llama3', 'user prompt');
+    await client.generate('http://localhost:11434', 'llama3', 'user prompt', {
+      responseFormat: 'text',
+      systemPrompt: 'SYS',
+    });
 
     const body = JSON.parse(mockFetch.mock.calls[0][1].body);
-    expect(body.prompt).toBe(`${SYSTEM_PROMPT}\n\nuser prompt`);
+    expect(body.prompt).toBe('user prompt'); // bare user prompt — no concat
+    expect(body.system).toBe('SYS');          // system prompt delivered as a system message
+  });
+
+  it('forwards responseSchema + contextWindow to the adapter', async () => {
+    mockFetch.mockResolvedValue(ollamaGenerateResponse('response'));
+    const schema: JSONSchema = { type: 'object', properties: { x: { type: 'number' } }, required: ['x'] };
+
+    await client.generate('http://localhost:11434', 'llama3', 'prompt', {
+      responseFormat: 'json',
+      responseSchema: schema,
+      schemaName: 'thing',
+      contextWindow: 32768,
+    });
+
+    const body = JSON.parse(mockFetch.mock.calls[0][1].body);
+    expect(body.format).toEqual(schema);
+    expect(body.options.num_ctx).toBe(32768);
   });
 
   it('defaults temperature to 0', async () => {
     mockFetch.mockResolvedValue(ollamaGenerateResponse('response'));
 
-    await client.generate('http://localhost:11434', 'llama3', 'prompt');
+    await client.generate('http://localhost:11434', 'llama3', 'prompt', { responseFormat: 'text' });
 
     const body = JSON.parse(mockFetch.mock.calls[0][1].body);
     expect(body.options.temperature).toBe(0);
@@ -85,7 +113,7 @@ describe('createClient.generate', () => {
   it('passes caller temperature override', async () => {
     mockFetch.mockResolvedValue(ollamaGenerateResponse('response'));
 
-    await client.generate('http://localhost:11434', 'llama3', 'prompt', { temperature: 0.5 });
+    await client.generate('http://localhost:11434', 'llama3', 'prompt', { responseFormat: 'text', temperature: 0.5 });
 
     const body = JSON.parse(mockFetch.mock.calls[0][1].body);
     expect(body.options.temperature).toBe(0.5);
@@ -94,25 +122,25 @@ describe('createClient.generate', () => {
   it('does not set maxTokens by default', async () => {
     mockFetch.mockResolvedValue(ollamaGenerateResponse('response'));
 
-    await client.generate('http://localhost:11434', 'llama3', 'prompt');
+    await client.generate('http://localhost:11434', 'llama3', 'prompt', { responseFormat: 'text' });
 
     const body = JSON.parse(mockFetch.mock.calls[0][1].body);
     expect(body.options.num_predict).toBeUndefined();
   });
 
-  it('passes maxTokens from options', async () => {
+  it('passes maxOutputTokens from options', async () => {
     mockFetch.mockResolvedValue(ollamaGenerateResponse('response'));
 
-    await client.generate('http://localhost:11434', 'llama3', 'prompt', { maxTokens: 8192 });
+    await client.generate('http://localhost:11434', 'llama3', 'prompt', { responseFormat: 'text', maxOutputTokens: 8192 });
 
     const body = JSON.parse(mockFetch.mock.calls[0][1].body);
     expect(body.options.num_predict).toBe(8192);
   });
 
-  it('passes extra to adapter options', async () => {
+  it('passes contextWindow to adapter options (num_ctx)', async () => {
     mockFetch.mockResolvedValue(ollamaGenerateResponse('response'));
 
-    await client.generate('http://localhost:11434', 'llama3', 'prompt', { extra: { num_ctx: 32768 } });
+    await client.generate('http://localhost:11434', 'llama3', 'prompt', { responseFormat: 'text', contextWindow: 32768 });
 
     const body = JSON.parse(mockFetch.mock.calls[0][1].body);
     expect(body.options.num_ctx).toBe(32768);
@@ -121,7 +149,7 @@ describe('createClient.generate', () => {
   it('routes to ollama adapter for ollama provider', async () => {
     mockFetch.mockResolvedValue(ollamaGenerateResponse('response'));
 
-    await client.generate('http://localhost:11434', 'llama3', 'prompt');
+    await client.generate('http://localhost:11434', 'llama3', 'prompt', { responseFormat: 'text' });
 
     expect(mockFetch.mock.calls[0][0]).toBe('http://localhost:11434/api/generate');
   });
@@ -130,7 +158,7 @@ describe('createClient.generate', () => {
     const lmClient = createClient('lmstudio');
     mockFetch.mockResolvedValue(openaiGenerateResponse('response'));
 
-    await lmClient.generate('http://localhost:1234', 'mistral', 'prompt');
+    await lmClient.generate('http://localhost:1234', 'mistral', 'prompt', { responseFormat: 'text' });
 
     expect(mockFetch.mock.calls[0][0]).toBe('http://localhost:1234/v1/chat/completions');
   });
@@ -138,7 +166,7 @@ describe('createClient.generate', () => {
   it('trims the response', async () => {
     mockFetch.mockResolvedValue(ollamaGenerateResponse('  response text  '));
 
-    const result = await client.generate('http://localhost:11434', 'llama3', 'prompt');
+    const result = await client.generate('http://localhost:11434', 'llama3', 'prompt', { responseFormat: 'text' });
 
     expect(result).toBe('response text');
   });
@@ -147,7 +175,7 @@ describe('createClient.generate', () => {
     mockFetch.mockResolvedValue(ollamaGenerateResponse(''));
 
     try {
-      await client.generate('http://localhost:11434', 'llama3', 'prompt');
+      await client.generate('http://localhost:11434', 'llama3', 'prompt', { responseFormat: 'text' });
       expect.fail('should have thrown');
     } catch (e) {
       expect(e).toBeInstanceOf(LLMError);
@@ -159,7 +187,7 @@ describe('createClient.generate', () => {
   it('throws LLMError on whitespace-only response', async () => {
     mockFetch.mockResolvedValue(ollamaGenerateResponse('   '));
 
-    await expect(client.generate('http://localhost:11434', 'llama3', 'prompt')).rejects.toThrow('empty response');
+    await expect(client.generate('http://localhost:11434', 'llama3', 'prompt', { responseFormat: 'text' })).rejects.toThrow('empty response');
   });
 
   it('retries once on retryable error (500)', async () => {
@@ -167,7 +195,7 @@ describe('createClient.generate', () => {
       .mockResolvedValueOnce(ollamaErrorStatus(500, 'internal error'))
       .mockResolvedValueOnce(ollamaGenerateResponse('recovered'));
 
-    const result = await client.generate('http://localhost:11434', 'llama3', 'prompt');
+    const result = await client.generate('http://localhost:11434', 'llama3', 'prompt', { responseFormat: 'text' });
 
     expect(result).toBe('recovered');
     expect(mockFetch).toHaveBeenCalledTimes(2);
@@ -176,7 +204,7 @@ describe('createClient.generate', () => {
   it('does not retry on non-retryable error (404)', async () => {
     mockFetch.mockResolvedValue(ollamaErrorStatus(404, 'model not found'));
 
-    await expect(client.generate('http://localhost:11434', 'llama3', 'prompt')).rejects.toThrow();
+    await expect(client.generate('http://localhost:11434', 'llama3', 'prompt', { responseFormat: 'text' })).rejects.toThrow();
     expect(mockFetch).toHaveBeenCalledTimes(1);
   });
 
@@ -189,7 +217,7 @@ describe('createClient.generate', () => {
     mockFetch.mockRejectedValueOnce(new DOMException('Aborted', 'AbortError'));
 
     await expect(
-      client.generate('http://localhost:11434', 'llama3', 'prompt', { signal: controller.signal }),
+      client.generate('http://localhost:11434', 'llama3', 'prompt', { responseFormat: 'text', signal: controller.signal }),
     ).rejects.toThrow();
     expect(mockFetch).toHaveBeenCalledTimes(1);
   });
@@ -199,7 +227,7 @@ describe('createClient.generate', () => {
       .mockRejectedValueOnce(new TypeError('fetch failed'))
       .mockResolvedValueOnce(ollamaGenerateResponse('recovered'));
 
-    const result = await client.generate('http://localhost:11434', 'llama3', 'prompt');
+    const result = await client.generate('http://localhost:11434', 'llama3', 'prompt', { responseFormat: 'text' });
     expect(result).toBe('recovered');
   });
 
@@ -208,7 +236,7 @@ describe('createClient.generate', () => {
       .mockResolvedValueOnce(ollamaErrorStatus(500, 'server error'))
       .mockResolvedValueOnce(ollamaGenerateResponse('recovered'));
 
-    const result = await client.generate('http://localhost:11434', 'llama3', 'prompt');
+    const result = await client.generate('http://localhost:11434', 'llama3', 'prompt', { responseFormat: 'text' });
     expect(result).toBe('recovered');
   });
 
@@ -216,7 +244,7 @@ describe('createClient.generate', () => {
     mockFetch.mockResolvedValue(ollamaErrorStatus(404, 'model not found'));
 
     try {
-      await client.generate('http://localhost:11434', 'llama3', 'prompt');
+      await client.generate('http://localhost:11434', 'llama3', 'prompt', { responseFormat: 'text' });
       expect.fail('should have thrown');
     } catch (e) {
       expect(e).toBeInstanceOf(LLMError);
@@ -231,7 +259,7 @@ describe('createClient.generate', () => {
       eval_count: 50,
     }));
 
-    const result = await client.generate('http://localhost:11434', 'llama3', 'prompt', { stage: 'transactions' });
+    const result = await client.generate('http://localhost:11434', 'llama3', 'prompt', { responseFormat: 'text', stage: 'transactions' });
 
     expect(result).toBe('response text');
   });
@@ -239,7 +267,7 @@ describe('createClient.generate', () => {
   it('works without usage data', async () => {
     mockFetch.mockResolvedValue(ollamaGenerateResponse('response'));
 
-    const result = await client.generate('http://localhost:11434', 'llama3', 'prompt');
+    const result = await client.generate('http://localhost:11434', 'llama3', 'prompt', { responseFormat: 'text' });
 
     expect(result).toBe('response');
   });
@@ -266,7 +294,7 @@ describe('createClient.chatStream', () => {
       body: stream,
     });
 
-    for await (const chunk of client.chatStream('http://localhost:11434', 'llama3', [])) { void chunk; break; }
+    for await (const chunk of client.chatStream('http://localhost:11434', 'llama3', [], { responseFormat: 'text' })) { void chunk; break; }
 
     const body = JSON.parse(mockFetch.mock.calls[0][1].body);
     expect(body.options.temperature).toBe(0.7);
@@ -287,7 +315,7 @@ describe('createClient.chatStream', () => {
       body: stream,
     });
 
-    for await (const chunk of client.chatStream('http://localhost:11434', 'llama3', [], { temperature: 0.05 })) { void chunk; break; }
+    for await (const chunk of client.chatStream('http://localhost:11434', 'llama3', [], { responseFormat: 'text', temperature: 0.05 })) { void chunk; break; }
 
     const body = JSON.parse(mockFetch.mock.calls[0][1].body);
     expect(body.options.temperature).toBe(0.05);
@@ -310,7 +338,7 @@ describe('createClient.chatStream', () => {
     });
 
     const chunks: string[] = [];
-    for await (const chunk of client.chatStream('http://localhost:11434', 'llama3', [])) {
+    for await (const chunk of client.chatStream('http://localhost:11434', 'llama3', [], { responseFormat: 'text' })) {
       chunks.push(chunk.delta);
     }
 
@@ -333,7 +361,8 @@ describe('createClient.chatStream', () => {
     });
 
     for await (const chunk of client.chatStream('http://localhost:11434', 'llama3', [], {
-      extra: { num_ctx: 16384 },
+      responseFormat: 'text',
+      contextWindow: 16384,
     })) { void chunk; break; }
 
     const body = JSON.parse(mockFetch.mock.calls[0][1].body);
@@ -356,7 +385,7 @@ describe('createClient.chatStream', () => {
       body: stream,
     });
 
-    for await (const chunk of client.chatStream('http://localhost:11434', 'llama3', messages)) { void chunk; break; }
+    for await (const chunk of client.chatStream('http://localhost:11434', 'llama3', messages, { responseFormat: 'text' })) { void chunk; break; }
 
     const body = JSON.parse(mockFetch.mock.calls[0][1].body);
     expect(body.messages).toEqual([{ role: 'user', content: 'hello' }]);
@@ -369,8 +398,8 @@ describe('createClient.chatStream', () => {
 describe('createClient.listModels', () => {
   const client = createClient('ollama');
 
-  it('delegates to adapter and returns models', async () => {
-    // Ollama listModels: fetches /api/tags then /api/show for each model
+  it('delegates to adapter and returns models (selected model enriched on demand)', async () => {
+    // listModels: /api/tags, then /api/show for the SELECTED model only (spec §8).
     mockFetch
       .mockResolvedValueOnce({
         ok: true,
@@ -383,9 +412,22 @@ describe('createClient.listModels', () => {
         json: () => Promise.resolve({ parameters: 'num_ctx 8192', model_info: {} }),
       });
 
-    const models = await client.listModels('http://localhost:11434');
+    const models = await client.listModels('http://localhost:11434', 'llama3');
 
     expect(models).toEqual([{ id: 'llama3', contextLength: 8192 }]);
+  });
+
+  it('returns models without enrichment when no selected model is given', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({ models: [{ name: 'llama3' }] }),
+    });
+
+    const models = await client.listModels('http://localhost:11434');
+
+    expect(models).toEqual([{ id: 'llama3' }]);
+    expect(mockFetch).toHaveBeenCalledTimes(1); // /api/tags only — no /api/show
   });
 
   it('returns empty array on adapter error', async () => {
@@ -401,22 +443,9 @@ describe('createClient.checkStatus', () => {
   const client = createClient('ollama');
 
   it('delegates to adapter and returns connected status', async () => {
-    // checkStatus: fetches root URL, then calls listModels internally
-    mockFetch
-      .mockResolvedValueOnce({
-        ok: true,
-        status: 200,
-      })
-      .mockResolvedValueOnce({
-        ok: true,
-        status: 200,
-        json: () => Promise.resolve({ models: [{ name: 'llama3' }] }),
-      })
-      .mockResolvedValueOnce({
-        ok: true,
-        status: 200,
-        json: () => Promise.resolve({ parameters: '', model_info: {} }),
-      });
+    // checkStatus hits /api/tags for connectivity, then listModels hits /api/tags again.
+    const tags = { ok: true, status: 200, json: () => Promise.resolve({ models: [{ name: 'llama3' }] }) };
+    mockFetch.mockResolvedValueOnce(tags).mockResolvedValueOnce(tags);
 
     const result = await client.checkStatus('http://localhost:11434');
 
@@ -425,7 +454,7 @@ describe('createClient.checkStatus', () => {
   });
 
   it('returns disconnected on adapter error', async () => {
-    mockFetch.mockRejectedValue(new Error('unreachable'));
+    mockFetch.mockRejectedValueOnce(new Error('unreachable'));
 
     const result = await client.checkStatus('http://localhost:11434');
 
@@ -443,7 +472,7 @@ describe('createClient edge cases', () => {
     mockFetch.mockRejectedValueOnce('string error');
 
     try {
-      await client.generate('http://localhost:11434', 'llama3', 'prompt');
+      await client.generate('http://localhost:11434', 'llama3', 'prompt', { responseFormat: 'text' });
       expect.fail('should have thrown');
     } catch (e) {
       expect(e).toBeInstanceOf(LLMError);
@@ -455,7 +484,7 @@ describe('createClient edge cases', () => {
     mockFetch.mockRejectedValueOnce(null);
 
     await expect(
-      client.generate('http://localhost:11434', 'llama3', 'prompt'),
+      client.generate('http://localhost:11434', 'llama3', 'prompt', { responseFormat: 'text' }),
     ).rejects.toThrow(LLMError);
   });
 
@@ -466,7 +495,7 @@ describe('createClient edge cases', () => {
     mockFetch.mockRejectedValueOnce(new DOMException('Aborted', 'AbortError'));
 
     await expect(
-      client.generate('http://localhost:11434', 'llama3', 'prompt', { signal: controller.signal }),
+      client.generate('http://localhost:11434', 'llama3', 'prompt', { responseFormat: 'text', signal: controller.signal }),
     ).rejects.toThrow();
 
     expect(mockFetch).toHaveBeenCalledTimes(1);
@@ -476,7 +505,7 @@ describe('createClient edge cases', () => {
     mockFetch.mockResolvedValue(ollamaErrorStatus(400, 'bad request'));
 
     try {
-      await client.generate('http://localhost:11434', 'llama3', 'prompt');
+      await client.generate('http://localhost:11434', 'llama3', 'prompt', { responseFormat: 'text' });
       expect.fail('should have thrown');
     } catch (e) {
       expect(e).toBeInstanceOf(LLMError);
@@ -489,7 +518,7 @@ describe('createClient edge cases', () => {
     mockFetch.mockResolvedValue(ollamaErrorStatus(429, 'rate limited'));
 
     try {
-      await client.generate('http://localhost:11434', 'llama3', 'prompt');
+      await client.generate('http://localhost:11434', 'llama3', 'prompt', { responseFormat: 'text' });
       expect.fail('should have thrown');
     } catch (e) {
       expect(e).toBeInstanceOf(LLMError);
@@ -511,7 +540,7 @@ describe('createClient edge cases', () => {
       .mockResolvedValueOnce(ollamaGenerateResponse(''));
 
     try {
-      await client.generate('http://localhost:11434', 'llama3', 'prompt');
+      await client.generate('http://localhost:11434', 'llama3', 'prompt', { responseFormat: 'text' });
       expect.fail('should have thrown');
     } catch (e) {
       expect(e).toBeInstanceOf(LLMError);
@@ -527,7 +556,7 @@ describe('createClient edge cases', () => {
     mockFetch.mockResolvedValueOnce(ollamaGenerateResponse(''));
 
     try {
-      await client.generate('http://localhost:11434', 'llama3', 'prompt');
+      await client.generate('http://localhost:11434', 'llama3', 'prompt', { responseFormat: 'text' });
       expect.fail('should have thrown');
     } catch (e) {
       expect(e).toBeInstanceOf(LLMError);
@@ -541,7 +570,7 @@ describe('createClient edge cases', () => {
       .mockRejectedValueOnce(new TypeError('connection refused'))
       .mockRejectedValueOnce(new TypeError('connection refused again'));
 
-    await expect(client.generate('http://localhost:11434', 'llama3', 'prompt')).rejects.toThrow('connection refused again');
+    await expect(client.generate('http://localhost:11434', 'llama3', 'prompt', { responseFormat: 'text' })).rejects.toThrow('connection refused again');
     expect(mockFetch).toHaveBeenCalledTimes(2);
   });
 
@@ -554,14 +583,14 @@ describe('createClient edge cases', () => {
     });
 
     await expect(async () => {
-      for await (const chunk of client.chatStream('http://localhost:11434', 'llama3', [])) { void chunk; }
+      for await (const chunk of client.chatStream('http://localhost:11434', 'llama3', [], { responseFormat: 'text' })) { void chunk; }
     }).rejects.toThrow(LLMError);
   });
 
   it('generate creates an AbortSignal for timeout', async () => {
     mockFetch.mockResolvedValue(ollamaGenerateResponse('ok'));
 
-    await client.generate('http://localhost:11434', 'llama3', 'prompt', { timeout: 5000 });
+    await client.generate('http://localhost:11434', 'llama3', 'prompt', { responseFormat: 'text', timeout: 5000 });
 
     // The adapter receives the signal via fetch options
     const fetchOptions = mockFetch.mock.calls[0][1];
@@ -585,7 +614,7 @@ describe('createClient edge cases', () => {
       body: stream,
     });
 
-    for await (const chunk of lmClient.chatStream('http://localhost:1234', 'mistral', [], { maxTokens: 8192 })) { void chunk; }
+    for await (const chunk of lmClient.chatStream('http://localhost:1234', 'mistral', [], { responseFormat: 'text', maxOutputTokens: 8192 })) { void chunk; }
 
     const body = JSON.parse(mockFetch.mock.calls[0][1].body);
     expect(body.max_tokens).toBe(8192);
@@ -605,7 +634,7 @@ describe('createClient edge cases', () => {
     });
 
     await expect(
-      client.generate('http://localhost:11434', 'llama3', 'prompt', { signal: controller.signal }),
+      client.generate('http://localhost:11434', 'llama3', 'prompt', { responseFormat: 'text', signal: controller.signal }),
     ).rejects.toThrow('cancelled');
   });
 
@@ -615,7 +644,7 @@ describe('createClient edge cases', () => {
 
     // No external signal passed — classifyError should report "timed out"
     await expect(
-      client.generate('http://localhost:11434', 'llama3', 'prompt'),
+      client.generate('http://localhost:11434', 'llama3', 'prompt', { responseFormat: 'text' }),
     ).rejects.toThrow('timed out');
   });
 
@@ -626,7 +655,7 @@ describe('createClient edge cases', () => {
       .mockRejectedValueOnce(new TypeError('connection refused'))
       .mockResolvedValueOnce(ollamaGenerateResponse('recovered'));
 
-    const generatePromise = client.generate('http://localhost:11434', 'llama3', 'prompt');
+    const generatePromise = client.generate('http://localhost:11434', 'llama3', 'prompt', { responseFormat: 'text' });
 
     // The retry delay is 1000 * attempt (attempt=1) = 1000ms
     // After the first failure, the client awaits a 1000ms timer before retrying.
