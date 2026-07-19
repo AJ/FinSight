@@ -20,6 +20,7 @@ interface BudgetStore {
   hideCategory: (month: string, categoryId: string) => void;
   savePeriod: (month: string) => void;
   deletePeriod: (month: string) => void;
+  clearAll: () => void;
   carryForward: (fromMonth: string, toMonth: string) => void;
   autoDistribute: (month: string, projectedSpending: Record<string, number>) => void;
   dismissNotification: (type: 'noBudget' | 'eom', month: string) => void;
@@ -101,6 +102,19 @@ export const useBudgetStore = create<BudgetStore>()(
           return { periods };
         });
         delete workingState[month];
+      },
+
+      clearAll: () => {
+        // Wipe every persisted period and notification, plus the in-memory
+        // working-state drafts (workingState is module-level, not in the store,
+        // so it has to be cleared explicitly or unsaved drafts would survive).
+        for (const month of Object.keys(workingState)) {
+          delete workingState[month];
+        }
+        set({
+          periods: {},
+          notifications: { dismissedNoBudget: null, dismissedEOM: null },
+        });
       },
 
       addCategory: (month, categoryId) => {

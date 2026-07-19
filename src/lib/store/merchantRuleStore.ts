@@ -19,6 +19,7 @@ interface MerchantRuleStoreState {
   getRule: (input: MerchantRuleMatchInput) => MerchantRule | undefined;
   upsertRule: (decision: MerchantRuleDecision) => void;
   listRules: () => MerchantRule[];
+  clearAll: () => void;
 }
 
 function sortAndTrimRules(rules: MerchantRule[]): MerchantRule[] {
@@ -95,6 +96,8 @@ export const useMerchantRuleStore = create<MerchantRuleStoreState>()(
           };
         }),
       listRules: () => get().rules,
+
+      clearAll: () => set({ rules: [] }),
     }),
     {
       name: "merchant-rule-storage",

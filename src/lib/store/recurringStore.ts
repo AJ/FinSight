@@ -45,6 +45,7 @@ interface RecurringStore {
   updatePayment: (id: string, updates: Partial<RecurringPayment>) => void;
   markAsNotRecurring: (id: string, normalizedName: string) => void;
   clearExcludedMerchants: () => void;
+  clearAll: () => void;
   getActivePayments: () => RecurringPayment[];
   getInactivePayments: () => RecurringPayment[];
   getTotalMonthlyRecurring: () => number;
@@ -114,6 +115,14 @@ export const useRecurringStore = create<RecurringStore>()(
 
       clearExcludedMerchants: () =>
         set({ excludedMerchants: [] }),
+
+      clearAll: () =>
+        set({
+          recurringPayments: [],
+          excludedMerchants: [],
+          lastScanned: null,
+          isScanning: false,
+        }),
 
       getActivePayments: () =>
         get().recurringPayments.filter(p => p.isActive),

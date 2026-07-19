@@ -3,8 +3,8 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useTransactionStore } from '@/lib/store/transactionStore';
 import { useSettingsStore, validateLlmServerUrl, isRemoteUrlConfirmed, confirmRemoteUrl } from '@/lib/store/settingsStore';
-import { DEFAULT_URLS } from '@/lib/llm/types';
-import { useChatStore } from '@/lib/store/chatStore';
+import { PROVIDERS } from '@/lib/llm/types';
+import { clearAllUserData } from '@/lib/store/clearAllData';
 import { usePersistHydrated } from '@/lib/store/usePersistHydrated';
 import { checkLLMConnection } from '@/lib/store/llmConnectionStore';
 import { Button } from '@/components/ui/button';
@@ -51,8 +51,6 @@ export default function SettingsPage() {
   const isSettingsStoreHydrated = usePersistHydrated(useSettingsStore);
 
   const transactions = useTransactionStore((state) => state.transactions);
-  const clearAllTransactions = useTransactionStore((state) => state.clearAll);
-  const clearChat = useChatStore((state) => state.clearAll);
 
   // Currency settings
   const currency = useSettingsStore((state) => state.currency);
@@ -158,7 +156,10 @@ export default function SettingsPage() {
     }
     setShowRemoteWarning(false);
     if (pendingUrl) {
-      testConnection(pendingUrl, false);
+      // Trusting must always let the connection through. When the checkbox is
+      // ticked the URL is confirmed above, so a normal connect passes the remote
+      // gate; when unticked, silent bypasses the gate once (re-warns next time).
+      testConnection(pendingUrl, !dontShowAgain);
       setPendingUrl(null);
     }
   }, [dontShowAgain, pendingUrl, testConnection]);
@@ -173,11 +174,10 @@ export default function SettingsPage() {
   const handleClearData = () => {
     if (
       confirm(
-        'Are you sure you want to clear all transactions? This cannot be undone.'
+        'Clear ALL data? This removes transactions, bank & credit card statements, budgets, merchant rules, recurring detections, insights, and chat history. This cannot be undone.'
       )
     ) {
-      clearAllTransactions();
-      clearChat();
+      clearAllUserData();
       alert('All data cleared successfully!');
     }
   };
@@ -234,7 +234,7 @@ export default function SettingsPage() {
                 value={llmProvider}
                 onValueChange={(v) => {
                   setLLMProvider(v as 'ollama' | 'lmstudio');
-                  setUrlInput(v === 'lmstudio' ? DEFAULT_URLS.lmstudio : DEFAULT_URLS.ollama);
+                  setUrlInput(v === 'lmstudio' ? PROVIDERS.lmstudio.defaultUrl : PROVIDERS.ollama.defaultUrl);
                   setConnectionStatus('idle');
                   setModels([]);
                 }}
@@ -272,7 +272,7 @@ export default function SettingsPage() {
               <div className="flex gap-2">
                 <Input
                   id="llm-url"
-                  placeholder={DEFAULT_URLS[llmProvider]}
+                  placeholder={PROVIDERS[llmProvider].defaultUrl}
                   value={urlInput}
                   onChange={(e) => setUrlInput(e.target.value)}
                   className="font-mono text-sm"
@@ -290,7 +290,7 @@ export default function SettingsPage() {
                 </Button>
               </div>
               <p className="text-xs text-muted-foreground">
-                Default: <code>{DEFAULT_URLS[llmProvider]}</code>.
+                Default: <code>{PROVIDERS[llmProvider].defaultUrl}</code>.
                 Change if {llmProvider === 'lmstudio' ? 'LM Studio' : 'Ollama'} runs on another port or machine.
               </p>
             </div>
@@ -460,7 +460,9 @@ export default function SettingsPage() {
 
             <p className="text-xs text-muted-foreground">
               All data is stored locally in your browser&apos;s localStorage (unencrypted).
-              Clearing removes transactions, budgets, and chat history.
+              Clearing removes transactions, bank &amp; credit card statements, budgets,
+              merchant rules, recurring detections, insights, and chat history. Your AI
+              connection, currency, and category settings are kept.
               For your privacy, clear data before using on shared computers.
             </p>
           </CardContent>

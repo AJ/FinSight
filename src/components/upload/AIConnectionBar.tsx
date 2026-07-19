@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { useSettingsStore, validateLlmServerUrl, isRemoteUrlConfirmed, confirmRemoteUrl } from '@/lib/store/settingsStore';
-import { DEFAULT_URLS } from '@/lib/llm/types';
+import { PROVIDERS } from '@/lib/llm/types';
 import { checkLLMConnection } from '@/lib/store/llmConnectionStore';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -131,7 +131,12 @@ export function AIConnectionBar({ onStatusChange, disabled = false }: AIConnecti
     }
     setShowRemoteWarning(false);
     if (pendingUrl) {
-      connect(pendingUrl, false);
+      // "I Trust This Server" must always let the connection through. The
+      // checkbox only decides persistence: when ticked the URL is confirmed
+      // above, so a normal (non-silent) connect passes the remote gate and
+      // shows the spinner; when unticked we use silent to bypass the gate
+      // once (not persisted, re-warns next time) instead of re-looping.
+      connect(pendingUrl, !dontShowAgain);
       setPendingUrl(null);
     }
   }, [dontShowAgain, pendingUrl, connect]);
@@ -236,7 +241,7 @@ export function AIConnectionBar({ onStatusChange, disabled = false }: AIConnecti
           onValueChange={(v) => {
             const newProvider = v as 'ollama' | 'lmstudio';
             setLLMProvider(newProvider);
-            const newUrl = DEFAULT_URLS[newProvider];
+            const newUrl = PROVIDERS[newProvider].defaultUrl;
             setUrlInput(newUrl);
             setStatus('idle');
             setModels([]);
@@ -255,7 +260,7 @@ export function AIConnectionBar({ onStatusChange, disabled = false }: AIConnecti
       {/* URL + Connect */}
       <div className="flex gap-2">
         <Input
-          placeholder={DEFAULT_URLS[llmProvider]}
+          placeholder={PROVIDERS[llmProvider].defaultUrl}
           value={urlInput}
           onChange={(e) => setUrlInput(e.target.value)}
           className="font-mono text-sm h-9"
