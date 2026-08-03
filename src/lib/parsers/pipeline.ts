@@ -13,7 +13,7 @@ import { Transaction as CanonicalTransaction } from '@/models/Transaction';
 import { SourceType } from '@/types';
 import type { Currency, StatementFormat, Transaction } from '@/types';
 import { normalizeStatementText } from './normalization';
-import { detectStatementType } from './typeDetection';
+import { detectStatementType, ManualTypeSelectionError } from './typeDetection';
 import { buildSummaryPrompt } from './extractSummary';
 import { buildTransactionsPrompt } from './extractTransactions';
 import { buildRewardsPrompt } from './extractRewards';
@@ -26,6 +26,7 @@ import {
 } from './prompts';
 import type { CCSummary, BankSummary, Summary } from './extractSummary';
 import type { TransactionsOutput } from './extractTransactions';
+import { pickBoundaryBalances, reconcileBalances } from './balanceReconcile';
 import type { RewardsOutput } from './extractRewards';
 import type { StatementExtractionData } from './extractionResult';
 import { mergeOutputs } from '../verification/mergeEngine';
@@ -98,18 +99,15 @@ export async function processStatement(
       const typeResult = await detectStatementType(normalized, options.llmConfig, options.signal, contextWindowTokens);
       bankName = typeResult.bankName;
 
-      if (typeResult.confidence < CONFIDENCE_THRESHOLD) {
-        return {
-          success: false,
-          data: null,
-          warnings: [],
-          errors: [
-            `Statement type detection confidence (${typeResult.confidence}) below threshold (${CONFIDENCE_THRESHOLD}). Manual type selection required.`,
-          ],
-        };
+      const detectedType = typeResult.statementType;
+      if (detectedType === 'unknown' || typeResult.confidence < CONFIDENCE_THRESHOLD) {
+        throw new ManualTypeSelectionError(
+          typeResult.reason ||
+            `Statement type could not be determined (confidence ${typeResult.confidence}). Please select the statement type.`,
+        );
       }
 
-      resolvedStatementType = typeResult.statementType;
+      resolvedStatementType = detectedType;
     }
 
     if (resolvedStatementType === 'credit_card') {
@@ -118,6 +116,9 @@ export async function processStatement(
 
     return await processBank(normalized, bankName || null, options, contextWindowTokens);
   } catch (e: unknown) {
+    // Manual type selection is a recoverable outcome, not a pipeline failure —
+    // propagate it unwrapped so the upload UI can re-prompt for the type.
+    if (e instanceof ManualTypeSelectionError) throw e;
     errors.push(`Pipeline failed: ${e instanceof Error ? e.message : 'Unknown error'}`);
     return {
       success: false,
@@ -299,6 +300,60 @@ async function processBank(
     ? buildFailedChunks((transactionsResult.debugInfo as { diagnostics?: ChunkRunDiagnostics[] }).diagnostics ?? [])
     : undefined;
 
+  // Reconcile opening/closing balance: the summary section's label/value grid scrambles under
+  // PDF text flattening, so prefer the transaction pass's boundary-row values when they
+  // self-validate (opening + credits - debits ≈ closing); otherwise fall back to the summary.
+  // Overwriting the summary values here means the bundle, verificationInputs, and the recon
+  // engine all see the corrected balance with no further changes.
+  const txnData = transactionsResult.data;
+  const txnTxns = txnData?.transactions ?? [];
+  const totalDebits = txnTxns.filter((t) => t.type === 'debit').reduce((s, t) => s + Math.abs(t.amount), 0);
+  const totalCredits = txnTxns.filter((t) => t.type === 'credit').reduce((s, t) => s + Math.abs(t.amount), 0);
+  const transactionsWithRunningBalance = txnTxns.filter((t) => typeof t.balance === 'number' && Number.isFinite(t.balance));
+  // Running-balance fallback: derive opening by reversing the first balanced txn and closing
+  // from the last. This assumes the array is in chronological (oldest-first) order, which is
+  // NOT guaranteed — the extraction prompt does not enforce order and nothing sorts the result,
+  // so a newest-first statement yields swapped values here. Tolerable because these are
+  // priority-2 (weakest) candidates: a wrong-order pair fails reconcileBalances'
+  // opening + credits - debits ≈ closing check and falls back to the labelled boundary rows or
+  // summary. The only residual exposure is a statement with no boundary labels and a corrupted
+  // summary (the rescue path this fallback exists for).
+  const firstBalancedTxn = transactionsWithRunningBalance[0];
+  const lastBalancedTxn = transactionsWithRunningBalance[transactionsWithRunningBalance.length - 1];
+  const runningOpening = firstBalancedTxn
+    ? firstBalancedTxn.type === 'debit'
+      ? firstBalancedTxn.balance! + Math.abs(firstBalancedTxn.amount)
+      : firstBalancedTxn.balance! - Math.abs(firstBalancedTxn.amount)
+    : null;
+  const runningClosing = lastBalancedTxn?.balance ?? null;
+  const summaryData = summaryResult.data as BankSummary | null;
+  const reconciled = reconcileBalances({
+    summaryOpening: summaryData?.openingBalance ?? null,
+    summaryClosing: summaryData?.closingBalance ?? null,
+    txnOpening: txnData?.openingBalance ?? null,
+    txnClosing: txnData?.closingBalance ?? null,
+    runningOpening,
+    runningClosing,
+    totalDebits,
+    totalCredits,
+  });
+  debugLog('bank_summary', 'Balance reconcile', {
+    summary: { opening: summaryData?.openingBalance ?? null, closing: summaryData?.closingBalance ?? null },
+    transactions: { opening: txnData?.openingBalance ?? null, closing: txnData?.closingBalance ?? null },
+    running: { opening: runningOpening, closing: runningClosing },
+    chosen: { opening: reconciled.openingBalance, closing: reconciled.closingBalance },
+    sources: { opening: reconciled.openingSource, closing: reconciled.closingSource },
+    warning: reconciled.warning ?? null,
+  });
+  if (summaryData) {
+    // Only write a key when we actually have a value. Writing null would inject the key onto a
+    // summary that lacked it, which falsely triggers verificationInputs (its gate is key presence).
+    // A legitimate 0 is non-null and is written.
+    if (reconciled.openingBalance !== null) summaryData.openingBalance = reconciled.openingBalance;
+    if (reconciled.closingBalance !== null) summaryData.closingBalance = reconciled.closingBalance;
+  }
+  if (reconciled.warning) warnings.push(reconciled.warning);
+
   const merged = mergeOutputs(
     'bank',
     summaryResult.data,
@@ -375,6 +430,9 @@ async function runTransactionExtraction(
   const allTransactions: ExtractedTransaction[] = [];
   const transactionWarnings: string[] = [];
   const transactionErrors: string[] = [];
+  // Per-chunk outputs (for assembling opening/closing balance: first chunk owns opening, last
+  // owns closing). Null entries for failed chunks.
+  const chunkOutputs: Array<TransactionsOutput | null> = [];
   let totalAttempts = 0;
   let successfulChunks = 0;
   let contextOverflow = false;
@@ -405,6 +463,7 @@ async function runTransactionExtraction(
     totalAttempts += chunkResult.attempts;
     const extractedTransactions = chunkResult.data?.transactions ?? [];
     const droppedTransactionCount = getDroppedTransactionCount(chunkResult.debugInfo);
+    chunkOutputs.push(chunkResult.success ? chunkResult.data ?? null : null);
 
     diagnostics.push({
       chunkIndex: chunk.index,
@@ -442,6 +501,14 @@ async function runTransactionExtraction(
 
   const mergedTransactions = mergeChunkTransactions(allTransactions);
   const mergedValidation = validateTransactions({ transactions: mergedTransactions.transactions });
+
+  // Assemble opening/closing balance from chunk boundary rows (first chunk's opening, last
+  // chunk's closing). The re-validation above was passed only { transactions }, so its balance
+  // fields are null — override them with the chunk-assembled values.
+  const boundary = pickBoundaryBalances(chunkOutputs);
+  const dataWithBalances = mergedValidation.data
+    ? { ...mergedValidation.data, openingBalance: boundary.openingBalance, closingBalance: boundary.closingBalance }
+    : mergedValidation.data;
 
   debugLog(stage, 'Chunked extraction summary', {
     chunkingUsed: true,
@@ -481,7 +548,7 @@ async function runTransactionExtraction(
 
   return {
     success: !contextOverflow && (hasUsableData || mergedErrors.length === 0),
-    data: mergedValidation.data,
+    data: dataWithBalances,
     errors: mergedErrors,
     warnings: mergedWarnings,
     attempts: totalAttempts,

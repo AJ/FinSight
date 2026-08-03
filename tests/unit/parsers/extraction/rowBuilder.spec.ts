@@ -79,7 +79,7 @@ describe('buildTransactionRows', () => {
     expect(rows).toHaveLength(2);
   });
 
-  it('skips noise marker rows like Opening Balance', () => {
+  it('keeps opening balance rows available for boundary-balance extraction', () => {
     const lines = [
       makeAssignedLine(['01-Jan-2026', 'Opening Balance', '50000'], 100, 0),
       makeAssignedLine(['02-Jan', 'Test', '100'], 80, 0),
@@ -87,8 +87,9 @@ describe('buildTransactionRows', () => {
     const schemas = [makeSchema(3, 0, 0)];
 
     const { rows } = buildTransactionRows(lines, schemas);
-    expect(rows).toHaveLength(1);
-    expect(rows[0].columnValues[1]).toBe('Test');
+    expect(rows).toHaveLength(2);
+    expect(rows[0].columnValues[1]).toBe('Opening Balance');
+    expect(rows[1].columnValues[1]).toBe('Test');
   });
 
   it('does not merge across region boundaries', () => {
@@ -131,7 +132,7 @@ describe('buildTransactionRows', () => {
     expect(rows[1].columnValues[2]).toBe('Groceries');
   });
 
-  it('skips opening noise marker variants without ending table', () => {
+  it('keeps opening marker variants without ending table', () => {
     const markers = ['Opening Balance', 'Brought Forward'];
     for (const marker of markers) {
       const lines = [
@@ -139,8 +140,9 @@ describe('buildTransactionRows', () => {
         makeAssignedLine(['02-Jan', 'Test', '100'], 80, 0),
       ];
       const { rows } = buildTransactionRows(lines, [makeSchema(3, 0, 0)]);
-      expect(rows).toHaveLength(1);
-      expect(rows[0].columnValues[1]).toBe('Test');
+      expect(rows).toHaveLength(2);
+      expect(rows[0].columnValues[1]).toBe(marker);
+      expect(rows[1].columnValues[1]).toBe('Test');
     }
   });
 
@@ -158,15 +160,16 @@ describe('buildTransactionRows', () => {
     }
   });
 
-  it('filters noise rows even when they contain a date', () => {
+  it('keeps dated opening balance rows for boundary-balance extraction', () => {
     const lines = [
       makeAssignedLine(['01-Jan', 'Opening Balance', '50000'], 100, 0),
       makeAssignedLine(['02-Jan', 'Test', '100'], 80, 0),
     ];
     const schemas = [makeSchema(3, 0, 0)];
     const { rows } = buildTransactionRows(lines, schemas);
-    expect(rows).toHaveLength(1);
-    expect(rows[0].columnValues[1]).toBe('Test');
+    expect(rows).toHaveLength(2);
+    expect(rows[0].columnValues[1]).toBe('Opening Balance');
+    expect(rows[1].columnValues[1]).toBe('Test');
   });
 
   it('skips lines with empty assignments', () => {
@@ -532,8 +535,9 @@ describe('buildTransactionRows — postTableLines', () => {
 
     const { rows, postTableLines } = buildTransactionRows(lines, schemas);
     expect(rows).toHaveLength(1);
-    expect(postTableLines).toHaveLength(1);
-    expect(postTableLines[0].line.items[1].text).toContain('Statement generated');
+    expect(postTableLines).toHaveLength(2);
+    expect(postTableLines[0].line.items[1].text).toBe('Closing Balance');
+    expect(postTableLines[1].line.items[1].text).toContain('Statement generated');
   });
 
   it('collects lines after summary row as postTableLines', () => {
@@ -546,8 +550,9 @@ describe('buildTransactionRows — postTableLines', () => {
 
     const { rows, postTableLines } = buildTransactionRows(lines, schemas);
     expect(rows).toHaveLength(1);
-    expect(postTableLines).toHaveLength(1);
-    expect(postTableLines[0].line.items[1].text).toBe('Footer text');
+    expect(postTableLines).toHaveLength(2);
+    expect(postTableLines[0].line.items[2].text).toBe('5000.00');
+    expect(postTableLines[1].line.items[1].text).toBe('Footer text');
   });
 
   it('returns empty postTableLines when no closing marker is encountered', () => {
@@ -575,9 +580,65 @@ describe('buildTransactionRows — postTableLines', () => {
     const { rows, postTableLines } = buildTransactionRows(lines, schemas);
     // Region 0: 1 row + 1 post-table line; Region 1: 2 rows
     expect(rows).toHaveLength(3);
-    // Only the region 0 footer should be in postTableLines
-    expect(postTableLines).toHaveLength(1);
-    expect(postTableLines[0].line.items[1].text).toBe('Region 0 footer');
+    // The region 0 closing boundary and footer should be in postTableLines.
+    expect(postTableLines).toHaveLength(2);
+    expect(postTableLines[0].line.items[1].text).toBe('Closing Balance');
+    expect(postTableLines[1].line.items[1].text).toBe('Region 0 footer');
+  });
+});
+
+// ── Section heading table-end ──
+
+describe('buildTransactionRows — section heading table-end', () => {
+  it('ends the table at a SUMMARY section heading and routes following lines to postTableLines', () => {
+    // Mirrors a real bank statement: last transaction, then a "SUMMARY" section
+    // heading, then prose, then a numeric "Closing balance" row further down.
+    // Without heading detection, the closing branch fires at the distant
+    // "Closing balance" row and its midpoint sweeps SUMMARY + prose into the
+    // last transaction's description. The heading must end the table instead.
+    const lines = [
+      makeAssignedLine(['20-Nov', 'UPI/Deshna/From Khushboo', '-1,950.00', '49,154.62'], 100, 0),
+      makeAssignedLine(['', 'SUMMARY', '', ''], 90, 0),
+      makeAssignedLine(["Analysis of your account's activity", '', '', ''], 85, 0),
+      makeAssignedLine(['', 'Closing balance', '', '49,154.62'], 70, 0),
+    ];
+    const schemas = [makeSchema(4, 0, 0)];
+
+    const { rows, postTableLines } = buildTransactionRows(lines, schemas);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].columnValues[1]).toBe('UPI/Deshna/From Khushboo');
+    expect(rows[0].columnValues[1]).not.toContain('Analysis');
+    // SUMMARY heading + prose + closing balance all become post-table
+    expect(postTableLines).toHaveLength(3);
+    expect(postTableLines[0].line.items[1].text).toBe('SUMMARY');
+  });
+
+  it('does NOT end the table on a merchant name containing "summary" as a substring', () => {
+    // Exact-match only: "Summary Foods" is a description, not a section heading.
+    const lines = [
+      makeAssignedLine(['01-Jan', 'Transaction', '100'], 100, 0),
+      makeAssignedLine(['02-Jan', 'Summary Foods Restaurant', '25'], 80, 0),
+      makeAssignedLine(['03-Jan', 'Next', '200'], 60, 0),
+    ];
+    const schemas = [makeSchema(3, 0, 0)];
+
+    const { rows } = buildTransactionRows(lines, schemas);
+    expect(rows).toHaveLength(3);
+    expect(rows[1].columnValues[1]).toBe('Summary Foods Restaurant');
+  });
+
+  it('treats section-heading variants (Transaction Summary, Account Summary) as table-end', () => {
+    for (const heading of ['Transaction Summary', 'Account Summary', 'Statement Summary']) {
+      const lines = [
+        makeAssignedLine(['01-Jan', 'Transaction', '100'], 100, 0),
+        makeAssignedLine(['', heading, ''], 80, 0),
+        makeAssignedLine(['', 'Post-table prose', ''], 60, 0),
+      ];
+      const { rows, postTableLines } = buildTransactionRows(lines, [makeSchema(3, 0, 0)]);
+      expect(rows).toHaveLength(1);
+      expect(rows[0].columnValues[1]).toBe('Transaction');
+      expect(postTableLines.some(l => l.line.items[1].text === heading)).toBe(true);
+    }
   });
 });
 
@@ -726,3 +787,4 @@ describe('buildTransactionRows — Total marker and exact-match', () => {
     expect(rows[1].columnValues[1]).toBe('Total Energies Fuel');
   });
 });
+

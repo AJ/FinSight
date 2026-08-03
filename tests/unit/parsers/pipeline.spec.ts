@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 import { processStatement } from '@/lib/parsers/pipeline';
+import { ManualTypeSelectionError } from '@/lib/parsers/typeDetection';
 import type { LLMRuntimeConfig } from '@/lib/llm/types';
 
 // Mock fetch — the only external boundary (LLM HTTP calls go through here)
@@ -180,16 +181,28 @@ describe('processStatement — routing', () => {
     expect(mockFetch).toHaveBeenCalledTimes(3); // type detection + summary + transactions
   });
 
-  it('returns failure when type detection confidence is below threshold', async () => {
+  it('throws ManualTypeSelectionError when type detection confidence is below threshold', async () => {
     mockFetch
       .mockResolvedValueOnce(ollamaJson(typeDetectionJson('bank', 0.5)));
 
-    const result = await processStatement('raw text', defaultOptions);
+    // Low-confidence detection is a recoverable outcome: the pipeline throws a
+    // ManualTypeSelectionError (propagated unwrapped, not a generic success:false)
+    // so the upload UI can catch it via isManualTypeSelectionError and re-prompt
+    // the user for an explicit type.
+    await expect(processStatement('raw text', defaultOptions))
+      .rejects.toBeInstanceOf(ManualTypeSelectionError);
+  });
 
-    expect(result.success).toBe(false);
-    expect(result.errors[0]).toContain('confidence');
-    expect(result.errors[0]).toContain('0.5');
-    expect(result.data).toBeNull();
+  it('throws ManualTypeSelectionError when type detection omits confidence', async () => {
+    // A missing confidence must not bypass the 0.8 gate. `undefined < 0.8` is false
+    // (NaN comparison), so without producer coercion the pipeline would silently
+    // accept the type and proceed; detectStatementType normalizes a missing
+    // confidence to 0, which trips the gate.
+    mockFetch
+      .mockResolvedValueOnce(ollamaJson(JSON.stringify({ type: 'bank' })));
+
+    await expect(processStatement('raw text', defaultOptions))
+      .rejects.toBeInstanceOf(ManualTypeSelectionError);
   });
 
   it('returns pipeline failure on fetch error during type detection', async () => {
@@ -283,6 +296,30 @@ describe('processStatement — verification inputs', () => {
     expect(vi.meta.closingBalance).toBe(5000);
     expect(vi.meta.currency).toBe('INR');
     expect(vi.summary).toBeDefined();
+  });
+
+  it('overrides a wrong summary balance with reconciled running-balance values', async () => {
+    // The summary balances are scrambled (wrong). The transactions carry running
+    // balances that DO add up (opening 10000 + 0 credits - 2000 debits = 8000
+    // closing), so reconcile picks them and the override writes them onto the
+    // summary, replacing the wrong values.
+    const txns = [
+      { date: '2024-01-10', description: 'Purchase A', amount: 1000, type: 'debit', balance: 9000 },
+      { date: '2024-01-11', description: 'Purchase B', amount: 1000, type: 'debit', balance: 8000 },
+    ];
+    const scrambledSummary = bankSummaryJson({ openingBalance: 99999, closingBalance: 88888 });
+    setupBankFetch(txns, scrambledSummary);
+
+    const result = await processStatement('raw bank text', {
+      ...defaultOptions,
+      statementType: 'bank',
+    });
+
+    expect(result.success).toBe(true);
+    const vi = result.data?.verificationInputs as { meta: Record<string, unknown> };
+    // The scrambled 99999 / 88888 were replaced by the reconciled 10000 / 8000.
+    expect(vi.meta.openingBalance).toBe(10000);
+    expect(vi.meta.closingBalance).toBe(8000);
   });
 
   it('builds credit card verification inputs with totalDue and payments', async () => {

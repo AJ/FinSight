@@ -1,5 +1,5 @@
 import type { AssignedLine, LogicalRow, ColumnSchema, ColumnDef } from './extractionTypes';
-import { isDateLike } from '../datePatterns';
+import { isDateLike } from '../dateParser';
 
 // Opening markers appear BEFORE transactions (skip row, continue processing)
 const OPENING_MARKERS = ['opening balance', 'brought forward'];
@@ -20,6 +20,28 @@ function classifyNoiseRow(values: string[]): 'opening' | 'closing' | null {
     if (CLOSING_MARKERS.includes(v)) return 'closing';
   }
   return null;
+}
+
+// Section headings that introduce the post-transaction summary block. When one
+// appears, the transaction table is definitively over — everything above it is
+// table-side, everything from it down is post-table. Unlike closing markers
+// ("Closing balance") or numeric summary rows, a heading can sit well above the
+// trailing totals row, so it must end the table before that distance can pull a
+// bad midpoint down through the section. Exact standalone match only (same
+// normalization as classifyNoiseRow), so "Summary Foods Restaurant" is safe.
+const SECTION_HEADINGS = [
+  'summary',
+  'transaction summary',
+  'statement summary',
+  'account summary',
+  'summary of transactions',
+];
+
+function isSectionHeading(values: string[]): boolean {
+  const normalized = values.map(v =>
+    v.toLowerCase().replace(/[:.\s]+$/g, '').trim(),
+  );
+  return normalized.some(v => SECTION_HEADINGS.includes(v));
 }
 
 /**
@@ -179,22 +201,62 @@ export function buildTransactionRows(
     // Noise/summary detection: exact keyword match OR structural (no date + ≥2 amounts)
     const noiseType = classifyNoiseRow(values);
     if (noiseType === 'opening') {
-      // Opening noise rows (e.g., "Opening Balance") mark the start of the table.
-      // Skip them without creating a row, but record that the table has begun.
+      // Keep opening boundary rows in the table text so the transaction pass can
+      // recover openingBalance when the summary section is absent or mangled.
       if (meta && !meta.started) meta.startY = line.line.y;
       if (meta) meta.started = true;
-      continue;
     }
-    if (noiseType === 'closing' || isSummaryRow(values, dateColIdx)) {
-      // Closing noise/summary rows appear after the last transaction.
-      // Flush pending continuations to preserve last-transaction description,
-      // then end processing for this region to prevent post-table metadata from
-      // corrupting rows. Other regions are unaffected.
+    // Section heading = hard table end. A heading (e.g. "SUMMARY") introduces
+    // the post-transaction block and can sit well above the trailing "Closing
+    // balance" row. End the table here so the heading, its prose, and the
+    // summary table route to postTableLines instead of being merged into the
+    // last transaction by a midpoint computed against the distant totals row.
+    // Pending continuations are above the heading → table-side wrapped
+    // narration, so flush them into the last transaction.
+    if (isSectionHeading(values)) {
       flushToRow(currentRow);
       if (meta) {
         meta.endY = line.line.y;
         meta.ended = true;
       }
+      postTableLines.push(line);
+      continue;
+    }
+
+    if (noiseType === 'closing' || isSummaryRow(values, dateColIdx)) {
+      // Closing/summary rows appear after the last transaction. Preserve them as
+      // post-table prose, but do not let them become continuations of the last row.
+      //
+      // === CONTINUATION-MERGE FIX (closing/summary flush) ===
+      // This used to call flushToRow(currentRow), which merged EVERY pending
+      // continuation into the last transaction with no spatial check. Any post-table
+      // line lacking a date-column value (summary text, footer, disclaimer, marketing,
+      // a statement-period label, etc.) got glued onto the last transaction's
+      // description. Now we reuse the same midpoint boundary as the new-anchor path:
+      // the closing row supplies the next boundary Y, and continuations BELOW the
+      // midpoint (closer to the closing row = post-table) go to postTableLines
+      // instead of the last transaction. Above the midpoint = genuine narration.
+      if (pendingContinuations.length > 0) {
+        if (currentRow) {
+          const midpoint = (currentAnchorY + line.line.y) / 2;
+          for (const cont of pendingContinuations) {
+            if (cont.line.line.y > midpoint) {
+              currentRow.lines.push(cont.line);
+              appendToRow(currentRow, cont.values);
+            } else {
+              postTableLines.push(cont.line);
+            }
+          }
+        }
+        // No currentRow yet → drop pre-table continuations (matches prior flushToRow(null)).
+        pendingContinuations = [];
+      }
+      // === END CONTINUATION-MERGE FIX (closing/summary flush) ===
+      if (meta) {
+        meta.endY = line.line.y;
+        meta.ended = true;
+      }
+      postTableLines.push(line);
       continue;
     }
 
@@ -254,8 +316,20 @@ export function buildTransactionRows(
     }
   }
 
-  // Flush remaining continuations to last row (only when loop ended without region ended)
+  // Flush remaining continuations to last row (only when loop ended without region ended).
+  // NOTE: a blanket "send all trailing continuations to postTableLines" was tried and
+  // rejected — it cannot distinguish post-table noise from a legitimate wrapped narration
+  // (a 2nd description line with no date), so it broke real multi-line narrations
+  // (see 'merges continuation lines without a date into the previous transaction').
+  // The correct fix needs Y-gap/proximity detection to tell the two apart.
   flushToRow(currentRow);
+
+  // For regions that never hit a closing marker, set endY to the last anchor's y
+  for (const [, meta] of regionMeta) {
+    if (meta.endY === null && meta.started) {
+      meta.endY = currentAnchorY;
+    }
+  }
 
   // For regions that never hit a closing marker, set endY to the last anchor's y
   for (const [, meta] of regionMeta) {

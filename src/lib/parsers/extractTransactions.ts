@@ -1,7 +1,9 @@
 /**
- * Transaction extraction pass.
+ * Transaction extraction prompt + output type.
  *
- * Extracts all individual transaction rows from statement.
+ * Builds the prompt that asks the LLM to extract individual transaction rows,
+ * and defines the TransactionsOutput shape. The actual LLM call and response
+ * parsing happen in pipeline.ts (processBank / processCreditCard).
  */
 
 import type { ExtractedTransaction } from '@/types/extractedTransaction';
@@ -11,6 +13,11 @@ export type { ExtractedTransaction };
 
 export interface TransactionsOutput {
   transactions: ExtractedTransaction[];
+  // Side-channel: bank statements only. The transaction pass reads opening/closing balance
+  // from the labelled boundary rows of the transaction table. Absent for credit-card statements
+  // and for error/middle-chunk outputs.
+  openingBalance?: number | null;
+  closingBalance?: number | null;
   _debug?: {
     totalCount: number;
     droppedTransactions: Array<{
