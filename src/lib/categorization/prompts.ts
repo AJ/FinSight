@@ -3,7 +3,7 @@ import { debugLog } from '@/lib/utils/debug';
 import { normalizeMerchantName } from "@/lib/categorizer";
 import { normalizeTransactionType } from '@/models/TransactionType';
 import type { SourceType } from "@/types";
-import type { TransactionSubType } from "@/models/Transaction";
+import { TRANSACTION_SUB_TYPES, type TransactionSubType } from "@/models/Transaction";
 import type { StatementType } from "@/types/creditCard";
 import type { CategorizationSource } from "./types";
 import type { JSONSchema } from "@/lib/llm/types";
@@ -34,18 +34,16 @@ Rules:
    - Below 0.5: Uncertain (use "other" category)
 4. If truly uncertain, use "other" with confidence around 0.4
 5. The "direction" field indicates credit (money in) or debit (money out)
-6. Use "merchant" as the normalized merchant clue when provided; it may be more informative than the raw description
-7. Use "sourceType" and "transactionSubType" as strong hints when present
+6. The "merchant" field is a cleaned hint, not authoritative. It is useful when it surfaces a real retailer hidden in a noisy description, but it can also be wrong — for transfers it may carry a bank name or payment app rather than a payee. When "merchant" and "description" disagree, trust the description.
+7. You are the SOLE authority for transactionSubType. Decide the subType FIRST from the narration and direction, THEN pick a category valid for that subType. Allowed subTypes: ${TRANSACTION_SUB_TYPES.join(", ")}. You MUST include transactionSubType in EVERY result object — never omit it. Decide the subType from the narration per rule 11.
 8. If the merchant is low-signal and the transaction is ambiguous, prefer "other" with low confidence instead of overconfident guessing
 9. Do NOT infer category from amount alone or from unrelated numeric tokens
 10. If a learned merchant mapping is provided in future prompts, treat it as a strong hint, but still return one of the allowed category IDs
-11. SUSPENSE RULE (CRITICAL): Any bank debit with transactionSubType "transfer" MUST be evaluated for suspense.
-    - Flag as suspense (isSuspense: true) UNLESS the narration explicitly states the PURPOSE beyond just a recipient name or reference number.
-    - Having a recipient name does NOT disqualify from suspense. ALL transfers have recipient names — that does not tell you the purpose.
-    - Only mark isSuspense=false if the narration contains explicit purpose keywords like: "rent", "salary", "SIP", "mutual fund", "EMI", "loan", "insurance premium", "credit card payment", "investment", or similar.
-    - Examples that SHOULD be flagged as suspense: "IMPS-533621763371RANJANA", "NEFT-Transfer to ABC Corp", "UPI-payment@paytm" — you cannot determine if this is rent, a purchase, a loan repayment, or a personal transfer.
-    - When flagging as suspense, still provide your best-guess category (NOT "transfer") and confidence below 0.6.
-    - The "transfer" category is ONLY for confirmed self-transfers (same person's own accounts). Never use it for external payments.
+11. FUND MOVEMENTS vs PURCHASES (self_transfer): self_transfer means a FUND MOVEMENT — money sent to another account or person. It does NOT mean "a debit you can't otherwise categorize." Decide from what the money did, not from whether you recognize a keyword.
+    - A purchase of goods or services from a merchant/retailer is NEVER self_transfer — use purchase (or bank_charge for issuer fees, charge for taxes/forex). A named merchant (Amazon, a restaurant, a store, a utility provider) or any description of goods/services means purchase, whether or not a "purpose keyword" appears. This is the most common debit type — default to purchase for ordinary spending, not self_transfer.
+    - self_transfer is for movements to an account, a person, a payment handle, or a generic payee — e.g. "Transfer to RANJANA", "NEFT-…", "UPI-payment@…", "Moved to savings", "Sent to John", "To A/c 12345". The destination is not a merchant, so ownership is unresolved: assign self_transfer and category "transfer"; the reviewer confirms whether it is the user's own account.
+    - Payment rails (IMPS/NEFT/UPI/RTGS/ACH/SEPA/Wire/Zelle/Pix) are EXAMPLES of fund movements, not the trigger. A movement phrased with no rail word is still self_transfer; a purchase that happens to mention a rail is still a purchase.
+    - The "transfer" category is for fund movements only (self_transfer subtype).
 
 Category guidance:
 ${Object.entries(CATEGORY_GUIDANCE)
@@ -70,7 +68,9 @@ export function buildCategorizationPrompt(
   statementType?: StatementType
 ): string {
   const statementContext = statementType
-    ? `Statement context: These transactions are from a ${statementType === "bank" ? "Bank" : "Credit Card"} statement. Use this to interpret keywords appropriately (e.g., "Credit" means a refund/deposit in bank statements, but a purchase in credit card statements).\n\n`
+    ? statementType === "credit_card"
+      ? `Statement context: These transactions are from a Credit Card statement. Direction is inverted vs a bank account — a DEBIT is a purchase or charge (money spent on the card); a CREDIT is money ONTO the card, NEVER income. On a credit card statement:\n  - A credit with payment keywords ("PAYMENT RECEIVED", "BBPS", "BILL PAYMENT", "AUTO-PAY"/"AUTOPAY", "PAID", or NEFT/UPI/IMPS/RTGS/ACH/SEPA/WIRE routed to the card) is a bill payment → transactionSubType "debt_payment", category "cc_bill_payment".\n  - "cashback"/"valueback"/"reward cash" credit → transactionSubType "rewards".\n  - A merchant credit for a returned/cancelled/reversed purchase → transactionSubType "refund".\n\n`
+      : `Statement context: These transactions are from a Bank statement. A credit is money into the account (salary/deposit/refund/interest); a debit is money out.\n\n`
     : "";
 
   const txnList = transactions
@@ -87,10 +87,6 @@ export function buildCategorizationPrompt(
         payload.sourceType = t.sourceType;
       }
 
-      if (t.transactionSubType) {
-        payload.transactionSubType = t.transactionSubType;
-      }
-
       return JSON.stringify(payload);
     })
     .join(",\n  ");
@@ -105,9 +101,11 @@ export function buildCategorizationPrompt(
 ]
 
 Return a JSON array with this exact format:
-[{"id": "original-id", "category": "category-id", "confidence": 0.95, "isSuspense": false}]
+[{"id": "original-id", "transactionSubType": "<subType>", "category": "category-id", "confidence": <0.0-1.0>}]
 
-Set "isSuspense" to true for bank debit transfers where the narration does not explicitly state the purpose. Having a recipient name alone is NOT sufficient — flag as suspense unless you see purpose keywords like "rent", "salary", "SIP", "EMI", "investment", etc.
+The confidence above is a placeholder — fill in your own score per rule 3. Do NOT copy a fixed value across transactions; it must reflect each transaction's actual evidence.
+
+Choose the subType before the category. Include transactionSubType on EVERY object — it is required, not optional. self_transfer is for FUND MOVEMENTS (money sent to an account/person) only — a merchant purchase is purchase/charge, never self_transfer, even when no keyword is present.
 
 Important: Return ONLY the JSON array, nothing else.`;
 }
@@ -117,7 +115,7 @@ Important: Return ONLY the JSON array, nothing else.`;
  */
 export function parseCategorizationResponse(
   response: string
-): { id: string; category: string; confidence: number; source: CategorizationSource; isSuspense?: boolean }[] {
+): { id: string; category: string; confidence: number; source: CategorizationSource; transactionSubType?: TransactionSubType }[] {
   // Try direct parse
   try {
     const parsed = JSON.parse(response);
@@ -177,7 +175,7 @@ export function parseCategorizationResponse(
  */
 function normalizeResult(
   result: unknown
-): { id: string; category: string; confidence: number; source: CategorizationSource; isSuspense?: boolean } {
+): { id: string; category: string; confidence: number; source: CategorizationSource; transactionSubType?: TransactionSubType } {
   const obj = result as Record<string, unknown>;
   const rawCategory = String(obj.category || "other");
   const rawConfidence = obj.confidence;
@@ -197,12 +195,21 @@ function normalizeResult(
     }
   }
 
+  // Classification is the subtype authority. Accept only canonical subtypes; anything else
+  // (a hallucinated string) is dropped so the caller falls back to the transaction's existing
+  // subtype or the failure-path default.
+  const rawSubType = typeof obj.transactionSubType === 'string' ? obj.transactionSubType.toLowerCase() : undefined;
+  const transactionSubType =
+    rawSubType && (TRANSACTION_SUB_TYPES as readonly string[]).includes(rawSubType)
+      ? (rawSubType as TransactionSubType)
+      : undefined;
+
   return {
     id: String(obj.id || ""),
     category: normalizeCategoryId(rawCategory),
     confidence,
     source: hasValidAiConfidence ? "ai" : "keyword",
-    isSuspense: obj.isSuspense === true ? true : undefined,
+    transactionSubType,
   };
 }
 
@@ -210,7 +217,7 @@ function normalizeResult(
  * Validate a categorization result.
  */
 function isValidResult(
-  result: { id: string; category: string; confidence: number; source: CategorizationSource; isSuspense?: boolean }
+  result: { id: string; category: string; confidence: number; source: CategorizationSource; transactionSubType?: TransactionSubType }
 ): boolean {
   const validCategories = DEFAULT_CATEGORIES.map((c) => c.id);
   return (
@@ -302,24 +309,19 @@ export function normalizeCategoryId(categoryId: string): string {
     return CATEGORY_ALIASES[normalized];
   }
 
-  // Check for partial matches in aliases
-  for (const [alias, canonical] of Object.entries(CATEGORY_ALIASES)) {
-    if (normalized.includes(alias) || alias.includes(normalized)) {
-      debugLog('categorize', `Mapped partial alias "${categoryId}" → "${canonical}"`);
-      return canonical;
-    }
-  }
-
-  // Unknown category
+  // Unknown category. Deliberately no fuzzy/substring fallback: bidirectional
+  // substring matching misrouted free-form strings because short aliases
+  // ("emi", "stocks", "premium") appear inside unrelated words (e.g. "seminar"
+  // → loans, "livestocks" → investment). Known spellings belong in the alias
+  // table above; anything else is honestly reported as "other".
   debugLog('categorize', `Unknown category "${categoryId}", using "other"`);
   return "other";
 }
 
 /**
  * Permissive JSON Schema for the categorization response (spec §6). Co-located with the
- * prompt. Root is an array; each item constrains `category` to the registry's exact IDs so
- * the decoder cannot emit an invented category. `isSuspense` is optional (omitted when
- * false by the model is fine — parseCategorizationResponse tolerates absence).
+ * prompt. Root is an array; each item constrains `category` to the registry's exact IDs and
+ * `transactionSubType` to the canonical enum, so the decoder cannot emit an invented value.
  */
 export const CATEGORIZATION_SCHEMA: JSONSchema = {
   type: 'array',
@@ -328,10 +330,10 @@ export const CATEGORIZATION_SCHEMA: JSONSchema = {
     properties: {
       id: { type: 'string' },
       category: { type: 'string', enum: DEFAULT_CATEGORIES.map((c) => c.id) },
+      transactionSubType: { type: 'string', enum: [...TRANSACTION_SUB_TYPES] },
       confidence: { type: 'number' },
-      isSuspense: { type: 'boolean' },
     },
-    required: ['id', 'category', 'confidence'],
+    required: ['id', 'category', 'confidence', 'transactionSubType'],
     additionalProperties: true,
   },
 };

@@ -87,9 +87,8 @@ const RESPONSES = {
 
 function detectStage(prompt: string): keyof (typeof RESPONSES)['bank'] {
   if (
-    prompt.includes('CREDIT CARD indicators') ||
-    prompt.includes('BANK STATEMENT indicators') ||
-    (prompt.includes('determine') && prompt.includes('bank statement or a credit card'))
+    prompt.includes('DECIDE BY STRUCTURE') ||
+    /determine whether it is a .* statement or a .* statement/i.test(prompt)
   ) {
     return 'typeDetection';
   }

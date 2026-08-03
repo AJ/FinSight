@@ -575,12 +575,12 @@ describe('toCreditCardStatement (via finalizeReviewImport)', () => {
     });
   });
 
-  it('strips isSuspense flag from transactions before persisting', async () => {
+  it('persists reviewReasons through to the store (advisories are not stripped)', async () => {
     const base = makeTransaction({ id: 'txn-1', description: 'Transfer', amount: 5000 });
-    const suspenseTxn = base.cloneWith({ isSuspense: true });
+    const flagged = base.cloneWith({ reviewReasons: ['fingerprint_collision'] });
 
     reviewSessionRepository.save({
-      transactions: [suspenseTxn],
+      transactions: [flagged],
       currency: INR,
       format: 'csv',
       statementType: 'bank',
@@ -590,13 +590,13 @@ describe('toCreditCardStatement (via finalizeReviewImport)', () => {
       warnings: [],
     });
 
-    const reviewed = base.cloneWith({ isSuspense: true });
+    const reviewed = base.cloneWith({ reviewReasons: ['fingerprint_collision'] });
     const deps = { addTransactions: vi.fn(), addCreditCardStatement: vi.fn() };
     await finalizeReviewImport([reviewed], deps);
 
-    // The transaction passed to addTransactions should NOT have isSuspense
+    // Advisory reviewReasons flow through unchanged — nothing strips them.
     const added = deps.addTransactions.mock.calls[0][0][0];
-    expect(added.isSuspense).toBeFalsy();
+    expect(added.reviewReasons).toEqual(['fingerprint_collision']);
   });
 
   it('creates bank summary for bank statements with closingBalance', async () => {

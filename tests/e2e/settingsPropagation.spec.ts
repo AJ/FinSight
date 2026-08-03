@@ -11,7 +11,7 @@ test.describe('Settings change propagation E2E', () => {
     await page.goto('/');
     await page.evaluate(() => {
       window.localStorage.setItem('transaction-storage', JSON.stringify({
-        state: { transactions: [{ id: 't1', date: '2025-01-05', description: 'Test', amount: -100, type: 'debit', category: 'other', merchant: 'Test', needsReview: false, localCurrency: { code: 'INR', symbol: '₹', name: 'Indian Rupee' }, sourceType: 'bank' }] },
+        state: { transactions: [{ id: 't1', date: '2025-01-05', description: 'Test', amount: -100, type: 'debit', category: 'other', merchant: 'Test', localCurrency: { code: 'INR', symbol: '₹', name: 'Indian Rupee' }, sourceType: 'bank' }] },
         version: 0,
       }));
       window.localStorage.setItem('chat-storage', JSON.stringify({
@@ -49,7 +49,7 @@ test.describe('Settings change propagation E2E', () => {
     await page.goto('/');
     await page.evaluate(() => {
       window.localStorage.setItem('transaction-storage', JSON.stringify({
-        state: { transactions: [{ id: 't1', date: '2025-01-05', description: 'Preserved Txn', amount: -100, type: 'debit', category: 'other', merchant: 'Test', needsReview: false, localCurrency: { code: 'INR', symbol: '₹', name: 'Indian Rupee' }, sourceType: 'bank' }] },
+        state: { transactions: [{ id: 't1', date: '2025-01-05', description: 'Preserved Txn', amount: -100, type: 'debit', category: 'other', merchant: 'Test', localCurrency: { code: 'INR', symbol: '₹', name: 'Indian Rupee' }, sourceType: 'bank' }] },
         version: 0,
       }));
     });
@@ -102,7 +102,7 @@ test.describe('Settings change propagation E2E', () => {
     await page.goto('/');
     await page.evaluate(() => {
       window.localStorage.setItem('transaction-storage', JSON.stringify({
-        state: { transactions: [{ id: 't1', date: '2025-01-05', description: 'Test', amount: -100, type: 'debit', category: 'other', merchant: 'Test', needsReview: false, localCurrency: { code: 'INR', symbol: '₹', name: 'Indian Rupee' }, sourceType: 'bank' }] },
+        state: { transactions: [{ id: 't1', date: '2025-01-05', description: 'Test', amount: -100, type: 'debit', category: 'other', merchant: 'Test', localCurrency: { code: 'INR', symbol: '₹', name: 'Indian Rupee' }, sourceType: 'bank' }] },
         version: 0,
       }));
       window.localStorage.setItem('credit-card-storage', JSON.stringify({
@@ -171,9 +171,7 @@ test.describe('Currency Change Propagation', () => {
             amount: 1500,
             type: 'debit',
             category: 'other',
-            merchant: 'Test Merchant',
-            needsReview: false,
-            localCurrency: { code: 'INR', symbol: '₹', name: 'Indian Rupee' },
+            merchant: 'Test Merchant',            localCurrency: { code: 'INR', symbol: '₹', name: 'Indian Rupee' },
             sourceType: 'bank',
             isInternational: false,
           }],

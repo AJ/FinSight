@@ -9,7 +9,6 @@ import { v4 as uuidv4 } from 'uuid';
 import {
   Transaction,
   Category,
-  CategoryType,
   SourceType,
 } from '@/types';
 import type { CategorizedBy } from '@/models/CategorizedBy';
@@ -17,6 +16,8 @@ import type { AnomalyType } from '@/models/AnomalyType';
 import type { AnomalyDetails } from '@/models/AnomalyDetails';
 import type { Currency } from '@/types';
 import type { ExtractedTransaction } from '@/types/extractedTransaction';
+import type { ReviewReason } from '@/lib/review/reviewReasons';
+import { defaultSubtype } from '@/lib/classification/subtypeCategories';
 import '@/lib/categorization/categories'; // Populate category registry for Category.fromId()
 
 // ─── Transaction Factory ───────────────────────────────────────────────────
@@ -40,7 +41,7 @@ interface MakeTransactionInput {
   // Overrides applied after construction (mutable fields)
   category?: Category;
   categoryConfidence?: number;
-  needsReview?: boolean;
+  reviewReasons?: ReviewReason[];
   categorizedBy?: CategorizedBy;
   isAnomaly?: boolean;
   anomalyTypes?: AnomalyType[];
@@ -83,6 +84,16 @@ export function makeTransaction(input: MakeTransactionInput = {}): Transaction {
     input.sourceType ?? SourceType.Bank,
   );
 
+  // D1: fromExtracted no longer assigns a subtype (the classification pass owns it; fixtures
+  // here model POST-classification transactions). Assign the subtype the test passed, else the
+  // direction default. llmConfidence follows the pre-D1 convention: the extracted confidence
+  // when a subtype was supplied (undefined if the test gave none — matching fromExtracted),
+  // 0 when the subtype is a direction default (the inferred signal).
+  const subType = input.transactionSubType ?? defaultSubtype(txn.type).transactionSubType;
+  Object.defineProperty(txn, 'transactionSubType', { value: subType, writable: true });
+  const llmConfidence = input.transactionSubType ? input.confidence : 0;
+  Object.defineProperty(txn, 'llmConfidence', { value: llmConfidence, writable: true });
+
   // Override id (readonly, but fromExtracted always generates uuid —
   // tests often need deterministic IDs for assertions)
   if (input.id) {
@@ -98,7 +109,7 @@ export function makeTransaction(input: MakeTransactionInput = {}): Transaction {
   // analytics functions. Tests expect expense transactions by default.
   txn.category = input.category ?? makeCategory('shopping');
   if (input.categoryConfidence !== undefined) txn.categoryConfidence = input.categoryConfidence;
-  if (input.needsReview !== undefined) txn.needsReview = input.needsReview;
+  if (input.reviewReasons !== undefined) Object.defineProperty(txn, 'reviewReasons', { value: input.reviewReasons, writable: true });
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- readonly field override for test setup
   if (input.categorizedBy !== undefined) txn.categorizedBy = input.categorizedBy as any;
   if (input.isAnomaly !== undefined) txn.isAnomaly = input.isAnomaly;
@@ -127,8 +138,8 @@ export function makeTransactions(count: number, overrides?: Partial<MakeTransact
 
 // ─── Category Helper ───────────────────────────────────────────────────────
 
-export function makeCategory(id: string, type: CategoryType = CategoryType.Expense): Category {
-  return new Category(id, id, type);
+export function makeCategory(id: string, budgetable = true): Category {
+  return new Category(id, id, budgetable);
 }
 
 // ─── Extracted Transaction Factory (LLM output DTO) ────────────────────────

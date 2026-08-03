@@ -1,11 +1,12 @@
 import { categorizeTransaction } from "@/lib/categorizer";
-import { DEFAULT_CATEGORIES } from "./categories";
 import { debugError } from '@/lib/utils/debug';
+import { isLLMError } from "@/lib/llm/types";
+import { defaultSubtype } from "@/lib/classification/subtypeCategories";
+import { TransactionType } from "@/models/TransactionType";
 import {
   CategorizationProgress,
   CategorizationResult,
   CategorizationTransactionInput,
-  toTransactionType,
 } from "./types";
 import {
   buildCategorizationPrompt,
@@ -26,14 +27,15 @@ export function shouldSkipAICategorization(
 }
 
 export function categorizeByKeywords(
-  transaction: Pick<CategorizationTransactionInput, "description" | "amount" | "type">
+  transaction: Pick<CategorizationTransactionInput, "description" | "amount" | "type" | "transactionSubType">
 ): string {
-  return categorizeTransaction(
-    transaction.description,
-    transaction.amount,
-    DEFAULT_CATEGORIES,
-    toTransactionType(transaction.type)
-  );
+  // Keyword matching is subtype-constrained. Classification is the subtype authority, so a
+  // transaction reaching this fallback (the LLM failure path) may carry no subtype — infer
+  // one from direction via defaultSubtype, the same pattern the Transaction factories use.
+  const subType =
+    transaction.transactionSubType
+    ?? defaultSubtype(transaction.type === "credit" ? TransactionType.Credit : TransactionType.Debit).transactionSubType;
+  return categorizeTransaction(transaction.description, subType);
 }
 
 export interface CategorizationCoreOptions {
@@ -107,6 +109,12 @@ export async function runCategorizationCore(
         }
       }
     } catch (error) {
+      // A user cancellation (abort) must propagate so the caller can stop the whole pipeline
+      // instead of silently finishing on keyword fallback. Only 'cancelled' rethrows; every
+      // other failure degrades to keyword categorization so the user still gets a result.
+      if (isLLMError(error) && error.kind === 'cancelled') {
+        throw error;
+      }
       debugError('Categorizer', `Batch ${index + 1} failed:`, error);
       for (const transaction of batch) {
         allResults.push({

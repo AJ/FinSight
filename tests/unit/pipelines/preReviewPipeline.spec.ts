@@ -190,7 +190,7 @@ Some purchase,100`;
       onProgress: (msg) => progress.push(msg),
     });
 
-    expect(progress).toContain('Categorizing transactions...');
+    expect(progress).toContain('Classifying transactions...');
     // CSV also triggers "Parsing CSV..." from extractStatementBundleFromFile
     expect(progress.length).toBeGreaterThan(1);
   });
@@ -273,7 +273,29 @@ Some purchase,100`;
     const tx = result.transactions[0];
     expect(tx.category.id).toBe('shopping');
     expect(tx.categoryConfidence).toBe(0.3);
-    expect(tx.needsReview).toBe(true);
+    // reviewReasons is covered by the dedicated wiring test below — a CSV row
+    // carries subtype_inferred (hard) and low_confidence (advisory, keyword conf
+    // 0.3) together under collect-all (spec §6.4).
+  });
+
+  it('stamps subtype_inferred on CSV transactions (review-reason step wired, spec §6)', async () => {
+    // CSV rows have inferred subtypes (llmConfidence 0). The pipeline must run the
+    // review-reason step even with no verification report, so every CSV row is
+    // flagged subtype_inferred for the user to confirm. This is the end-to-end
+    // proof that applyVerificationReviewReasons is wired into the pipeline and
+    // runs unconditionally (report-absent path).
+    const csv = `Date,Description,Amount,Type
+20/10/2025,AMAZON PURCHASE,250,debit`;
+
+    const result = await runPreReviewPipeline({
+      file: createCSVFile(csv),
+      provider: 'ollama',
+      baseUrl: 'http://localhost:11434',
+      model: 'test-model',
+      defaultCurrency: INR,
+    });
+
+    expect(result.transactions[0].reviewReasons).toContain('subtype_inferred');
   });
 
   it('creates sourceMetadata object even without sourceFileHash', async () => {

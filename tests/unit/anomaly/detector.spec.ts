@@ -8,7 +8,7 @@ import {
   extractMerchant,
   stringSimilarity,
 } from '@/lib/anomaly/detector';
-import { TransactionType, CategoryType } from '@/types';
+import { TransactionType } from '@/types';
 import { makeTransaction, makeCategory } from '@tests/unit/factories';
 
 describe('extractMerchant', () => {
@@ -79,7 +79,7 @@ describe('calculateCategoryStats', () => {
 
   it('excludes non-expense transactions', () => {
     const txns = Array.from({ length: 5 }, (_, i) =>
-      makeTransaction({ id: `${i}`, amount: 5000, type: TransactionType.Credit, category: makeCategory('income', CategoryType.Income) })
+      makeTransaction({ id: `${i}`, amount: 5000, type: TransactionType.Credit, category: makeCategory('income', false) })
     );
     const stats = calculateCategoryStats(txns);
     expect(Object.keys(stats)).toHaveLength(0);
@@ -117,7 +117,7 @@ describe('detectAmountAnomaly', () => {
 
   it('returns null for non-expense transactions', () => {
     const stats = { income: { count: 10, mean: 5000, stdDev: 2000 } };
-    const txn = makeTransaction({ amount: 50000, type: TransactionType.Credit, category: makeCategory('income', CategoryType.Income) });
+    const txn = makeTransaction({ amount: 50000, type: TransactionType.Credit, category: makeCategory('income', false) });
     expect(detectAmountAnomaly(txn, stats)).toBeNull();
   });
 });

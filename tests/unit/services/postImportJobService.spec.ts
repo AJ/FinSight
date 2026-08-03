@@ -3,10 +3,17 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { runPostImportJobs } from '@/lib/services/postImportJobService';
 import { useTransactionStore } from '@/lib/store/transactionStore';
 import { useSettingsStore } from '@/lib/store/settingsStore';
+// Pre-load the anomaly detector module. runPostImportJobs loads it via a
+// fire-and-forget dynamic import(); under fake timers that real async load is
+// not flushed by advanceTimersByTimeAsync, so the store update races the
+// assertion under parallel-suite CPU load. Importing it here makes the dynamic
+// import a cache hit (one microtask), removing the race.
+import '@/lib/anomaly/detector';
 import { Transaction } from '@/models/Transaction';
 import { Category } from '@/models/Category';
 import { TransactionType } from '@/models/TransactionType';
 import { CategorizedBy, SourceType } from '@/types';
+import { makeTransaction } from '@tests/unit/factories';
 
 // Mock fetch — the only external boundary (LLM HTTP calls go through here)
 const mockFetch = vi.fn();
@@ -23,7 +30,7 @@ function createTestTransaction(id: string, categorizedBy?: CategorizedBy): Trans
     TransactionType.Debit,
     Category.fromId('other')!,
     undefined, undefined, 'Test transaction', undefined,
-    undefined, undefined,
+    undefined,
     categorizedBy,
     SourceType.Bank,
   );
@@ -344,31 +351,22 @@ describe('runPostImportJobs', () => {
     // Create multiple expense transactions to same merchant within 24h to trigger frequency anomaly.
     // The detector uses real logic, so we need transactions that will actually trigger an anomaly.
     const sameMerchant = 'Amazon Purchase';
-    const tx1 = new Transaction(
-      'a1', new Date('2024-01-15T10:00:00'), sameMerchant, 50.00,
-      TransactionType.Debit, Category.fromId('shopping')!,
-      undefined, sameMerchant, sameMerchant,
-    );
-    const tx2 = new Transaction(
-      'a2', new Date('2024-01-15T12:00:00'), sameMerchant, 50.00,
-      TransactionType.Debit, Category.fromId('shopping')!,
-      undefined, sameMerchant, sameMerchant,
-    );
-    const tx3 = new Transaction(
-      'a3', new Date('2024-01-15T14:00:00'), sameMerchant, 50.00,
-      TransactionType.Debit, Category.fromId('shopping')!,
-      undefined, sameMerchant, sameMerchant,
-    );
-    const tx4 = new Transaction(
-      'a4', new Date('2024-01-15T16:00:00'), sameMerchant, 50.00,
-      TransactionType.Debit, Category.fromId('shopping')!,
-      undefined, sameMerchant, sameMerchant,
-    );
-    const tx5 = new Transaction(
-      'a5', new Date('2024-01-15T18:00:00'), sameMerchant, 50.00,
-      TransactionType.Debit, Category.fromId('shopping')!,
-      undefined, sameMerchant, sameMerchant,
-    );
+    const shopping = Category.fromId('shopping')!;
+    const mk = (id: string, hour: number) => makeTransaction({
+      id,
+      date: new Date(`2024-01-15T${String(hour).padStart(2, '0')}:00:00`),
+      description: sameMerchant,
+      merchant: sameMerchant,
+      amount: 50,
+      type: 'debit',
+      transactionSubType: 'purchase',
+      category: shopping,
+    });
+    const tx1 = mk('a1', 10);
+    const tx2 = mk('a2', 12);
+    const tx3 = mk('a3', 14);
+    const tx4 = mk('a4', 16);
+    const tx5 = mk('a5', 18);
 
     useTransactionStore.setState({ transactions: [tx1, tx2, tx3, tx4, tx5] });
 

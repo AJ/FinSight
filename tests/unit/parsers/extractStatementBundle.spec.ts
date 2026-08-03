@@ -113,7 +113,8 @@ describe('extractStatementBundleFromRawText', () => {
         expect(actual.amount).toBe(expectedTransaction.amount);
         expect(actual.type).toBe(expectedTransaction.type);
         expect(actual.sourceType).toBe(expectedTransaction.sourceType);
-        expect(actual.transactionSubType).toBe(expectedTransaction.transactionSubType);
+        // D1: extraction emits type only — no subtype. The classification pass assigns it.
+        expect(actual.transactionSubType).toBeUndefined();
       });
 
       const verifiedBundle = attachVerificationToExtractionBundle(bundle);

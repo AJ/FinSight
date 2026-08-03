@@ -10,13 +10,13 @@ import {
   getTransactionAnalytics,
   detectAnomalies,
 } from '@/lib/insights/analyzer';
-import { TransactionType, CategoryType } from '@/types';
+import { TransactionType } from '@/types';
 import { makeTransaction, makeCategory } from '@tests/unit/factories';
 
 describe('groupByMonth', () => {
   it('groups transactions by month correctly', () => {
     const txns = [
-      makeTransaction({ id: '1', amount: 50000, type: TransactionType.Credit, date: new Date('2024-01-15'), category: makeCategory('income', CategoryType.Income) }),
+      makeTransaction({ id: '1', amount: 50000, type: TransactionType.Credit, date: new Date('2024-01-15'), category: makeCategory('income', false) }),
       makeTransaction({ id: '2', amount: 12000, type: TransactionType.Debit, date: new Date('2024-01-20'), category: makeCategory('dining') }),
       makeTransaction({ id: '3', amount: 8000, type: TransactionType.Debit, date: new Date('2024-02-10'), category: makeCategory('dining') }),
     ];
@@ -74,7 +74,7 @@ describe('groupByCategoryByMonth', () => {
   it('excludes income transactions', () => {
     const txns = [
       makeTransaction({ id: '1', amount: 1000, date: new Date('2024-01-15'), category: makeCategory('dining') }),
-      makeTransaction({ id: '2', amount: 50000, date: new Date('2024-01-15'), type: TransactionType.Credit, category: makeCategory('income', CategoryType.Income) }),
+      makeTransaction({ id: '2', amount: 50000, date: new Date('2024-01-15'), type: TransactionType.Credit, category: makeCategory('income', false) }),
     ];
     const result = groupByCategoryByMonth(txns);
     expect(result.dining['2024-01']).toBe(1000);
@@ -101,7 +101,7 @@ describe('groupByDayOfWeek', () => {
     // Jan 15, 2024 = Monday (day 1)
     const txns = [
       makeTransaction({ id: '1', amount: 500, date: new Date('2024-01-15') }),
-      makeTransaction({ id: '2', amount: 50000, date: new Date('2024-01-15'), type: TransactionType.Credit, category: makeCategory('income', CategoryType.Income) }),
+      makeTransaction({ id: '2', amount: 50000, date: new Date('2024-01-15'), type: TransactionType.Credit, category: makeCategory('income', false) }),
     ];
     const result = groupByDayOfWeek(txns);
     // Monday should only have the expense, not the income
@@ -136,7 +136,7 @@ describe('getTopMerchants', () => {
   it('excludes income transactions', () => {
     const txns = [
       makeTransaction({ id: '1', description: 'AMAZON', amount: 100 }),
-      makeTransaction({ id: '2', description: 'SALARY', amount: 50000, type: TransactionType.Credit, category: makeCategory('income', CategoryType.Income) }),
+      makeTransaction({ id: '2', description: 'SALARY', amount: 50000, type: TransactionType.Credit, category: makeCategory('income', false) }),
     ];
     const result = getTopMerchants(txns);
     expect(result.every(r => r.name !== 'SALARY')).toBe(true);
@@ -291,7 +291,7 @@ describe('detectAnomalies (insights)', () => {
 describe('getTransactionAnalytics', () => {
   it('returns full analytics object', () => {
     const txns = [
-      makeTransaction({ id: '1', amount: 50000, type: TransactionType.Credit, date: new Date('2024-01-15'), category: makeCategory('income', CategoryType.Income) }),
+      makeTransaction({ id: '1', amount: 50000, type: TransactionType.Credit, date: new Date('2024-01-15'), category: makeCategory('income', false) }),
       makeTransaction({ id: '2', amount: 12000, type: TransactionType.Debit, date: new Date('2024-01-20'), category: makeCategory('dining') }),
     ];
     const result = getTransactionAnalytics(txns);
@@ -305,7 +305,7 @@ describe('getTransactionAnalytics', () => {
 
   it('asserts all computed fields', () => {
     const txns = [
-      makeTransaction({ id: '1', amount: 50000, type: TransactionType.Credit, date: new Date('2024-01-15'), category: makeCategory('income', CategoryType.Income) }),
+      makeTransaction({ id: '1', amount: 50000, type: TransactionType.Credit, date: new Date('2024-01-15'), category: makeCategory('income', false) }),
       makeTransaction({ id: '2', amount: 12000, type: TransactionType.Debit, date: new Date('2024-01-20'), category: makeCategory('dining') }),
       makeTransaction({ id: '3', amount: 8000, type: TransactionType.Debit, date: new Date('2024-02-10'), category: makeCategory('dining') }),
     ];

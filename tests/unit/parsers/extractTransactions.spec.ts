@@ -5,7 +5,9 @@ describe('buildTransactionsPrompt', () => {
   it('returns CC transaction prompt', () => {
     const result = buildTransactionsPrompt('raw text', 'credit_card');
     expect(result).toContain('raw text');
-    expect(result).toContain('transactionSubType');
+    // D1: extraction emits type only. transactionSubType is decided by the classification
+    // pass, so the extraction prompt must NOT ask for it.
+    expect(result).not.toContain('transactionSubType');
     expect(result.length).toBeGreaterThan(100);
   });
 

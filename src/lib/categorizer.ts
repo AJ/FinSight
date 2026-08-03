@@ -1,57 +1,43 @@
-import { Category, CategoryType, TransactionType } from "@/models";
+import { Category } from "@/models";
+import type { TransactionSubType } from "@/models/Transaction";
+import { categoriesFor } from "@/lib/classification/subtypeCategories";
 
 export function categorizeTransaction(
   description: string,
-  amount: number,
-  categories: Category[],
-  transactionType?: TransactionType,
+  transactionSubType?: TransactionSubType,
 ): string {
+  // A subtype is required. Keyword matching is constrained to the categories valid
+  // for the subtype, and every Transaction carries one (defaultSubtype fills it at
+  // construction for every extraction/import path). Reaching here without a subtype
+  // is a bug — fail loudly instead of guessing against the full category list, which
+  // only ever produced arbitrary, often-wrong categories on impossible input.
+  if (!transactionSubType) {
+    throw new Error(
+      "categorizeTransaction requires a transactionSubType but received none. " +
+        "Every Transaction must carry a subtype (see defaultSubtype).",
+    );
+  }
+
   const lowerDesc = description.toLowerCase();
 
-  // NOTE: First-match-wins on keyword inclusion. Categories registered earlier
-  // take precedence when keywords overlap. E.g., "food" is in groceries (registered
-  // first) so "SWIGGY FOOD ORDER" matches groceries, not dining. Known limitation
-  // of the keyword fallback (0.3 confidence) — the LLM handles these correctly.
+  // First-match-wins on keyword inclusion, scanning the categories valid for this
+  // subtype in their defined order. The first category whose keyword appears in the
+  // description wins. Known limitation of the keyword fallback (0.3 confidence).
+  const candidates = categoriesFor(transactionSubType);
 
-  // Determine which category types to search based on transaction type
-  // credit = likely income (but could be refund to expense category)
-  // debit = likely expense
-  const preferredCategoryType: CategoryType =
-    transactionType === TransactionType.Credit ? CategoryType.Income : CategoryType.Expense;
-
-  // First, try to match with preferred category type
-  for (const category of categories) {
-    if (category.type !== preferredCategoryType && category.type !== CategoryType.Excluded)
-      continue;
-
+  for (const category of candidates) {
     for (const keyword of category.keywords) {
-      if (lowerDesc.includes(keyword.toLowerCase())) {
-        return category.id;
-      }
+      if (lowerDesc.includes(keyword.toLowerCase())) return category.id;
     }
   }
 
-  // If no match, try the other category type (e.g., refunds in expense categories)
-  const otherCategoryType = preferredCategoryType === CategoryType.Income ? CategoryType.Expense : CategoryType.Income;
-  for (const category of categories) {
-    if (category.type !== otherCategoryType && category.type !== CategoryType.Excluded)
-      continue;
-
-    for (const keyword of category.keywords) {
-      if (lowerDesc.includes(keyword.toLowerCase())) {
-        return category.id;
-      }
-    }
-  }
-
-  // Default categorization based on transaction type
-  if (preferredCategoryType === CategoryType.Income) {
-    const incomeCategory = categories.find((c) => c.type === CategoryType.Income);
-    return incomeCategory?.id || Category.DEFAULT_ID;
-  }
-
-  const defaultCategory = categories.find((c) => c.id === Category.DEFAULT_ID);
-  return defaultCategory?.id || Category.DEFAULT_ID;
+  // No keyword match: return a category valid for the subtype — prefer 'other'
+  // (the misc bucket) when it is valid for this subtype, else the first valid
+  // category. This keeps every fallback output a valid (subtype, category) combo.
+  if (candidates.length === 0) return Category.DEFAULT_ID;
+  return candidates.some((c) => c.id === Category.DEFAULT_ID)
+    ? Category.DEFAULT_ID
+    : candidates[0].id;
 }
 
 /**
@@ -121,10 +107,12 @@ export function normalizeMerchantName(description: string): string {
     JIO: "Jio",
     AIRTEL: "Airtel",
     VODAFONE: "Vodafone",
-    HDFC: "HDFC",
-    ICICI: "ICICI",
-    SBI: "SBI",
-    AXIS: "Axis Bank",
+    // Banks deliberately omitted. A bank name in a narration is the routing
+    // institution (e.g. "ICICI IB:Sent NEFT ..."), not the merchant. Substituting
+    // "ICICI"/"HDFC" handed the categorizer a bank brand for a personal transfer,
+    // steering it toward loans/finance. Payments to a bank (EMI, insurance premium)
+    // are categorized by their purpose keywords in the description, not by a bank
+    // "merchant", so omitting them loses nothing and fixes the transfer crush.
     // UK / Europe
     TESCO: "Tesco",
     SAINSBURY: "Sainsbury's",

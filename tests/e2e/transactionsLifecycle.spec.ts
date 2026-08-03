@@ -8,23 +8,54 @@ test.describe('Transactions lifecycle E2E', () => {
     await mockCategorizationAPI(context);
   });
 
-  test('upload CSV → review → confirm → transactions page shows rows', async ({ page }) => {
+  // CSV rows carry no LLM-extracted subtype, so each is stamped subtype_inferred (hard)
+  // — the commit gate stays closed until every row's subtype + category are confirmed.
+  // This exercises the full deterministic flow: upload -> review -> resolve each gate
+  // -> commit -> transactions page. The LLM is mocked (empty categorization -> keyword
+  // fallback), so no real model is involved.
+  test('upload CSV → review → resolve every subtype gate → confirm → transactions page shows rows', async ({ page }) => {
+    test.setTimeout(120000);
     await page.goto('/');
-    const fixturePath = path.resolve(__dirname, '../fixtures/bank_statement_valid.csv');
+    const fixturePath = path.resolve(__dirname, '../fixtures/bank_clean.csv');
     await uploadFile(page, fixturePath);
 
-    // Should land on review page
     await waitForUploadCompletion(page, 30000);
     await expect(page.getByRole('heading', { name: /review/i })).toBeVisible({ timeout: 15000 });
 
-    // Confirm import
     const confirmBtn = page.getByRole('button', { name: /confirm.*import/i });
+    // Every CSV row carries subtype_inferred (hard) -> gate closed.
     await expect(confirmBtn).toBeVisible({ timeout: 5000 });
-    await confirmBtn.click();
+    await expect(confirmBtn).toBeDisabled();
 
-    // Navigate to transactions page
+    const editHeading = page.getByRole('heading', { name: 'Edit Transaction' });
+    const rowCount = await page.locator('tbody tr').count();
+    expect(rowCount).toBeGreaterThan(0);
+
+    // Resolve each row: open its edit dialog (the first button is the review marker),
+    // confirm the forced subtype + category pick, save. Picks are direction-based.
+    for (let i = 0; i < rowCount; i++) {
+      await page.locator('tbody tr').nth(i).locator('button').first().click();
+      await expect(editHeading).toBeVisible({ timeout: 5000 });
+
+      const type = await page.locator('#edit-type').inputValue();
+      if (type === 'credit') {
+        await page.locator('#edit-subtype').selectOption('income');
+        await page.locator('#edit-category').selectOption('income');
+      } else {
+        await page.locator('#edit-subtype').selectOption('purchase');
+        await page.locator('#edit-category').selectOption('groceries');
+      }
+      await page.getByRole('button', { name: 'Save' }).click();
+      await expect(editHeading).not.toBeVisible({ timeout: 5000 });
+    }
+
+    // All hard reasons resolved -> gate opens.
+    await expect(confirmBtn).toBeEnabled({ timeout: 5000 });
+    await confirmBtn.click();
+    await page.waitForURL('**/dashboard', { timeout: 15000 });
+
+    // Committed rows are visible on the transactions page.
     await page.goto('/transactions');
-    // Should have transaction rows (not empty state)
     await expect(page.locator('tbody tr').first()).toBeVisible({ timeout: 10000 });
     const rows = await page.locator('tbody tr').count();
     expect(rows).toBeGreaterThan(0);
@@ -35,8 +66,8 @@ test.describe('Transactions lifecycle E2E', () => {
       window.localStorage.setItem('transaction-storage', JSON.stringify({
         state: {
           transactions: [
-            { id: 't1', date: '2025-01-05', description: 'Salary Credit', amount: 50000, type: 'credit', category: 'income', merchant: 'Employer', needsReview: false, localCurrency: { code: 'INR', symbol: '₹', name: 'Indian Rupee' }, sourceType: 'bank' },
-            { id: 't2', date: '2025-01-10', description: 'Amazon Purchase', amount: -2500, type: 'debit', category: 'shopping', merchant: 'Amazon', needsReview: false, localCurrency: { code: 'INR', symbol: '₹', name: 'Indian Rupee' }, sourceType: 'bank' },
+            { id: 't1', date: '2025-01-05', description: 'Salary Credit', amount: 50000, type: 'credit', category: 'income', merchant: 'Employer', localCurrency: { code: 'INR', symbol: '₹', name: 'Indian Rupee' }, sourceType: 'bank' },
+            { id: 't2', date: '2025-01-10', description: 'Amazon Purchase', amount: -2500, type: 'debit', category: 'shopping', merchant: 'Amazon', localCurrency: { code: 'INR', symbol: '₹', name: 'Indian Rupee' }, sourceType: 'bank' },
           ],
         },
         version: 0,
@@ -72,9 +103,7 @@ test.describe('Inline Category Editing', () => {
               amount: -1500,
               type: 'debit',
               category: 'other',
-              merchant: 'BigBasket',
-              needsReview: false,
-              localCurrency: { code: 'INR', symbol: '₹', name: 'Indian Rupee' },
+              merchant: 'BigBasket',              localCurrency: { code: 'INR', symbol: '₹', name: 'Indian Rupee' },
               sourceType: 'bank',
             },
           ],
@@ -118,9 +147,7 @@ test.describe('Inline Category Editing', () => {
                 amount: -1500,
                 type: 'debit',
                 category: 'other',
-                merchant: 'BigBasket',
-                needsReview: false,
-                localCurrency: { code: 'INR', symbol: '₹', name: 'Indian Rupee' },
+                merchant: 'BigBasket',                localCurrency: { code: 'INR', symbol: '₹', name: 'Indian Rupee' },
                 sourceType: 'bank',
               },
             ],

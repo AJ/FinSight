@@ -25,7 +25,7 @@ test.describe('Chat page', () => {
       window.localStorage.setItem('transaction-storage', JSON.stringify({
         state: {
           transactions: [
-            { id: 't1', date: '2025-01-05', description: 'Groceries', amount: -2000, type: 'debit', category: 'groceries', merchant: 'Store', needsReview: false, localCurrency: { code: 'INR', symbol: '₹', name: 'Indian Rupee' }, sourceType: 'bank' },
+            { id: 't1', date: '2025-01-05', description: 'Groceries', amount: -2000, type: 'debit', category: 'groceries', merchant: 'Store', localCurrency: { code: 'INR', symbol: '₹', name: 'Indian Rupee' }, sourceType: 'bank' },
           ],
         },
         version: 0,
@@ -45,7 +45,7 @@ test.describe('Chat page', () => {
       window.localStorage.setItem('transaction-storage', JSON.stringify({
         state: {
           transactions: [
-            { id: 't1', date: '2025-01-05', description: 'Groceries', amount: -2000, type: 'debit', category: 'groceries', merchant: 'Store', needsReview: false, localCurrency: { code: 'INR', symbol: '₹', name: 'Indian Rupee' }, sourceType: 'bank' },
+            { id: 't1', date: '2025-01-05', description: 'Groceries', amount: -2000, type: 'debit', category: 'groceries', merchant: 'Store', localCurrency: { code: 'INR', symbol: '₹', name: 'Indian Rupee' }, sourceType: 'bank' },
           ],
         },
         version: 0,
@@ -69,7 +69,7 @@ test.describe('Chat page', () => {
       window.localStorage.setItem('transaction-storage', JSON.stringify({
         state: {
           transactions: [
-            { id: 't1', date: '2025-01-05', description: 'Test', amount: -100, type: 'debit', category: 'other', merchant: 'Test', needsReview: false, localCurrency: { code: 'INR', symbol: '₹', name: 'Indian Rupee' }, sourceType: 'bank' },
+            { id: 't1', date: '2025-01-05', description: 'Test', amount: -100, type: 'debit', category: 'other', merchant: 'Test', localCurrency: { code: 'INR', symbol: '₹', name: 'Indian Rupee' }, sourceType: 'bank' },
           ],
         },
         version: 0,

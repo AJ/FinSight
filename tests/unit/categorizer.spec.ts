@@ -1,68 +1,43 @@
 import { describe, it, expect } from 'vitest';
 
 import { categorizeTransaction, normalizeMerchantName } from '@/lib/categorizer';
-import { Category, CategoryType, TransactionType } from '@/models';
+import '@/lib/categorization/categories';
 
-describe('categorizeTransaction', () => {
-  const categories = [
-    new Category('groceries', 'groceries', CategoryType.Expense, ['grocery', 'supermarket', 'bigbasket', 'swiggy']),
-    new Category('dining', 'dining', CategoryType.Expense, ['restaurant', 'cafe', 'zomato']),
-    new Category('salary', 'salary', CategoryType.Income, ['salary', 'wage', 'payroll']),
-    new Category('transfer', 'transfer', CategoryType.Excluded),
-  ];
-
-  it('matches expense category by keyword', () => {
-    const result = categorizeTransaction('SWIGGY FOOD ORDER', 350, categories);
-    expect(result).toBe('groceries');
+describe('categorizeTransaction keyword fallback (constrained by subtype — spec §3.2)', () => {
+  it('matches a dining keyword within the purchase subtype', () => {
+    // 'starbucks'/'coffee' are dining keywords; no earlier purchase category matches.
+    expect(categorizeTransaction('STARBUCKS COFFEE', 'purchase')).toBe('dining');
   });
 
-  it('prefers category matching transaction type (debit prefers expense)', () => {
-    const result = categorizeTransaction('restaurant bill', 500, categories, TransactionType.Debit);
-    expect(result).toBe('dining');
+  it('first-match-wins by registration order (food → groceries, not dining)', () => {
+    // 'food' is a groceries keyword; groceries is registered before dining.
+    expect(categorizeTransaction('SWIGGY FOOD ORDER', 'purchase')).toBe('groceries');
   });
 
-  it('falls back to other category type when preferred has no match', () => {
-    const result = categorizeTransaction('salary credit', 50000, categories, TransactionType.Debit);
-    expect(result).toBe('salary');
+  it('matches the income category within the income subtype', () => {
+    expect(categorizeTransaction('SALARY CREDIT PAYROLL', 'income')).toBe('income');
   });
 
-  it('returns default category when no keywords match for debit', () => {
-    const result = categorizeTransaction('unknown purchase', 100, categories);
-    expect(result).toBe('other');
+  it('falls back to "other" when it is valid for the subtype and nothing matches', () => {
+    expect(categorizeTransaction('???', 'purchase')).toBe('other');
   });
 
-  it('returns income default when no match for credit', () => {
-    const result = categorizeTransaction('unknown credit', 100, categories, TransactionType.Credit);
-    expect(result).toBe('salary');
+  it('falls back to the first valid category when "other" is not valid for the subtype', () => {
+    // charge → [fees, taxes]; 'other' is not valid here, so default to the first.
+    expect(categorizeTransaction('???', 'charge')).toBe('fees');
   });
 
-  it('handles empty description', () => {
-    const result = categorizeTransaction('', 100, categories);
-    expect(result).toBe('other');
-  });
-
-  it('handles empty categories array', () => {
-    const result = categorizeTransaction('grocery purchase', 100, []);
-    expect(result).toBe('other');
+  it('throws when no subtype is given (every Transaction must carry one)', () => {
+    // A subtype is required. The no-subtype branch that used to scan the full
+    // DEFAULT_CATEGORIES list is gone — it only ever returned arbitrary, often-wrong
+    // categories on an input production never produces. Reaching here without a
+    // subtype is a bug, so fail loudly.
+    expect(() => categorizeTransaction('???')).toThrow(/transactionSubType/);
+    expect(() => categorizeTransaction('grocery purchase')).toThrow(/transactionSubType/);
   });
 
   it('uses case-insensitive keyword matching', () => {
-    const result = categorizeTransaction('GROCERY STORE', 100, categories);
-    expect(result).toBe('groceries');
-  });
-
-  it('first-match-wins when keywords overlap', () => {
-    // groceries registered before dining, and both could match some items
-    const result = categorizeTransaction('swiggy order', 200, categories);
-    expect(result).toBe('groceries');
-  });
-
-  it('returns default ID when no income category exists for credit type', () => {
-    const expenseOnly = [
-      new Category('groceries', 'groceries', CategoryType.Expense, ['grocery']),
-    ];
-    const result = categorizeTransaction('unknown credit', 100, expenseOnly, TransactionType.Credit);
-    expect(result).toBe(Category.DEFAULT_ID);
+    expect(categorizeTransaction('GROCERY STORE', 'purchase')).toBe('groceries');
   });
 });
 
@@ -71,12 +46,20 @@ describe('normalizeMerchantName', () => {
     expect(normalizeMerchantName('UPI/123456/AMAZON RETAIL')).toBe('Amazon');
   });
 
-  it('strips NEFT prefix', () => {
-    expect(normalizeMerchantName('NEFT-HDFC TRANSFER')).toContain('HDFC');
+  it('strips NEFT prefix without substituting a bank brand', () => {
+    // NEFT- is stripped. Banks are no longer in the merchant map (a bank is the
+    // routing institution, not the payee), so "HDFC" is NOT substituted — the
+    // cleaned narration is returned, retaining the transfer context. Asserting
+    // the exact result catches both a broken prefix strip and a regressed bank
+    // substitution.
+    expect(normalizeMerchantName('NEFT-HDFC TRANSFER')).toBe('HDFC TRANSFER');
   });
 
   it('strips IMPS prefix', () => {
-    expect(normalizeMerchantName('IMPS-RAZORPAY')).toContain('RAZORPAY');
+    // Exact: IMPS- is removed and RAZORPAY has no merchant-pattern mapping, so
+    // the result is the stripped string itself — this is the assertion that
+    // actually fails if the IMPS strip regresses.
+    expect(normalizeMerchantName('IMPS-RAZORPAY')).toBe('RAZORPAY');
   });
 
   it('maps AMZN to Amazon', () => {
@@ -111,7 +94,9 @@ describe('normalizeMerchantName', () => {
   });
 
   it('handles description that is all prefix noise', () => {
+    // Exact: the POS card prefix is stripped, leaving the 4-digit reference
+    // (trailing-number stripping only fires on 6+ digits, so 1234 survives).
     const result = normalizeMerchantName('POS 1234');
-    expect(result).toBeTruthy();
+    expect(result).toBe('1234');
   });
 });

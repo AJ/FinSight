@@ -355,39 +355,11 @@ export function detectAnomalies(transactions: Transaction[]): Transaction[] {
 
     // No anomalies detected - clear flags but preserve dismissal status
     if (anomalies.length === 0) {
-      return new Transaction(
-        txn.id,
-        txn.date,
-        txn.description,
-        txn.amount,
-        txn.type,
-        txn.category,
-        txn.balance,
-        txn.merchant,
-        txn.originalText,
-        txn.budgetMonth,
-        txn.categoryConfidence,
-        txn.needsReview,
-        txn.categorizedBy,
-        txn.sourceType,
-        txn.statementId,
-        txn.cardIssuer,
-        txn.cardLastFour,
-        txn.cardHolder,
-        txn.localCurrency,
-        txn.originalCurrency,
-        txn.originalAmount,
-        txn.isInternational,
-        undefined, // isAnomaly
-        undefined, // anomalyTypes
-        undefined, // anomalyDetails
-        txn.anomalyDismissed, // preserve dismissal status on re-scan
-        txn.transactionSubType,
-        txn.suggestedCategory,
-        txn.llmConfidence,
-        txn.verificationConfidence,
-        txn.sourceFileHash,
-      );
+      return txn.cloneWith({
+        isAnomaly: undefined,
+        anomalyTypes: undefined,
+        anomalyDetails: undefined,
+      });
     }
 
     // Build anomaly details
@@ -407,39 +379,12 @@ export function detectAnomalies(transactions: Transaction[]): Transaction[] {
       }
     }
 
-    return new Transaction(
-      txn.id,
-      txn.date,
-      txn.description,
-      txn.amount,
-      txn.type,
-      txn.category,
-      txn.balance,
-      txn.merchant,
-      txn.originalText,
-      txn.budgetMonth,
-      txn.categoryConfidence,
-      txn.needsReview,
-      txn.categorizedBy,
-      txn.sourceType,
-      txn.statementId,
-      txn.cardIssuer,
-      txn.cardLastFour,
-      txn.cardHolder,
-      txn.localCurrency,
-      txn.originalCurrency,
-      txn.originalAmount,
-      txn.isInternational,
-      true, // isAnomaly
+    return txn.cloneWith({
+      isAnomaly: true,
       anomalyTypes,
       anomalyDetails,
-      txn.anomalyDismissed ?? false,
-      txn.transactionSubType,
-      txn.suggestedCategory,
-      txn.llmConfidence,
-      txn.verificationConfidence,
-      txn.sourceFileHash,
-    );
+      anomalyDismissed: txn.anomalyDismissed ?? false,
+    });
   });
 }
 

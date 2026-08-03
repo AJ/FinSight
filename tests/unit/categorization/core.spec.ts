@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import '@/lib/categorization/categories'; // Register categories for real keyword matching
+import { LLMError } from '@/lib/llm/types';
 
 import {
   shouldSkipAICategorization,
@@ -35,31 +36,42 @@ describe('shouldSkipAICategorization', () => {
 });
 
 describe('categorizeByKeywords', () => {
+  // Keyword matching is subtype-scoped. When a subtype is present it is used; when absent
+  // (the LLM failure path, once classification is the subtype authority) the direction
+  // default is inferred via defaultSubtype — debit → purchase, credit → income.
+
   it('categorizes swiggy as dining', () => {
-    const result = categorizeByKeywords({ description: 'SWIGGY ORDER', amount: 350, type: 'debit' });
+    const result = categorizeByKeywords({ description: 'SWIGGY ORDER', amount: 350, type: 'debit', transactionSubType: 'purchase' });
     expect(result).toBe('dining');
   });
 
-  it('categorizes food keyword as groceries (groceries registered before dining)', () => {
-    // "food" is a groceries keyword, registered before dining in category order.
-    // "SWIGGY FOOD ORDER" matches groceries via "food" before dining's "swiggy" is checked.
-    const result = categorizeByKeywords({ description: 'SWIGGY FOOD ORDER', amount: 350, type: 'debit' });
+  it('categorizes food keyword as groceries (groceries before dining for purchase)', () => {
+    // "food" is a groceries keyword; under the purchase subtype groceries is listed
+    // before dining, so "SWIGGY FOOD ORDER" matches groceries via "food" first.
+    const result = categorizeByKeywords({ description: 'SWIGGY FOOD ORDER', amount: 350, type: 'debit', transactionSubType: 'purchase' });
     expect(result).toBe('groceries');
   });
 
   it('categorizes Amazon as shopping', () => {
-    const result = categorizeByKeywords({ description: 'AMAZON IN PURCHASE', amount: 1299, type: 'debit' });
+    const result = categorizeByKeywords({ description: 'AMAZON IN PURCHASE', amount: 1299, type: 'debit', transactionSubType: 'purchase' });
     expect(result).toBe('shopping');
   });
 
   it('categorizes unknown merchant as other', () => {
-    const result = categorizeByKeywords({ description: 'XYZ MERCHANT ABC', amount: 500, type: 'debit' });
+    const result = categorizeByKeywords({ description: 'XYZ MERCHANT ABC', amount: 500, type: 'debit', transactionSubType: 'purchase' });
     expect(result).toBe('other');
   });
 
   it('handles empty description', () => {
-    const result = categorizeByKeywords({ description: '', amount: 100, type: 'debit' });
+    const result = categorizeByKeywords({ description: '', amount: 100, type: 'debit', transactionSubType: 'purchase' });
     expect(result).toBe('other');
+  });
+
+  it('infers the subtype from direction when absent (LLM failure path)', () => {
+    // No subtype supplied — the direction default (debit → purchase) is inferred via
+    // defaultSubtype, so keyword matching still runs subtype-scoped instead of throwing.
+    const result = categorizeByKeywords({ description: 'SWIGGY ORDER', amount: 350, type: 'debit' });
+    expect(result).toBe('dining');
   });
 });
 
@@ -115,7 +127,7 @@ describe('runCategorizationCore', () => {
     );
 
     const result = await runCategorizationCore(
-      [{ id: '1', description: 'SWIGGY FOOD', amount: 350, type: 'debit' }],
+      [{ id: '1', description: 'SWIGGY FOOD', amount: 350, type: 'debit', transactionSubType: 'purchase' }],
       { generate },
     );
 
@@ -132,7 +144,7 @@ describe('runCategorizationCore', () => {
     );
 
     const result = await runCategorizationCore(
-      [{ id: '1', description: 'AMAZON PURCHASE', amount: 1299, type: 'debit' }],
+      [{ id: '1', description: 'AMAZON PURCHASE', amount: 1299, type: 'debit', transactionSubType: 'purchase' }],
       { generate },
     );
 
@@ -150,9 +162,9 @@ describe('runCategorizationCore', () => {
 
     const result = await runCategorizationCore(
       [
-        { id: '1', description: 'SWIGGY ORDER', amount: 350, type: 'debit' },
-        { id: '2', description: 'AMAZON PURCHASE', amount: 1299, type: 'debit' },
-        { id: '3', description: 'NETFLIX SUBSCRIPTION', amount: 649, type: 'debit' },
+        { id: '1', description: 'SWIGGY ORDER', amount: 350, type: 'debit', transactionSubType: 'purchase' },
+        { id: '2', description: 'AMAZON PURCHASE', amount: 1299, type: 'debit', transactionSubType: 'purchase' },
+        { id: '3', description: 'NETFLIX SUBSCRIPTION', amount: 649, type: 'debit', transactionSubType: 'purchase' },
       ],
       { generate },
     );
@@ -176,7 +188,7 @@ describe('runCategorizationCore', () => {
     const generate = vi.fn().mockRejectedValue(new Error('LLM connection failed'));
 
     const result = await runCategorizationCore(
-      [{ id: '1', description: 'AMAZON PURCHASE', amount: 1299, type: 'debit' }],
+      [{ id: '1', description: 'AMAZON PURCHASE', amount: 1299, type: 'debit', transactionSubType: 'purchase' }],
       { generate },
     );
 
@@ -185,12 +197,40 @@ describe('runCategorizationCore', () => {
     expect(result[0].confidence).toBe(0.3);
   });
 
+  it('rethrows a cancellation instead of swallowing it into keyword fallback', async () => {
+    // A user abort surfaces from the LLM client as kind 'cancelled'. The per-batch catch is for
+    // resilience (LLM down → keyword fallback), but a cancellation is an explicit stop and must
+    // propagate so the caller can abort the whole pipeline instead of completing on keywords.
+    const generate = vi.fn().mockRejectedValue(new LLMError('request cancelled', 'cancelled'));
+
+    await expect(
+      runCategorizationCore(
+        [{ id: '1', description: 'AMAZON PURCHASE', amount: 1299, type: 'debit', transactionSubType: 'purchase' }],
+        { generate },
+      ),
+    ).rejects.toBeInstanceOf(LLMError);
+  });
+
+  it('still falls back to keywords for a non-cancel LLM error', async () => {
+    // Regression guard: only cancellations rethrow. Genuine LLM failures keep degrading to
+    // keyword categorization so the user still gets a result.
+    const generate = vi.fn().mockRejectedValue(new LLMError('malformed JSON', 'invalid-response'));
+
+    const result = await runCategorizationCore(
+      [{ id: '1', description: 'AMAZON PURCHASE', amount: 1299, type: 'debit', transactionSubType: 'purchase' }],
+      { generate },
+    );
+
+    expect(result).toHaveLength(1);
+    expect(result[0].source).toBe('keyword');
+  });
+
   it('calls onProgress callback', async () => {
     const onProgress = vi.fn();
     const generate = vi.fn().mockResolvedValue('[]');
 
     await runCategorizationCore(
-      [{ id: '1', description: 'X', amount: 100, type: 'debit' }],
+      [{ id: '1', description: 'X', amount: 100, type: 'debit', transactionSubType: 'purchase' }],
       { generate, onProgress },
     );
 

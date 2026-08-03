@@ -53,12 +53,15 @@ describe('buildCategorizationPrompt', () => {
     expect(result).toContain('"sourceType":"bank"');
   });
 
-  it('includes transactionSubType in payload when present', () => {
+  it('does NOT echo the input transactionSubType — the model decides it now', () => {
+    // Classification is the subtype authority: the prompt no longer passes subtype as a hint.
+    // It asks the model to OUTPUT transactionSubType. The per-transaction payload must not
+    // carry the input subtype value.
     const transactions = [
       { id: '1', description: 'NETFLIX', amount: 15, type: 'debit' as const, transactionSubType: 'debt_payment' as const },
     ];
     const result = buildCategorizationPrompt(transactions);
-    expect(result).toContain('"transactionSubType":"debt_payment"');
+    expect(result).not.toContain('"transactionSubType":"debt_payment"');
   });
 
   it('omits sourceType from transaction payload when not provided', () => {
@@ -176,6 +179,25 @@ Hope this helps!`;
     expect(result[0].confidence).toBe(0.2);
     expect(result[0].source).toBe('keyword');
   });
+
+  it('carries transactionSubType through when canonical', () => {
+    const response = JSON.stringify([{ id: '1', category: 'transfer', transactionSubType: 'self_transfer', confidence: 0.5 }]);
+    const result = parseCategorizationResponse(response);
+    expect(result[0].transactionSubType).toBe('self_transfer');
+  });
+
+  it('drops a non-canonical transactionSubType', () => {
+    const response = JSON.stringify([{ id: '1', category: 'other', transactionSubType: 'emi', confidence: 0.5 }]);
+    const result = parseCategorizationResponse(response);
+    expect(result[0].transactionSubType).toBeUndefined();
+  });
+
+  it('leaves transactionSubType absent and confidence untouched when the model omits it', () => {
+    const response = JSON.stringify([{ id: '1', category: 'dining', confidence: 0.9 }]);
+    const result = parseCategorizationResponse(response);
+    expect(result[0].transactionSubType).toBeUndefined();
+    expect(result[0].confidence).toBe(0.9);
+  });
 });
 
 describe('normalizeCategoryId', () => {
@@ -212,16 +234,26 @@ describe('normalizeCategoryId', () => {
     expect(normalizeCategoryId('bill-pay')).toBe('bills');
   });
 
-  it('"bill" maps via partial alias match', () => {
-    // "bill_payment".includes("bill") is true → maps to "bills"
-    const result = normalizeCategoryId('bill');
-    expect(result).toBe('bills');
+  it('does NOT fuzzy-match a short token inside an alias (seminar is not a loan)', () => {
+    // Bidirectional substring matching was removed. "seminar" used to contain the
+    // "emi" alias and misroute an education expense to "loans"; it now falls to "other".
+    expect(normalizeCategoryId('seminar')).toBe('other');
   });
 
-  it('"bill-payment" maps to "bills" via partial match', () => {
-    // "bill-payment".includes("bill-pay") is true
-    const result = normalizeCategoryId('bill-payment');
-    expect(result).toBe('bills');
+  it('does NOT fuzzy-match a short token inside an alias (livestocks is not investment)', () => {
+    // "livestocks" used to contain "stocks" and misroute a purchase to "investment".
+    expect(normalizeCategoryId('livestocks')).toBe('other');
+  });
+
+  it('does not fuzzy-match a bare prefix ("bill" is ambiguous, not "bills")', () => {
+    // With substring matching gone, "bill" is no longer pulled into "bills". Only the
+    // exact aliases (bill_payment, bill-pay, billpay) map to "bills".
+    expect(normalizeCategoryId('bill')).toBe('other');
+  });
+
+  it('does not fuzzy-match a hyphenated near-miss ("bill-payment" → other)', () => {
+    // Only the exact alias "bill-pay" maps to "bills"; "bill-payment" does not.
+    expect(normalizeCategoryId('bill-payment')).toBe('other');
   });
 
   it('"transfer_in" returns "other" when no partial alias matches', () => {
@@ -249,7 +281,7 @@ describe('CATEGORIZATION_SCHEMA', () => {
     expect(CATEGORIZATION_SCHEMA.items?.properties?.category?.enum).toEqual(
       DEFAULT_CATEGORIES.map((c) => c.id),
     );
-    expect(CATEGORIZATION_SCHEMA.items?.required).toEqual(['id', 'category', 'confidence']);
+    expect(CATEGORIZATION_SCHEMA.items?.required).toEqual(['id', 'category', 'confidence', 'transactionSubType']);
     expect(CATEGORIZATION_SCHEMA.items?.additionalProperties).toBe(true);
   });
 });
@@ -262,10 +294,11 @@ describe('categorization prompt skeleton (restored)', () => {
     expect(p).toContain('Return ONLY the JSON array');
   });
 
-  it('still carries the suspense guidance (semantic, not shape)', () => {
+  it('carries the self_transfer ownership guidance (semantic, not shape)', () => {
     const p = buildCategorizationPrompt([
       { id: '1', description: 'x', amount: 1, type: 'debit' },
     ]);
-    expect(p).toContain('isSuspense');
+    expect(p).toContain('self_transfer');
+    expect(p).toContain('transactionSubType');
   });
 });

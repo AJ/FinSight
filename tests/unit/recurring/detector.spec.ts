@@ -12,7 +12,7 @@ import {
   groupTransactionsByMerchant,
   predictNextDate,
 } from '@/lib/recurring/detector';
-import { TransactionType, CategoryType } from '@/types';
+import { TransactionType } from '@/types';
 import type { RecurringPayment, DetectionConfig } from '@/lib/recurring/types';
 import { DEFAULT_DETECTION_CONFIG } from '@/lib/recurring/types';
 import { makeTransaction, makeCategory } from '@tests/unit/factories';
@@ -398,7 +398,7 @@ describe('detectRecurringPayments', () => {
           amount: 499,
           type: TransactionType.Credit,
           date: new Date(2024, i, 15),
-          category: makeCategory('entertainment', CategoryType.Income),
+          category: makeCategory('entertainment', false),
         })
       ),
     ];

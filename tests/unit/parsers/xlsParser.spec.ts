@@ -52,6 +52,30 @@ describe('parseXLS', () => {
     expect(result.statementType).toBeNull();
   });
 
+  it('does NOT assign a subtype — XLS emits type only; classification owns subtype (D1)', async () => {
+    const data = makeWorkbookData(
+      ['Date', 'Description', 'Debit', 'Credit', 'Balance'],
+      [
+        { Date: '01/01/2024', Description: 'Grocery', Debit: 50, Credit: '', Balance: 950 },
+        { Date: '02/01/2024', Description: 'Salary', Debit: '', Credit: 3000, Balance: 3950 },
+      ],
+    );
+
+    mockRead.mockReturnValue({ SheetNames: ['Sheet1'], Sheets: { Sheet1: {} } });
+    mockSheetToJson.mockReturnValue(data.rows);
+    mockSheetToCsv.mockReturnValue('Date,Description,Debit,Credit,Balance\n...');
+
+    const result = await parseXLS(makeXlsFile());
+
+    const grocery = result.transactions[0]; // debit
+    expect(grocery.transactionSubType).toBeUndefined();
+    expect(grocery.llmConfidence).toBeUndefined();
+
+    const salary = result.transactions[1]; // credit
+    expect(salary.transactionSubType).toBeUndefined();
+    expect(salary.llmConfidence).toBeUndefined();
+  });
+
   it('parses multi-sheet workbook, selecting sheet with most rows', async () => {
     const goodRows = [
       { Date: '01/01/2024', Description: 'Grocery', Amount: 50 },
@@ -523,60 +547,56 @@ describe('parseXLS', () => {
     expect(result.transactions[0].description).toBe('Transaction');
   });
 
-  it('includes parsingErrors array in return value for malformed rows', async () => {
+  it('records a parsingError for a malformed row and keeps parseable rows', async () => {
     mockRead.mockReturnValue({
       SheetNames: ['Sheet1'],
       Sheets: { Sheet1: {} },
     });
-    // Both rows have valid dates but bad amounts -- no parsingErrors from those.
-    // To trigger parsingErrors, we need a row that throws inside parseRow.
-    // A row with a valid date and Amount that somehow causes an error is hard,
-    // so we verify the field exists and is an array.
+    // The good row parses normally. The bad row has a non-numeric amount:
+    // cleanAmount strips the letters from 'abc', leaving nothing to parseFloat,
+    // so resolveAmount returns ok:false and parseRow records a parsingError
+    // instead of a transaction. A good row is included because parseXLS reports
+    // the selected sheet's errors — and a sheet is only selected when it has the
+    // most transactions, so an all-malformed sheet's errors would not surface.
     mockSheetToJson.mockReturnValue([
-      { Date: '01/01/2024', Description: 'Good', Amount: 100 },
+      { Date: '01/01/2024', Description: 'Good', Amount: 200 },
+      { Date: '02/01/2024', Description: 'Bad', Amount: 'abc' },
     ]);
     mockSheetToCsv.mockReturnValue('');
 
     const result = await parseXLS(makeXlsFile());
 
-    expect(result.parsingErrors).toBeDefined();
-    expect(Array.isArray(result.parsingErrors)).toBe(true);
+    expect(result.transactions).toHaveLength(1);
+    expect(result.transactions[0].description).toBe('Good');
+    expect(result.parsingErrors).toHaveLength(1);
+    expect(result.parsingErrors[0].rowIndex).toBe(1);
+    expect(result.parsingErrors[0].errorMessage).toContain('unparseable amount');
   });
 
   // ── Warning generation for parsing errors ──────────────────────────────────
 
-  it('includes warning string when parsingErrors exist', async () => {
+  it('includes a warning string when a row fails to parse', async () => {
     mockRead.mockReturnValue({
       SheetNames: ['Sheet1'],
       Sheets: { Sheet1: {} },
     });
-    // Row with unparseable date will be skipped (no parsingError from that),
-    // but a row with valid date and empty amount also just returns null.
-    // To trigger parsingErrors we need a row that throws inside parseRow.
-    // We can force this by making the Transaction constructor throw.
-    // However, since the constructor is stable, we use a row whose Date is a
-    // string parseable as a number that would cause issues. Let's use a valid
-    // date row alongside an unparseable one — the unparseable date row produces
-    // no transaction and no error (just returns null), so we test the warning
-    // path differently.
-    //
-    // Actually, the only way to get parsingErrors from parseSheet is if
-    // parseRow catches an exception. Let's test the warning message format
-    // by ensuring the code path that generates it is covered.
+    // A malformed row (non-numeric amount) alongside a parseable one. parseSheet
+    // turns the parsingError count into a human-readable warning. The good row
+    // is required so the sheet is selected (parseXLS reports the selected
+    // sheet's warnings); an all-malformed sheet would surface no warning.
     mockSheetToJson.mockReturnValue([
-      { Date: 'not-a-date', Description: 'Bad', Amount: 100 },
-      { Date: '01/01/2024', Description: 'Good', Amount: 200 },
+      { Date: '01/01/2024', Description: 'Bad', Amount: 'abc' },
+      { Date: '02/01/2024', Description: 'Good', Amount: 200 },
     ]);
     mockSheetToCsv.mockReturnValue('');
 
     const result = await parseXLS(makeXlsFile());
 
-    // The "not-a-date" row simply returns null (no error thrown), so no
-    // parsingErrors. But if there were parsingErrors, the warning would say:
-    // "N row(s) failed to parse. Check debug logs for details."
-    // We verify the structure is correct.
-    expect(result.warnings).toBeDefined();
-    expect(Array.isArray(result.warnings)).toBe(true);
+    expect(result.transactions).toHaveLength(1);
+    expect(result.parsingErrors).toHaveLength(1);
+    expect(result.warnings).toEqual(
+      expect.arrayContaining([expect.stringMatching(/1 row\(s\) failed to parse/)]),
+    );
   });
 
   // ── cleanAmount: comma-as-thousands separator (afterComma > 2 digits) ──────

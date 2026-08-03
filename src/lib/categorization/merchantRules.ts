@@ -54,7 +54,7 @@ export interface MerchantRuleDecision {
 }
 
 const PAYMENT_RAIL_NOISE =
-  /\b(?:upi|neft|imps|rtgs|ach|autopay|payzapp|payment|bill payment|billpay|xfer|transfer|txn|utr|rrn)\b/gi;
+  /\b(?:upi|neft|imps|rtgs|ach|payzapp|xfer|utr|rrn)\b/gi;
 const REF_NOISE =
   /\b(?:ref|ref#|reference|order|txn|txnid|auth|approval)\b[:#-]?\s*[a-z0-9-]+/gi;
 const DATE_TIME_NOISE =

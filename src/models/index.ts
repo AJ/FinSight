@@ -1,6 +1,5 @@
 // Enums
 export { TransactionType } from './TransactionType';
-export { CategoryType } from './CategoryType';
 export { CategorizedBy } from './CategorizedBy';
 export { SourceType } from './SourceType';
 export { AnomalyType } from './AnomalyType';

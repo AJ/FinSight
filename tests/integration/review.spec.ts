@@ -17,8 +17,8 @@ test.describe('Review page', () => {
     await context.addInitScript(() => {
       window.sessionStorage.setItem('review-session-v1', JSON.stringify({
         transactions: [
-          { id: 'rt1', date: '2025-01-05', description: 'Groceries', amount: -2000, type: 'debit', category: 'groceries', merchant: 'Store', needsReview: false, localCurrency: { code: 'INR', symbol: '₹', name: 'Indian Rupee' }, sourceType: 'bank' },
-          { id: 'rt2', date: '2025-01-10', description: 'Netflix', amount: -499, type: 'debit', category: 'entertainment', merchant: 'Netflix', needsReview: true, localCurrency: { code: 'INR', symbol: '₹', name: 'Indian Rupee' }, sourceType: 'bank' },
+          { id: 'rt1', date: '2025-01-05', description: 'Groceries', amount: -2000, type: 'debit', category: 'groceries', merchant: 'Store', localCurrency: { code: 'INR', symbol: '₹', name: 'Indian Rupee' }, sourceType: 'bank' },
+          { id: 'rt2', date: '2025-01-10', description: 'Netflix', amount: -499, type: 'debit', category: 'entertainment', merchant: 'Netflix', localCurrency: { code: 'INR', symbol: '₹', name: 'Indian Rupee' }, sourceType: 'bank' },
         ],
         sourceFile: 'test.csv',
         importTimestamp: new Date().toISOString(),
@@ -36,7 +36,7 @@ test.describe('Review page', () => {
     await context.addInitScript(() => {
       window.sessionStorage.setItem('review-session-v1', JSON.stringify({
         transactions: [
-          { id: 're-1', date: '2025-01-05T00:00:00.000Z', description: 'Test Transaction', amount: 100, type: 'debit', category: 'shopping', merchant: 'Test Merchant', needsReview: false, localCurrency: { code: 'INR', symbol: '₹', name: 'Indian Rupee' }, sourceType: 'bank' },
+          { id: 're-1', date: '2025-01-05T00:00:00.000Z', description: 'Test Transaction', amount: 100, type: 'debit', category: 'shopping', merchant: 'Test Merchant', localCurrency: { code: 'INR', symbol: '₹', name: 'Indian Rupee' }, sourceType: 'bank' },
         ],
         currency: { code: 'INR', symbol: '₹', name: 'Indian Rupee' },
         format: 'csv',
@@ -78,7 +78,7 @@ test.describe('Review page', () => {
     await context.addInitScript(() => {
       window.sessionStorage.setItem('review-session-v1', JSON.stringify({
         transactions: [
-          { id: 'rt1', date: '2025-01-05', description: 'Test Txn', amount: -100, type: 'debit', category: 'other', merchant: 'Test', needsReview: false, localCurrency: { code: 'INR', symbol: '₹', name: 'Indian Rupee' }, sourceType: 'bank' },
+          { id: 'rt1', date: '2025-01-05', description: 'Test Txn', amount: -100, type: 'debit', category: 'other', merchant: 'Test', localCurrency: { code: 'INR', symbol: '₹', name: 'Indian Rupee' }, sourceType: 'bank' },
         ],
         sourceFile: 'test.csv',
         importTimestamp: new Date().toISOString(),
@@ -118,9 +118,7 @@ test.describe('Category Editing on Review Page', () => {
             amount: -2500,
             type: 'debit',
             category: 'shopping',
-            merchant: 'AMAZON',
-            needsReview: true,
-            localCurrency: { code: 'INR', symbol: '₹', name: 'Indian Rupee' },
+            merchant: 'AMAZON',            localCurrency: { code: 'INR', symbol: '₹', name: 'Indian Rupee' },
             sourceType: 'bank',
           },
         ],
@@ -172,9 +170,7 @@ test.describe('Category Editing on Review Page', () => {
             amount: -2500,
             type: 'debit',
             category: 'shopping',
-            merchant: 'AMAZON',
-            needsReview: true,
-            localCurrency: { code: 'INR', symbol: '₹', name: 'Indian Rupee' },
+            merchant: 'AMAZON',            localCurrency: { code: 'INR', symbol: '₹', name: 'Indian Rupee' },
             sourceType: 'bank',
           },
         ],

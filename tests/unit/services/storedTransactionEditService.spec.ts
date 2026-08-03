@@ -22,13 +22,6 @@ describe('buildStoredTransactionCategoryUpdate', () => {
     expect(result.category.id).toBe('groceries');
   });
 
-  it('sets needsReview to false', () => {
-    const txn = makeTransaction({ needsReview: true });
-    const result = buildStoredTransactionCategoryUpdate(txn, 'groceries', CategorizedBy.Manual);
-
-    expect(result.needsReview).toBe(false);
-  });
-
   it('sets categorizedBy', () => {
     const txn = makeTransaction();
     const result = buildStoredTransactionCategoryUpdate(txn, 'groceries', CategorizedBy.AI);
@@ -52,7 +45,6 @@ describe('handleStoredTransactionManualCategoryEdit', () => {
 
     expect(result.category.id).toBe('groceries');
     expect(result.categorizedBy).toBe(CategorizedBy.Manual);
-    expect(result.needsReview).toBe(false);
   });
 
   it('stores a merchant rule from the manual edit', () => {

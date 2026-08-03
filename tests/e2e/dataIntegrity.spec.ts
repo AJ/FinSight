@@ -103,9 +103,7 @@ test.describe('Cross-file Duplicate Detection', () => {
       type: 'debit',
       balance: 49900.00,
       category: 'other',
-      categoryConfidence: 1,
-      needsReview: false,
-      sourceType: 'bank',
+      categoryConfidence: 1,      sourceType: 'bank',
       sourceFileHash: fileHash,
       localCurrency: { code: 'INR', symbol: '₹', name: 'Indian Rupee' },
     };

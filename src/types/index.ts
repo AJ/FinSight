@@ -1,7 +1,6 @@
 // Re-export from class-based models
 export {
   TransactionType,
-  CategoryType,
   CategorizedBy,
   SourceType,
   AnomalyType,

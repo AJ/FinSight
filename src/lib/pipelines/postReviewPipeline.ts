@@ -65,15 +65,9 @@ export async function finalizeReviewImport(
 
   const sourceFileHash = reviewSession.sourceMetadata?.sourceFileHash;
   const isDuplicateImport = reviewSession.sourceMetadata?.isDuplicateImport;
-  let stampedTransactions = sourceFileHash
+  const stampedTransactions = sourceFileHash
     ? reviewedTransactions.map((t) => t.cloneWith({ sourceFileHash }))
     : reviewedTransactions;
-  // Strip staging-only suspense flag before persisting to the store
-  if (stampedTransactions.some(t => t.isSuspense)) {
-    stampedTransactions = stampedTransactions.map(t =>
-      t.isSuspense ? t.cloneWith({ isSuspense: undefined }) : t
-    );
-  }
 
   dependencies.addTransactions(stampedTransactions, {
     skipDedup: isDuplicateImport === true,

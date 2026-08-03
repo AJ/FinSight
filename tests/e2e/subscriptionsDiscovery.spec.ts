@@ -12,9 +12,9 @@ test.describe('Subscriptions discovery E2E', () => {
       window.localStorage.setItem('transaction-storage', JSON.stringify({
         state: {
           transactions: [
-            { id: 't1', date: '2026-04-05', description: 'Netflix', amount: -499, type: 'debit', category: 'entertainment', merchant: 'Netflix', needsReview: false, localCurrency: { code: 'INR', symbol: '₹', name: 'Indian Rupee' }, sourceType: 'bank' },
-            { id: 't2', date: '2026-03-05', description: 'Netflix', amount: -499, type: 'debit', category: 'entertainment', merchant: 'Netflix', needsReview: false, localCurrency: { code: 'INR', symbol: '₹', name: 'Indian Rupee' }, sourceType: 'bank' },
-            { id: 't3', date: '2026-02-05', description: 'Netflix', amount: -499, type: 'debit', category: 'entertainment', merchant: 'Netflix', needsReview: false, localCurrency: { code: 'INR', symbol: '₹', name: 'Indian Rupee' }, sourceType: 'bank' },
+            { id: 't1', date: '2026-04-05', description: 'Netflix', amount: -499, type: 'debit', category: 'entertainment', merchant: 'Netflix', localCurrency: { code: 'INR', symbol: '₹', name: 'Indian Rupee' }, sourceType: 'bank' },
+            { id: 't2', date: '2026-03-05', description: 'Netflix', amount: -499, type: 'debit', category: 'entertainment', merchant: 'Netflix', localCurrency: { code: 'INR', symbol: '₹', name: 'Indian Rupee' }, sourceType: 'bank' },
+            { id: 't3', date: '2026-02-05', description: 'Netflix', amount: -499, type: 'debit', category: 'entertainment', merchant: 'Netflix', localCurrency: { code: 'INR', symbol: '₹', name: 'Indian Rupee' }, sourceType: 'bank' },
           ],
         },
         version: 0,

@@ -1,7 +1,7 @@
 import type { Line, TableRegion, ProseRegion } from './extractionTypes';
 import { MIN_HEADER_CONCEPTS } from './extractionTypes';
 import { countDistinctConcepts } from './headerSynonyms';
-import { isDateLike } from '../datePatterns';
+import { isDateLike } from '../dateParser';
 
 // Known limitation: multi-page tables without repeated headers are not detected.
 // findRegionEnd stops at page boundaries, so if a table continues on page 2

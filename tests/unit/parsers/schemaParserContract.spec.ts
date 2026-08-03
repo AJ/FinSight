@@ -19,15 +19,18 @@ function propertiesOf(schema: JSONSchema): Record<string, JSONSchema> {
 }
 
 describe('schema defines every field its parser reads', () => {
-  it('CC transactions schema covers the extracted-transaction fields', () => {
+  it('CC transactions schema covers the extracted-transaction fields (D1: no subtype at extraction)', () => {
     const txn = propertiesOf(CC_TRANSACTIONS_SCHEMA).transactions?.items?.properties ?? {};
+    // transactionSubType is intentionally absent — extraction emits type only; the
+    // classification pass owns subtype.
     for (const f of [
-      'date', 'description', 'amount', 'type', 'reasoning', 'transactionSubType',
+      'date', 'description', 'amount', 'type', 'reasoning',
       'localCurrency', 'isInternationalTransaction', 'originalCurrency', 'originalAmount',
       'confidence',
     ]) {
       expect(txn[f], `missing ${f}`).toBeDefined();
     }
+    expect(txn.transactionSubType).toBeUndefined();
   });
 
   it('bank transactions schema covers balance', () => {

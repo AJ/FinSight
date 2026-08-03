@@ -4,10 +4,10 @@ import {
   toTransactionType,
 } from '@/lib/categorization/types';
 import { TransactionType } from '@/models';
-import { Transaction, Category, CategoryType, SourceType } from '@/types';
+import { Transaction, Category, SourceType } from '@/types';
 
 function makeCategory(id: string): Category {
-  return new Category(id, id, CategoryType.Expense);
+  return new Category(id, id, true);
 }
 
 function makeTransaction(overrides: Partial<Transaction> = {}): Transaction {
@@ -23,9 +23,8 @@ function makeTransaction(overrides: Partial<Transaction> = {}): Transaction {
     undefined,  // originalText
     undefined,  // budgetMonth
     undefined,  // categoryConfidence
-    undefined,  // needsReview
     undefined,  // categorizedBy
-    overrides.sourceType,  // sourceType (position 14)
+    overrides.sourceType,  // sourceType
     undefined,  // statementId
     undefined,  // cardIssuer
     undefined,  // cardLastFour

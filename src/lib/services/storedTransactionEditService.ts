@@ -9,7 +9,6 @@ export function buildStoredTransactionCategoryUpdate(
   return Transaction.fromJSON({
     ...transaction.toJSON(),
     category: (Category.fromId(categoryId) ?? transaction.category).id,
-    needsReview: false,
     categorizedBy,
   });
 }

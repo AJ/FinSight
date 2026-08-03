@@ -2,7 +2,6 @@ import { describe, it, expect } from 'vitest';
 
 import { buildChatContextForQuestion } from '@/lib/chat/contextBuilder';
 import { makeTransaction, makeCategory } from '@tests/unit/factories';
-import { CategoryType } from '@/types';
 
 const INR = { code: 'INR', symbol: '₹', name: 'Indian Rupee' };
 
@@ -117,7 +116,8 @@ describe('buildChatContextForQuestion', () => {
       id: 'inc',
       description: 'Salary',
       amount: 5000,
-      category: makeCategory('salary', CategoryType.Income),
+      type: 'credit',
+      category: makeCategory('salary', false),
     });
     const context = buildChatContextForQuestion([income, expense], INR, 'how much did I spend');
 
@@ -136,7 +136,7 @@ describe('buildChatContextForQuestion', () => {
       id: 'inc',
       description: 'Salary deposit',
       amount: 5000,
-      category: makeCategory('salary', CategoryType.Income),
+      category: makeCategory('salary', false),
     });
     const context = buildChatContextForQuestion([expense, income], INR, 'what is my income');
 
@@ -150,7 +150,7 @@ describe('buildChatContextForQuestion', () => {
       description: 'Refund received',
       amount: 300,
       type: 'credit',
-      category: makeCategory('refund', CategoryType.Income),
+      category: makeCategory('refund', false),
     });
     const debit = makeTransaction({
       id: 'dr',
@@ -174,7 +174,7 @@ describe('buildChatContextForQuestion', () => {
       description: 'Cashback',
       amount: 50,
       type: 'credit',
-      category: makeCategory('cashback', CategoryType.Income),
+      category: makeCategory('cashback', false),
     });
     const context = buildChatContextForQuestion([credit, debit], INR, 'what did I pay for');
 
@@ -189,7 +189,7 @@ describe('buildChatContextForQuestion', () => {
       id: 'ex',
       description: 'Transfer to savings',
       amount: 1000,
-      category: makeCategory('transfer', CategoryType.Excluded),
+      category: makeCategory('transfer', false),
     });
     const context = buildChatContextForQuestion([excluded], INR, 'overview');
     // Summary line includes "excluded" with the amount
@@ -304,7 +304,7 @@ describe('buildChatContextForQuestion', () => {
 
   it('shows "none" for top expense categories when only income transactions', () => {
     const txns = [
-      makeTransaction({ id: '1', description: 'Salary', amount: 5000, category: makeCategory('salary', CategoryType.Income) }),
+      makeTransaction({ id: '1', description: 'Salary', amount: 5000, type: 'credit', category: makeCategory('salary', false) }),
     ];
     const context = buildChatContextForQuestion(txns, INR, 'overview');
     expect(context).toContain('Top expense categories: none');

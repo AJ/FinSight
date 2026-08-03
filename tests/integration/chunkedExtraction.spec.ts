@@ -15,9 +15,9 @@ test.describe('Review page — chunked extraction with partial failures', () => 
     await context.addInitScript(() => {
       window.sessionStorage.setItem('review-session-v1', JSON.stringify({
         transactions: [
-          { id: 'ch1-1', date: '2025-01-05', description: 'Grocery Store', amount: -2500, type: 'debit', category: 'groceries', merchant: 'BigBasket', needsReview: false, localCurrency: { code: 'INR', symbol: '₹', name: 'Indian Rupee' }, sourceType: 'bank' },
-          { id: 'ch1-2', date: '2025-01-08', description: 'Electricity Bill', amount: -1800, type: 'debit', category: 'utilities', merchant: 'BESCOM', needsReview: false, localCurrency: { code: 'INR', symbol: '₹', name: 'Indian Rupee' }, sourceType: 'bank' },
-          { id: 'ch4-1', date: '2025-01-28', description: 'Salary Credit', amount: 50000, type: 'credit', category: 'income', merchant: 'Employer', needsReview: false, localCurrency: { code: 'INR', symbol: '₹', name: 'Indian Rupee' }, sourceType: 'bank' },
+          { id: 'ch1-1', date: '2025-01-05', description: 'Grocery Store', amount: -2500, type: 'debit', category: 'groceries', merchant: 'BigBasket', localCurrency: { code: 'INR', symbol: '₹', name: 'Indian Rupee' }, sourceType: 'bank' },
+          { id: 'ch1-2', date: '2025-01-08', description: 'Electricity Bill', amount: -1800, type: 'debit', category: 'utilities', merchant: 'BESCOM', localCurrency: { code: 'INR', symbol: '₹', name: 'Indian Rupee' }, sourceType: 'bank' },
+          { id: 'ch4-1', date: '2025-01-28', description: 'Salary Credit', amount: 50000, type: 'credit', category: 'income', merchant: 'Employer', localCurrency: { code: 'INR', symbol: '₹', name: 'Indian Rupee' }, sourceType: 'bank' },
         ],
         currency: { code: 'INR', symbol: '₹', name: 'Indian Rupee' },
         format: 'pdf',
@@ -68,7 +68,7 @@ test.describe('Review page — chunked extraction with partial failures', () => 
     await context.addInitScript(() => {
       window.sessionStorage.setItem('review-session-v1', JSON.stringify({
         transactions: [
-          { id: 't1', date: '2025-01-05', description: 'Surviving Txn', amount: -500, type: 'debit', category: 'shopping', merchant: 'Amazon', needsReview: false, localCurrency: { code: 'INR', symbol: '₹', name: 'Indian Rupee' }, sourceType: 'bank' },
+          { id: 't1', date: '2025-01-05', description: 'Surviving Txn', amount: -500, type: 'debit', category: 'shopping', merchant: 'Amazon', localCurrency: { code: 'INR', symbol: '₹', name: 'Indian Rupee' }, sourceType: 'bank' },
         ],
         currency: { code: 'INR', symbol: '₹', name: 'Indian Rupee' },
         format: 'pdf',
@@ -103,8 +103,8 @@ test.describe('Review page — chunked extraction with partial failures', () => 
     await context.addInitScript(() => {
       window.sessionStorage.setItem('review-session-v1', JSON.stringify({
         transactions: [
-          { id: 'c1', date: '2025-01-05', description: 'Txn From Chunk 1', amount: -100, type: 'debit', category: 'food', merchant: 'Swiggy', needsReview: false, localCurrency: { code: 'INR', symbol: '₹', name: 'Indian Rupee' }, sourceType: 'bank' },
-          { id: 'c2', date: '2025-01-15', description: 'Txn From Chunk 2', amount: -200, type: 'debit', category: 'food', merchant: 'Zomato', needsReview: false, localCurrency: { code: 'INR', symbol: '₹', name: 'Indian Rupee' }, sourceType: 'bank' },
+          { id: 'c1', date: '2025-01-05', description: 'Txn From Chunk 1', amount: -100, type: 'debit', category: 'food', merchant: 'Swiggy', localCurrency: { code: 'INR', symbol: '₹', name: 'Indian Rupee' }, sourceType: 'bank' },
+          { id: 'c2', date: '2025-01-15', description: 'Txn From Chunk 2', amount: -200, type: 'debit', category: 'food', merchant: 'Zomato', localCurrency: { code: 'INR', symbol: '₹', name: 'Indian Rupee' }, sourceType: 'bank' },
         ],
         currency: { code: 'INR', symbol: '₹', name: 'Indian Rupee' },
         format: 'pdf',

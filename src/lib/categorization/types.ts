@@ -9,7 +9,7 @@ export interface CategorizationResult {
   category: string;
   confidence: number;
   source: CategorizationSource;
-  isSuspense?: boolean;
+  transactionSubType?: TransactionSubType; // classification is the subtype authority
 }
 
 export interface CategorizationProgress {

@@ -17,9 +17,9 @@ test.describe('Review page — balance reconciliation', () => {
     await context.addInitScript(() => {
       window.sessionStorage.setItem('review-session-v1', JSON.stringify({
         transactions: [
-          { id: 't1', date: '2024-01-05', description: 'Opening Deposit', amount: 50000, type: 'credit', category: 'income', merchant: 'Bank', needsReview: false, localCurrency: { code: 'INR', symbol: '₹', name: 'Indian Rupee' }, sourceType: 'bank' },
-          { id: 't2', date: '2024-01-10', description: 'Rent Payment', amount: 15000, type: 'debit', category: 'housing', merchant: 'Landlord', needsReview: false, localCurrency: { code: 'INR', symbol: '₹', name: 'Indian Rupee' }, sourceType: 'bank' },
-          { id: 't3', date: '2024-01-20', description: 'Grocery Store', amount: 3000, type: 'debit', category: 'groceries', merchant: 'BigBasket', needsReview: false, localCurrency: { code: 'INR', symbol: '₹', name: 'Indian Rupee' }, sourceType: 'bank' },
+          { id: 't1', date: '2024-01-05', description: 'Opening Deposit', amount: 50000, type: 'credit', category: 'income', merchant: 'Bank', localCurrency: { code: 'INR', symbol: '₹', name: 'Indian Rupee' }, sourceType: 'bank' },
+          { id: 't2', date: '2024-01-10', description: 'Rent Payment', amount: 15000, type: 'debit', category: 'housing', merchant: 'Landlord', localCurrency: { code: 'INR', symbol: '₹', name: 'Indian Rupee' }, sourceType: 'bank' },
+          { id: 't3', date: '2024-01-20', description: 'Grocery Store', amount: 3000, type: 'debit', category: 'groceries', merchant: 'BigBasket', localCurrency: { code: 'INR', symbol: '₹', name: 'Indian Rupee' }, sourceType: 'bank' },
         ],
         currency: { code: 'INR', symbol: '₹', name: 'Indian Rupee' },
         format: 'pdf',
@@ -29,16 +29,16 @@ test.describe('Review page — balance reconciliation', () => {
         warnings: ['Bank statement verification failed: balance reconciliation difference 32000.00'],
         verificationReport: {
           verified: [
-            { id: 't1', date: '2024-01-05', description: 'Opening Deposit', amount: 50000, type: 'credit', category: 'income', merchant: 'Bank', needsReview: false, confidence: 95, verification: { amountMatched: true, dateMatched: true, descriptionMatched: true, contextMatched: true } },
-            { id: 't2', date: '2024-01-10', description: 'Rent Payment', amount: 15000, type: 'debit', category: 'housing', merchant: 'Landlord', needsReview: false, confidence: 90, verification: { amountMatched: true, dateMatched: true, descriptionMatched: true, contextMatched: true } },
-            { id: 't3', date: '2024-01-20', description: 'Grocery Store', amount: 3000, type: 'debit', category: 'groceries', merchant: 'BigBasket', needsReview: false, confidence: 88, verification: { amountMatched: true, dateMatched: true, descriptionMatched: true, contextMatched: true } },
+            { id: 't1', date: '2024-01-05', description: 'Opening Deposit', amount: 50000, type: 'credit', category: 'income', merchant: 'Bank', confidence: 95, verification: { amountMatched: true, dateMatched: true, descriptionMatched: true, contextMatched: true } },
+            { id: 't2', date: '2024-01-10', description: 'Rent Payment', amount: 15000, type: 'debit', category: 'housing', merchant: 'Landlord', confidence: 90, verification: { amountMatched: true, dateMatched: true, descriptionMatched: true, contextMatched: true } },
+            { id: 't3', date: '2024-01-20', description: 'Grocery Store', amount: 3000, type: 'debit', category: 'groceries', merchant: 'BigBasket', confidence: 88, verification: { amountMatched: true, dateMatched: true, descriptionMatched: true, contextMatched: true } },
           ],
           rejected: [],
           duplicates: [],
           reconciliation: {
             passed: false,
-            computedClosing: 32000,
-            expectedClosing: 35000,
+            computed: 32000,
+            fromStatement: 35000,
             difference: 3000,
           },
           overallConfidence: 60,
@@ -61,9 +61,6 @@ test.describe('Review page — balance reconciliation', () => {
     await expect(page.getByText('Reconciliation', { exact: true })).toBeVisible();
     await expect(page.getByText(/extracted vs.*expected/)).toBeVisible();
 
-    // Confidence badge should show
-    await expect(page.getByText('60%')).toBeVisible();
-
     // Transactions should still render
     await expect(page.getByText('Opening Deposit').first()).toBeVisible();
     await expect(page.getByText('Rent Payment').first()).toBeVisible();
@@ -74,8 +71,8 @@ test.describe('Review page — balance reconciliation', () => {
     await context.addInitScript(() => {
       window.sessionStorage.setItem('review-session-v1', JSON.stringify({
         transactions: [
-          { id: 't1', date: '2024-01-05', description: 'Salary Credit', amount: 50000, type: 'credit', category: 'income', merchant: 'Employer', needsReview: false, localCurrency: { code: 'INR', symbol: '₹', name: 'Indian Rupee' }, sourceType: 'bank' },
-          { id: 't2', date: '2024-01-10', description: 'Rent Payment', amount: 15000, type: 'debit', category: 'housing', merchant: 'Landlord', needsReview: false, localCurrency: { code: 'INR', symbol: '₹', name: 'Indian Rupee' }, sourceType: 'bank' },
+          { id: 't1', date: '2024-01-05', description: 'Salary Credit', amount: 50000, type: 'credit', category: 'income', merchant: 'Employer', localCurrency: { code: 'INR', symbol: '₹', name: 'Indian Rupee' }, sourceType: 'bank' },
+          { id: 't2', date: '2024-01-10', description: 'Rent Payment', amount: 15000, type: 'debit', category: 'housing', merchant: 'Landlord', localCurrency: { code: 'INR', symbol: '₹', name: 'Indian Rupee' }, sourceType: 'bank' },
         ],
         currency: { code: 'INR', symbol: '₹', name: 'Indian Rupee' },
         format: 'pdf',
@@ -92,8 +89,8 @@ test.describe('Review page — balance reconciliation', () => {
           duplicates: [],
           reconciliation: {
             passed: true,
-            computedClosing: 35000,
-            expectedClosing: 35000,
+            computed: 35000,
+            fromStatement: 35000,
             difference: 0,
           },
           overallConfidence: 93,
@@ -117,8 +114,8 @@ test.describe('Review page — balance reconciliation', () => {
     await context.addInitScript(() => {
       window.sessionStorage.setItem('review-session-v1', JSON.stringify({
         transactions: [
-          { id: 'c1', date: '2024-01-05', description: 'AMAZON PURCHASE', amount: 5000, type: 'debit', category: 'shopping', merchant: 'AMAZON', needsReview: false, localCurrency: { code: 'INR', symbol: '₹', name: 'Indian Rupee' }, sourceType: 'credit_card' },
-          { id: 'c2', date: '2024-01-15', description: 'PAYMENT RECEIVED', amount: 10000, type: 'credit', category: 'payment', merchant: 'BANK', needsReview: false, localCurrency: { code: 'INR', symbol: '₹', name: 'Indian Rupee' }, sourceType: 'credit_card' },
+          { id: 'c1', date: '2024-01-05', description: 'AMAZON PURCHASE', amount: 5000, type: 'debit', category: 'shopping', merchant: 'AMAZON', localCurrency: { code: 'INR', symbol: '₹', name: 'Indian Rupee' }, sourceType: 'credit_card' },
+          { id: 'c2', date: '2024-01-15', description: 'PAYMENT RECEIVED', amount: 10000, type: 'credit', category: 'payment', merchant: 'BANK', localCurrency: { code: 'INR', symbol: '₹', name: 'Indian Rupee' }, sourceType: 'credit_card' },
         ],
         currency: { code: 'INR', symbol: '₹', name: 'Indian Rupee' },
         format: 'pdf',
@@ -127,23 +124,27 @@ test.describe('Review page — balance reconciliation', () => {
         parseDate: new Date().toISOString(),
         warnings: ['Credit card statement verification failed: totals or transaction sums do not fully reconcile.'],
         verificationReport: {
-          statementTotals: {
-            passed: false,
-            statementTotalDue: 25000,
-            computedTotalDue: 20000,
-            difference: 5000,
-            formula: 'Previous(30000) + Debits(5000) - Credits(10000) = 25000',
-          },
-          transactionSums: {
-            passed: true,
-            totalPurchases: 5000,
-            totalPayments: 10000,
-            totalFees: 0,
-            totalDebits: 5000,
-            totalCredits: 10000,
+          verified: [],
+          rejected: [],
+          duplicates: [],
+          ccAggregate: {
+            statementTotals: {
+              passed: false,
+              statementTotalDue: 25000,
+              computedTotalDue: 20000,
+              difference: 5000,
+              formula: 'Previous(30000) + Debits(5000) - Credits(10000) = 25000',
+            },
+            transactionSums: {
+              passed: true,
+              totalPurchases: 5000,
+              totalPayments: 10000,
+              totalFees: 0,
+              totalDebits: 5000,
+              totalCredits: 10000,
+            },
           },
           overallConfidence: 55,
-          passed: false,
         },
         sourceMetadata: {},
       }));
@@ -171,8 +172,8 @@ test.describe('Review page — balance reconciliation', () => {
     await context.addInitScript(() => {
       window.sessionStorage.setItem('review-session-v1', JSON.stringify({
         transactions: [
-          { id: 't1', date: '2024-01-05', description: 'Valid Txn', amount: 5000, type: 'debit', category: 'shopping', merchant: 'AMAZON', needsReview: false, localCurrency: { code: 'INR', symbol: '₹', name: 'Indian Rupee' }, sourceType: 'bank' },
-          { id: 't2', date: '2024-01-10', description: 'Another Valid', amount: 3000, type: 'debit', category: 'food', merchant: 'SWIGGY', needsReview: false, localCurrency: { code: 'INR', symbol: '₹', name: 'Indian Rupee' }, sourceType: 'bank' },
+          { id: 't1', date: '2024-01-05', description: 'Valid Txn', amount: 5000, type: 'debit', category: 'shopping', merchant: 'AMAZON', localCurrency: { code: 'INR', symbol: '₹', name: 'Indian Rupee' }, sourceType: 'bank' },
+          { id: 't2', date: '2024-01-10', description: 'Another Valid', amount: 3000, type: 'debit', category: 'food', merchant: 'SWIGGY', localCurrency: { code: 'INR', symbol: '₹', name: 'Indian Rupee' }, sourceType: 'bank', reviewReasons: ['low_confidence'] },
         ],
         currency: { code: 'INR', symbol: '₹', name: 'Indian Rupee' },
         format: 'pdf',
@@ -185,13 +186,13 @@ test.describe('Review page — balance reconciliation', () => {
             { id: 't1', date: '2024-01-05', description: 'Valid Txn', amount: 5000, type: 'debit', confidence: 90, verification: { amountMatched: true, dateMatched: true, descriptionMatched: true, contextMatched: true } },
           ],
           rejected: [
-            { id: 't2', date: '2024-01-10', description: 'Another Valid', amount: 3000, type: 'debit', category: 'food', merchant: 'SWIGGY', needsReview: false, localCurrency: { code: 'INR', symbol: '₹', name: 'Indian Rupee' }, sourceType: 'bank' },
+            { id: 't2', date: '2024-01-10', description: 'Another Valid', amount: 3000, type: 'debit', category: 'food', merchant: 'SWIGGY', localCurrency: { code: 'INR', symbol: '₹', name: 'Indian Rupee' }, sourceType: 'bank' },
           ],
           duplicates: [],
           reconciliation: {
             passed: false,
-            computedClosing: 28000,
-            expectedClosing: 30000,
+            computed: 28000,
+            fromStatement: 30000,
             difference: 2000,
           },
           overallConfidence: 45,

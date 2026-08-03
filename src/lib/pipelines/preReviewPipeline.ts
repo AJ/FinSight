@@ -2,6 +2,7 @@ import { extractStatementBundleFromFile } from "@/lib/parsers/extractStatementBu
 import { attachVerificationToExtractionBundle } from "@/lib/services/statementVerificationService";
 import { enrichImportedTransactions } from "@/lib/services/transactionEnrichmentService";
 import { reviewSessionRepository } from "@/lib/review/reviewSessionRepository";
+import { applyVerificationReviewReasons } from "@/lib/review/applyVerificationReviewReasons";
 import { debugLog } from "@/lib/utils/debug";
 import type { Currency } from "@/types";
 import type { LLMProvider } from "@/lib/llm/types";
@@ -39,22 +40,39 @@ export async function runPreReviewPipeline(
     },
   });
 
-  const verifiedBundle = attachVerificationToExtractionBundle(extractedBundle);
-
-  input.onProgress?.("Categorizing transactions...");
-  const transactions = await enrichImportedTransactions(verifiedBundle.transactions, {
+  input.onProgress?.("Classifying transactions...");
+  const classified = await enrichImportedTransactions(extractedBundle.transactions, {
     provider: input.provider,
     baseUrl: input.baseUrl,
     model: input.model,
-    statementType: verifiedBundle.statementType || undefined,
+    statementType: extractedBundle.statementType || undefined,
+    signal: input.signal,
   });
 
-  // Log suspense-flagged transactions for observability
-  const suspenseCount = transactions.filter(t => t.isSuspense).length;
-  if (suspenseCount > 0) {
-    debugLog('Suspense', `${suspenseCount} transaction(s) flagged as suspense`);
-    for (const txn of transactions) {
-      if (txn.isSuspense) {
+  // Verify AFTER classification (D3): CC subtype reconciliation consumes subtype, so subtype
+  // must exist before verification runs. Classification (above) is now the subtype authority.
+  // Bank reconciliation is subtype-independent. Spread the classified transactions onto the
+  // bundle so verification sees them alongside the summary.
+  const verifiedBundle = attachVerificationToExtractionBundle({
+    ...extractedBundle,
+    transactions: classified,
+  });
+
+  // Assign review reasons (spec §6). Runs unconditionally — CSV/XLS imports carry
+  // no verification report, and the report is optional. Runs after classification so
+  // classification-derived reasons are already set; hard reasons are preserved.
+  const reviewed = applyVerificationReviewReasons(
+    verifiedBundle.transactions,
+    verifiedBundle.verificationReport,
+  );
+
+  // Log unresolved-transfer transactions for observability. The self_transfer_unresolved
+  // reason is stamped deterministically by the classification pass when subtype = self_transfer.
+  const unresolvedTransferCount = reviewed.filter((t) => t.reviewReasons.includes('self_transfer_unresolved')).length;
+  if (unresolvedTransferCount > 0) {
+    debugLog('Suspense', `${unresolvedTransferCount} transaction(s) flagged as unresolved transfer`);
+    for (const txn of reviewed) {
+      if (txn.reviewReasons.includes('self_transfer_unresolved')) {
         debugLog('Suspense', 'Flagged transaction', {
           description: txn.description?.substring(0, 80),
           subType: txn.transactionSubType,
@@ -66,7 +84,7 @@ export async function runPreReviewPipeline(
   }
 
   const reviewSessionPayload: ReviewSessionPayload = {
-    transactions,
+    transactions: reviewed,
     currency: verifiedBundle.currency ?? input.defaultCurrency,
     format: verifiedBundle.format,
     statementType: verifiedBundle.statementType,

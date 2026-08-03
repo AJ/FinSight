@@ -196,6 +196,9 @@ function parseRow(
     if (bal !== null) balance = bal;
   }
 
+  // D1: XLS emits type only — NO subtype. The classification pass (which runs on every
+  // import via enrichImportedTransactions) is the subtype authority and sets it.
+
   return {
     transaction: new Transaction(
       uuidv4(),
@@ -210,7 +213,6 @@ function parseRow(
       undefined,
       undefined,
       undefined,
-      undefined,
       sourceType,
       undefined,
       undefined,
@@ -219,16 +221,16 @@ function parseRow(
       undefined,
       undefined,
       undefined,
-      false,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      1.0,
-      undefined,
+      false,                                  // isInternational
+      undefined,                              // isAnomaly
+      undefined,                              // anomalyTypes
+      undefined,                              // anomalyDetails
+      undefined,                              // anomalyDismissed
+      undefined,                              // transactionSubType — set by the classification pass
+      undefined,                              // suggestedCategory
+      undefined,                              // llmConfidence — set by classification
+      1.0,                                    // verificationConfidence
+      undefined,                              // sourceFileHash
     ),
     error: null,
   };

@@ -9,9 +9,11 @@ test.describe('Subscriptions page', () => {
 
   test('no transactions shows upload prompt', async ({ page }) => {
     await page.goto('/subscriptions');
-    await expect(page.getByText(/upload|no.*transactions|import/i)).toBeVisible({ timeout: 10000 });
-    // Should NOT show any subscription cards
-    await expect(page.getByText(/netflix|spotify|recurring/i)).not.toBeVisible({ timeout: 3000 });
+    await expect(page.getByText('Upload your first statement')).toBeVisible({ timeout: 10000 });
+    // Should NOT show any subscription cards. Note: the empty-state prompt itself says
+    // "detect recurring payments", so the negative must NOT match the word "recurring" —
+    // match specific merchant names that only appear in actual subscription cards instead.
+    await expect(page.getByText(/netflix|spotify/i)).not.toBeVisible({ timeout: 3000 });
   });
 
   test('with transactions shows subscription-related content', async ({ context, page }) => {
@@ -19,9 +21,9 @@ test.describe('Subscriptions page', () => {
       window.localStorage.setItem('transaction-storage', JSON.stringify({
         state: {
           transactions: [
-            { id: 't1', date: '2026-04-05', description: 'Netflix Subscription', amount: -499, type: 'debit', category: 'entertainment', merchant: 'Netflix', needsReview: false, localCurrency: { code: 'INR', symbol: '₹', name: 'Indian Rupee' }, sourceType: 'bank' },
-            { id: 't2', date: '2026-03-05', description: 'Netflix Subscription', amount: -499, type: 'debit', category: 'entertainment', merchant: 'Netflix', needsReview: false, localCurrency: { code: 'INR', symbol: '₹', name: 'Indian Rupee' }, sourceType: 'bank' },
-            { id: 't3', date: '2026-02-05', description: 'Netflix Subscription', amount: -499, type: 'debit', category: 'entertainment', merchant: 'Netflix', needsReview: false, localCurrency: { code: 'INR', symbol: '₹', name: 'Indian Rupee' }, sourceType: 'bank' },
+            { id: 't1', date: '2026-04-05', description: 'Netflix Subscription', amount: -499, type: 'debit', category: 'entertainment', merchant: 'Netflix', localCurrency: { code: 'INR', symbol: '₹', name: 'Indian Rupee' }, sourceType: 'bank' },
+            { id: 't2', date: '2026-03-05', description: 'Netflix Subscription', amount: -499, type: 'debit', category: 'entertainment', merchant: 'Netflix', localCurrency: { code: 'INR', symbol: '₹', name: 'Indian Rupee' }, sourceType: 'bank' },
+            { id: 't3', date: '2026-02-05', description: 'Netflix Subscription', amount: -499, type: 'debit', category: 'entertainment', merchant: 'Netflix', localCurrency: { code: 'INR', symbol: '₹', name: 'Indian Rupee' }, sourceType: 'bank' },
           ],
         },
         version: 0,
@@ -44,7 +46,7 @@ test.describe('Subscriptions page', () => {
       window.localStorage.setItem('transaction-storage', JSON.stringify({
         state: {
           transactions: [
-            { id: 't1', date: '2025-01-05', description: 'Spotify', amount: -119, type: 'debit', category: 'entertainment', merchant: 'Spotify', needsReview: false, localCurrency: { code: 'INR', symbol: '₹', name: 'Indian Rupee' }, sourceType: 'bank' },
+            { id: 't1', date: '2025-01-05', description: 'Spotify', amount: -119, type: 'debit', category: 'entertainment', merchant: 'Spotify', localCurrency: { code: 'INR', symbol: '₹', name: 'Indian Rupee' }, sourceType: 'bank' },
           ],
         },
         version: 0,

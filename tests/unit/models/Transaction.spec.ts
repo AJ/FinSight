@@ -1,10 +1,11 @@
 import { describe, it, expect } from 'vitest';
-import { Transaction, TransactionType, Category, CategoryType, SourceType, CategorizedBy } from '@/types';
+import { Transaction, TransactionType, Category, SourceType, CategorizedBy } from '@/types';
 import { formatSubType, TRANSACTION_SUB_TYPES } from '@/models/Transaction';
+import { makeTransaction } from '@tests/unit/factories';
 import '@/lib/categorization/categories';
 
-function makeCategory(id: string, type: CategoryType = CategoryType.Expense): Category {
-  return new Category(id, id, type);
+function makeCategory(id: string, budgetable = true): Category {
+  return new Category(id, id, budgetable);
 }
 
 describe('Transaction.fromExtracted', () => {
@@ -58,20 +59,22 @@ describe('Transaction.fromExtracted', () => {
     expect(txn.category.id).toBe('other');
   });
 
-  it('maps payment subType to debt_payment', () => {
+  it('does NOT assign a subtype — extraction emits type only (D1; classification owns subtype)', () => {
+    // Whatever the extraction LLM returned for transactionSubType, fromExtracted ignores it.
+    // The classification pass is the sole subtype authority and sets it later.
     const txn = Transaction.fromExtracted({
       date: '2024-01-15', description: 'Test', amount: 100, type: 'debit',
       balance: null, localCurrency: 'INR', transactionSubType: 'payment', confidence: 0.9,
     }, inrCurrency, SourceType.Bank);
-    expect(txn.transactionSubType).toBe('debt_payment');
+    expect(txn.transactionSubType).toBeUndefined();
   });
 
-  it('preserves other subtypes', () => {
+  it('does NOT assign a subtype even when the extracted value is canonical (D1)', () => {
     const txn = Transaction.fromExtracted({
       date: '2024-01-15', description: 'Test', amount: 100, type: 'debit',
       balance: null, localCurrency: 'INR', transactionSubType: 'purchase', confidence: 0.9,
     }, inrCurrency, SourceType.Bank);
-    expect(txn.transactionSubType).toBe('purchase');
+    expect(txn.transactionSubType).toBeUndefined();
   });
 
   it('sets sourceType', () => {
@@ -148,12 +151,24 @@ describe('Transaction.fromExtracted', () => {
     expect(txn.isInternational).toBe(true);
   });
 
-  it('maps confidence to llmConfidence', () => {
+  it('maps extracted confidence to llmConfidence when a subtype is present', () => {
+    const txn = Transaction.fromExtracted({
+      date: '2024-01-15', description: 'Test', amount: 100, type: 'debit',
+      transactionSubType: 'purchase',
+      balance: null, localCurrency: 'INR', confidence: 0.95,
+    }, inrCurrency, SourceType.Bank);
+    expect(txn.llmConfidence).toBe(0.95);
+  });
+
+  it('does NOT infer a subtype or force llmConfidence 0 — extraction sets llmConfidence to the extracted confidence (D1)', () => {
+    // D1: extraction emits no subtype. The subtype_inferred signal (llmConfidence 0) is now
+    // produced by the classification pass when IT has to default the subtype, not by extraction.
     const txn = Transaction.fromExtracted({
       date: '2024-01-15', description: 'Test', amount: 100, type: 'debit',
       balance: null, localCurrency: 'INR', confidence: 0.95,
     }, inrCurrency, SourceType.Bank);
-    expect(txn.llmConfidence).toBe(0.95);
+    expect(txn.transactionSubType).toBeUndefined(); // no subtype at extraction
+    expect(txn.llmConfidence).toBe(0.95); // the extraction pass confidence, not 0
   });
 
   it('stores extracted description as originalText', () => {
@@ -188,6 +203,45 @@ describe('Transaction.fromJSON', () => {
   });
 });
 
+// H9: a non-canonical subtype string (e.g. an LLM-emitted "emi" that isn't in
+// EXTRACTED_SUBTYPE_MAP) used to pass through fromJSON/fromExtracted verbatim and
+// crash roleOf via assertNever when any getter (isIncome/isExpense/isExcluded) ran.
+describe('Transaction — non-canonical subtype must not crash', () => {
+  const inrCurrency = { code: 'INR', symbol: '₹', name: 'Indian Rupee' };
+
+  it('fromJSON with a non-canonical persisted subtype falls back to a direction default', () => {
+    // Simulates legacy/localStorage data carrying a raw subtype the model no longer
+    // recognizes. `as unknown as` because the value is deliberately malformed at runtime.
+    const json = {
+      id: '1', date: '2024-01-15T00:00:00.000Z', description: 'Loan EMI', amount: 5000,
+      type: TransactionType.Debit, category: 'loans', localCurrency: inrCurrency,
+      transactionSubType: 'emi', isInternational: false,
+    } as unknown as Parameters<typeof Transaction.fromJSON>[0];
+
+    const txn = Transaction.fromJSON(json);
+
+    // Resolved to the canonical debit default, never the raw 'emi'.
+    expect(TRANSACTION_SUB_TYPES).toContain(txn.transactionSubType);
+    expect(txn.transactionSubType).toBe('purchase');
+    // The getter that previously threw via assertNever must now be safe.
+    expect(() => txn.isExpense).not.toThrow();
+    expect(txn.isExpense).toBe(true);
+  });
+
+  it('fromExtracted ignores a non-canonical subtype — no crash, no subtype assigned (D1)', () => {
+    // D1: extraction does not touch subtype at all, so a hallucinated string like "emi" is
+    // simply not carried. roleOf tolerates undefined (returns undefined → role-unknown), so
+    // isExpense does not throw. Classification assigns the real subtype later.
+    const txn = Transaction.fromExtracted({
+      date: '2024-01-15', description: 'Loan EMI', amount: 5000, type: 'debit',
+      balance: null, localCurrency: 'INR', transactionSubType: 'emi', confidence: 0.9,
+    }, inrCurrency, SourceType.Bank);
+
+    expect(txn.transactionSubType).toBeUndefined();
+    expect(() => txn.isExpense).not.toThrow();
+  });
+});
+
 describe('Transaction.sourceFileHash', () => {
   const hash = 'abc123def456';
 
@@ -200,7 +254,6 @@ describe('Transaction.sourceFileHash', () => {
       undefined, // originalText
       undefined, // budgetMonth
       undefined, // categoryConfidence
-      undefined, // needsReview
       undefined, // categorizedBy
       undefined, // sourceType
       undefined, // statementId
@@ -271,12 +324,12 @@ describe('Transaction getters', () => {
   });
 
   it('signedAmount is positive for credits', () => {
-    const txn = new Transaction('1', new Date(), 'T', 100, TransactionType.Credit, makeCategory('salary', CategoryType.Income));
+    const txn = new Transaction('1', new Date(), 'T', 100, TransactionType.Credit, makeCategory('salary', false));
     expect(txn.signedAmount).toBe(100);
   });
 
   it('isCredit is true for Credit type', () => {
-    const txn = new Transaction('1', new Date(), 'T', 100, TransactionType.Credit, makeCategory('salary', CategoryType.Income));
+    const txn = new Transaction('1', new Date(), 'T', 100, TransactionType.Credit, makeCategory('salary', false));
     expect(txn.isCredit).toBe(true);
     expect(txn.isDebit).toBe(false);
   });
@@ -287,18 +340,18 @@ describe('Transaction getters', () => {
     expect(txn.isCredit).toBe(false);
   });
 
-  it('isIncome delegates to category', () => {
-    const txn = new Transaction('1', new Date(), 'T', 100, TransactionType.Credit, makeCategory('salary', CategoryType.Income));
+  it('isIncome is derived from subtype (income credit)', () => {
+    const txn = makeTransaction({ type: 'credit', transactionSubType: 'income', category: makeCategory('salary', false) });
     expect(txn.isIncome).toBe(true);
   });
 
-  it('isExpense delegates to category', () => {
-    const txn = new Transaction('1', new Date(), 'T', 100, TransactionType.Debit, makeCategory('food'));
+  it('isExpense is derived from subtype (purchase debit)', () => {
+    const txn = makeTransaction({ type: 'debit', transactionSubType: 'purchase' });
     expect(txn.isExpense).toBe(true);
   });
 
-  it('isExcluded delegates to category', () => {
-    const txn = new Transaction('1', new Date(), 'T', 100, TransactionType.Debit, makeCategory('transfer', CategoryType.Excluded));
+  it('isExcluded is derived from subtype (self_transfer)', () => {
+    const txn = makeTransaction({ type: 'debit', transactionSubType: 'self_transfer', category: makeCategory('transfer', false) });
     expect(txn.isExcluded).toBe(true);
   });
 });
@@ -347,6 +400,24 @@ describe('Transaction.fromJSON edge cases', () => {
     const txn = Transaction.fromJSON(json);
     expect(txn.amount).toBe(500);
   });
+
+  it('preserves llmConfidence when defaulting a missing subtype (does NOT clobber to 0)', () => {
+    // Regression: the load guarantee used to stamp llmConfidence 0 whenever the subtype was
+    // missing, destroying the extraction confidence for EVERY pre-classification row (which
+    // has no subtype by D1). That made every row read 0 and get flagged subtype_inferred.
+    // The guarantee now only injects a default subtype; the extraction confidence is preserved.
+    const json = {
+      id: '1', date: '2024-01-15T00:00:00.000Z', description: 'T', amount: 100,
+      type: TransactionType.Debit, category: 'shopping',
+      localCurrency: { code: 'INR', symbol: '₹', name: 'Indian Rupee' },
+      isInternational: false,
+      llmConfidence: 0.9,
+      // no transactionSubType — the load guarantee must inject one without touching confidence
+    };
+    const txn = Transaction.fromJSON(json);
+    expect(txn.transactionSubType).toBe('purchase'); // guarantee injected a subtype
+    expect(txn.llmConfidence).toBe(0.9);            // preserved — NOT clobbered to 0
+  });
 });
 
 // ── toJSON/fromJSON roundtrip ────────────────────────────────────────────────
@@ -365,7 +436,6 @@ describe('Transaction toJSON/fromJSON roundtrip', () => {
       'AMAZON INDIA', // originalText
       '2024-06',      // budgetMonth
       0.92,           // categoryConfidence
-      true,           // needsReview
       CategorizedBy.AI, // categorizedBy
       SourceType.CreditCard, // sourceType
       'stmt-001',     // statementId
@@ -401,7 +471,6 @@ describe('Transaction toJSON/fromJSON roundtrip', () => {
     expect(restored.originalText).toBe('AMAZON INDIA');
     expect(restored.budgetMonth).toBe('2024-06');
     expect(restored.categoryConfidence).toBe(0.92);
-    expect(restored.needsReview).toBe(true);
     expect(restored.categorizedBy).toBe('ai');
     expect(restored.sourceType).toBe(SourceType.CreditCard);
     expect(restored.statementId).toBe('stmt-001');
@@ -451,8 +520,8 @@ describe('TRANSACTION_SUB_TYPES', () => {
     expect(TRANSACTION_SUB_TYPES).toContain('purchase');
     expect(TRANSACTION_SUB_TYPES).toContain('debt_payment');
     expect(TRANSACTION_SUB_TYPES).toContain('refund');
-    expect(TRANSACTION_SUB_TYPES).toContain('fee');
-    expect(TRANSACTION_SUB_TYPES).toContain('transfer');
+    expect(TRANSACTION_SUB_TYPES).toContain('bank_charge');
+    expect(TRANSACTION_SUB_TYPES).toContain('self_transfer');
     expect(TRANSACTION_SUB_TYPES).toContain('rewards');
   });
 });

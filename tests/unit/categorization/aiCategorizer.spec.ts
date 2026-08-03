@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 import { applyCategorizationResults, categorizeByKeywords, categorizeTransactions, batchTransactions, deriveBatchSize } from '@/lib/categorization/aiCategorizer';
-import { CategorizedBy, CategoryType } from '@/types';
+import { CategorizedBy } from '@/types';
 import { makeTransaction, makeCategory } from '@tests/unit/factories';
 import { useMerchantRuleStore } from '@/lib/store/merchantRuleStore';
 import '@/lib/categorization/categories';
@@ -32,12 +32,12 @@ beforeEach(() => {
 
 describe('categorizeByKeywords (re-exported)', () => {
   it('returns shopping for Amazon descriptions', () => {
-    const result = categorizeByKeywords({ description: 'AMAZON PURCHASE', amount: 1299, type: 'debit' });
+    const result = categorizeByKeywords({ description: 'AMAZON PURCHASE', amount: 1299, type: 'debit', transactionSubType: 'purchase' });
     expect(result).toBe('shopping');
   });
 
   it('returns other for unknown merchant', () => {
-    const result = categorizeByKeywords({ description: 'XYZ UNKNOWN MERCHANT', amount: 500, type: 'debit' });
+    const result = categorizeByKeywords({ description: 'XYZ UNKNOWN MERCHANT', amount: 500, type: 'debit', transactionSubType: 'purchase' });
     expect(result).toBe('other');
   });
 });
@@ -80,32 +80,22 @@ describe('applyCategorizationResults', () => {
     expect(updated[0].categorizedBy).toBe(CategorizedBy.AI);
   });
 
-  it('sets needsReview to true when confidence < 0.85', () => {
-    const txns = [makeTransaction({ id: '1' })];
-    const results = [{ id: '1', category: 'dining', confidence: 0.7, source: 'ai' as const }];
-    const updated = applyCategorizationResults(txns, results);
-    expect(updated[0].needsReview).toBe(true);
-  });
+  it('does NOT stamp low_confidence regardless of category confidence (verification stamper owns it)', () => {
+    // low_confidence was relocated from the categorizer to the verification stamper
+    // (spec §6.3). The categorizer sets categoryConfidence but never derives
+    // low_confidence from it — covering both low (0.5) and high (1.0) bounds.
+    const low = applyCategorizationResults(
+      [makeTransaction({ id: '1' })],
+      [{ id: '1', category: 'dining', confidence: 0.5, source: 'ai' as const }],
+    );
+    expect(low[0].reviewReasons).toEqual([]);
+    expect(low[0].categoryConfidence).toBe(0.5);
 
-  it('sets needsReview to false when confidence >= 0.85', () => {
-    const txns = [makeTransaction({ id: '1' })];
-    const results = [{ id: '1', category: 'dining', confidence: 0.85, source: 'ai' as const }];
-    const updated = applyCategorizationResults(txns, results);
-    expect(updated[0].needsReview).toBe(false);
-  });
-
-  it('sets needsReview to true when confidence is exactly 0.84', () => {
-    const txns = [makeTransaction({ id: '1' })];
-    const results = [{ id: '1', category: 'dining', confidence: 0.84, source: 'ai' as const }];
-    const updated = applyCategorizationResults(txns, results);
-    expect(updated[0].needsReview).toBe(true);
-  });
-
-  it('sets needsReview to false when confidence is 1.0', () => {
-    const txns = [makeTransaction({ id: '1' })];
-    const results = [{ id: '1', category: 'dining', confidence: 1.0, source: 'rule' as const }];
-    const updated = applyCategorizationResults(txns, results);
-    expect(updated[0].needsReview).toBe(false);
+    const high = applyCategorizationResults(
+      [makeTransaction({ id: '1' })],
+      [{ id: '1', category: 'dining', confidence: 1.0, source: 'rule' as const }],
+    );
+    expect(high[0].reviewReasons).toEqual([]);
   });
 
   it('maps source "rule" to CategorizedBy.Rule', () => {
@@ -212,10 +202,37 @@ describe('categorizeTransactions', () => {
     expect(mockFetch).toHaveBeenCalled();
   });
 
+  it('forwards the caller abort signal to the LLM fetch and propagates cancellation', async () => {
+    // Mirrors real fetch: an aborted signal makes fetch reject with an AbortError. The fix
+    // threads options.signal through client.generate, so the composite fetch signal is aborted
+    // and the failure classifies as kind 'cancelled' — which runCategorizationCore rethrows
+    // instead of swallowing into keyword fallback.
+    mockFetch.mockImplementation(() => {
+      const e = new Error('The user aborted a request');
+      e.name = 'AbortError';
+      return Promise.reject(e);
+    });
+
+    const controller = new AbortController();
+    controller.abort();
+
+    const txns = [makeTransaction({ id: '1', description: 'MYSTORE GROCERY' })];
+    await expect(categorizeTransactions(txns, {
+      provider: 'ollama',
+      baseUrl: 'http://localhost:11434',
+      model: 'llama3',
+      signal: controller.signal,
+    })).rejects.toMatchObject({ name: 'LLMError', kind: 'cancelled' });
+
+    // The forwarded signal reached fetch and was aborted because the caller's signal was.
+    const callInit = mockFetch.mock.calls[0][1] as RequestInit;
+    expect((callInit.signal as AbortSignal).aborted).toBe(true);
+  });
+
   it('returns empty when all transactions have transfer/investment category', async () => {
     const txns = [
-      makeTransaction({ id: '1', category: makeCategory('transfer', CategoryType.Excluded) }),
-      makeTransaction({ id: '2', category: makeCategory('investment', CategoryType.Excluded) }),
+      makeTransaction({ id: '1', category: makeCategory('transfer', false) }),
+      makeTransaction({ id: '2', category: makeCategory('investment', false) }),
     ];
 
     const results = await categorizeTransactions(txns, {
@@ -228,8 +245,10 @@ describe('categorizeTransactions', () => {
     expect(mockFetch).not.toHaveBeenCalled();
   });
 
-  it('matches merchant rule and returns rule result', async () => {
-    // Seed a confident rule for "AMAZON" → shopping
+  it('overrides the LLM category when a merchant rule matches (applied AFTER classification)', async () => {
+    // Merchant rules no longer pre-empt the LLM. The LLM always runs and decides subtype+
+    // category; a matching rule then overrides the category so user intent wins. The LLM's
+    // subtype is kept.
     useMerchantRuleStore.setState({
       rules: [{
         merchantKey: 'AMAZON',
@@ -246,6 +265,13 @@ describe('categorizeTransactions', () => {
         statusReason: 'single-category',
       }],
     });
+
+    mockFetch.mockResolvedValue(ollamaResponse(JSON.stringify([{
+      id: '1',
+      category: 'other',
+      transactionSubType: 'purchase',
+      confidence: 0.4,
+    }])));
 
     const txns = [makeTransaction({ id: '1', description: 'AMAZON PURCHASE' })];
     const results = await categorizeTransactions(txns, {
@@ -255,16 +281,14 @@ describe('categorizeTransactions', () => {
     });
 
     expect(results).toHaveLength(1);
-    expect(results[0]).toEqual({
-      id: '1',
-      category: 'shopping',
-      confidence: 0.98,
-      source: 'rule',
-    });
-    expect(mockFetch).not.toHaveBeenCalled();
+    expect(results[0].category).toBe('shopping');
+    expect(results[0].source).toBe('rule');
+    expect(results[0].confidence).toBe(0.98);
+    expect(results[0].transactionSubType).toBe('purchase'); // LLM subtype kept
+    expect(mockFetch).toHaveBeenCalled(); // LLM ran — no pre-emption
   });
 
-  it('skips AI when all eligible transactions match merchant rules', async () => {
+  it('still invokes the LLM and reports progress when a rule matches (no pre-emption)', async () => {
     useMerchantRuleStore.setState({
       rules: [{
         merchantKey: 'AMAZON',
@@ -281,6 +305,13 @@ describe('categorizeTransactions', () => {
         statusReason: 'single-category',
       }],
     });
+
+    mockFetch.mockResolvedValue(ollamaResponse(JSON.stringify([{
+      id: '1',
+      category: 'other',
+      transactionSubType: 'purchase',
+      confidence: 0.4,
+    }])));
 
     const txns = [makeTransaction({ id: '1', description: 'AMAZON PURCHASE' })];
     const onProgress = vi.fn();
@@ -293,8 +324,7 @@ describe('categorizeTransactions', () => {
 
     expect(results).toHaveLength(1);
     expect(results[0].source).toBe('rule');
-    expect(mockFetch).not.toHaveBeenCalled();
-    // onProgress fires even when AI is skipped (all handled by rules)
+    expect(mockFetch).toHaveBeenCalled(); // LLM ran
     expect(onProgress).toHaveBeenCalledWith({
       total: 1,
       processed: 1,
@@ -336,7 +366,7 @@ describe('categorizeTransactions', () => {
     }])));
 
     const txns = [
-      makeTransaction({ id: '1', category: makeCategory('transfer', CategoryType.Excluded) }),
+      makeTransaction({ id: '1', category: makeCategory('transfer', false) }),
       makeTransaction({ id: '2', description: 'WHOLEFOODS MARKET' }),
     ];
     const results = await categorizeTransactions(txns, {

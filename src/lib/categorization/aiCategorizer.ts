@@ -10,6 +10,8 @@ import {
 } from "@/lib/llm/contextWindow";
 import { CATEGORIZATION_SYSTEM_PROMPT, CATEGORIZATION_SCHEMA } from "./prompts";
 import { findMerchantRuleForTransaction } from "@/lib/services/merchantRuleService";
+import { isValidCombo, defaultSubtype } from "@/lib/classification/subtypeCategories";
+import { addReason, type ReviewReason } from "@/lib/review/reviewReasons";
 import { debugLog } from "@/lib/utils/debug";
 import type { StatementType } from "@/types/creditCard";
 import {
@@ -61,6 +63,7 @@ export interface CategorizationOptions {
   model?: string;
   statementType?: StatementType;
   onProgress?: (progress: CategorizationProgress) => void;
+  signal?: AbortSignal;
 }
 
 function toPromptInput(transaction: Transaction): CategorizationTransactionInput {
@@ -85,42 +88,6 @@ export async function categorizeTransactions(
     return [];
   }
 
-  const ruleResults: CategorizationResult[] = [];
-  const remainingInputs: CategorizationTransactionInput[] = [];
-
-  for (const transaction of transactions) {
-    const input = toPromptInput(transaction);
-    if (shouldSkipAICategorization(input)) {
-      continue;
-    }
-
-    const matchedRule = findMerchantRuleForTransaction(transaction);
-    if (matchedRule) {
-      debugLog('MerchantRules', '[APPLIED]', {
-        merchantKey: matchedRule.merchantKey,
-        categoryId: matchedRule.activeCategoryId,
-      });
-      ruleResults.push({
-        id: transaction.id,
-        category: matchedRule.activeCategoryId!,
-        confidence: 0.98,
-        source: "rule",
-      });
-      continue;
-    }
-
-    remainingInputs.push(input);
-  }
-
-  if (remainingInputs.length === 0) {
-    options.onProgress?.({
-      total: eligibleInputs.length,
-      processed: eligibleInputs.length,
-      current: 0,
-    });
-    return ruleResults;
-  }
-
   if (!options.model?.trim()) {
     throw new Error('AI categorization requires a model. Configure a model in settings.');
   }
@@ -132,7 +99,7 @@ export async function categorizeTransactions(
     model: options.model!.trim(),
   });
 
-  const aiResults = await runCategorizationCore(remainingInputs, {
+  const aiResults = await runCategorizationCore(eligibleInputs, {
     generate: async (prompt) => {
       // Context-aware output budget on the full input actually sent (system prompt + batch
       // prompt). On overflow (calculateMaxOutputTokens returns 0), throw an LLMError with a
@@ -156,13 +123,14 @@ export async function categorizeTransactions(
         responseSchema: CATEGORIZATION_SCHEMA,
         schemaName: 'categorization',
         systemPrompt: CATEGORIZATION_SYSTEM_PROMPT,
+        signal: options.signal,
       });
     },
     onProgress: options.onProgress
       ? (progress) =>
           options.onProgress?.({
             total: eligibleInputs.length,
-            processed: ruleResults.length + progress.processed,
+            processed: progress.processed,
             current: progress.current,
           })
       : undefined,
@@ -172,7 +140,27 @@ export async function categorizeTransactions(
       : undefined,
   });
 
-  return [...ruleResults, ...aiResults];
+  // Merchant rules apply AFTER classification as an override (user intent wins). The LLM has
+  // already decided subtype+category for every transaction; a matching rule overrides the CATEGORY
+  // only, keeping the LLM subtype. Combo validity is checked once in applyCategorizationResults.
+  const txnsById = new Map(transactions.map((t) => [t.id, t]));
+  return aiResults.map((result) => {
+    const txn = txnsById.get(result.id);
+    if (!txn) return result;
+    const matchedRule = findMerchantRuleForTransaction(txn);
+    if (!matchedRule?.activeCategoryId) return result;
+    debugLog('MerchantRules', '[APPLIED override]', {
+      merchantKey: matchedRule.merchantKey,
+      categoryId: matchedRule.activeCategoryId,
+      overLLM: result.category,
+    });
+    return {
+      ...result,
+      category: matchedRule.activeCategoryId,
+      confidence: 0.98,
+      source: "rule" as const,
+    };
+  });
 }
 
 /**
@@ -191,7 +179,7 @@ export function applyCategorizationResults(
       return transaction;
     }
 
-    const needsReview = result.confidence < 0.85;
+    const resolvedCategory = Category.fromId(result.category) ?? transaction.category;
     const categorizedBy =
       result.source === "rule"
         ? CategorizedBy.Rule
@@ -199,13 +187,41 @@ export function applyCategorizationResults(
           ? CategorizedBy.AI
           : CategorizedBy.Keyword;
 
+    // Classification is the subtype authority. A subtype is "inferred" when CLASSIFICATION did
+    // not supply one (result.transactionSubType) — not when the transaction happened to carry
+    // one. Pre-classification rows may carry a load-guaranteed default subtype (from fromJSON),
+    // and that must NOT mask the fact that classification actually returned nothing. The
+    // LLM-failure / keyword-fallback rows therefore read wasInferred and get llmConfidence 0 so
+    // the subtype_inferred review reason fires (the durable inferred signal).
+    const wasInferred = !result.transactionSubType;
+    const resolvedSubType =
+      result.transactionSubType ?? transaction.transactionSubType ?? defaultSubtype(transaction.type).transactionSubType;
+
+    // Categorization-side review reasons (spec §6.3). Collect-all: a row can carry both
+    // at once. low_confidence is NOT stamped here — it is owned by the verification stamper.
+    let reasons: ReviewReason[] = [...transaction.reviewReasons];
+    // self_transfer_unresolved is DETERMINISTIC: every self_transfer is ownership-unresolved
+    // by definition (the narration alone cannot confirm own-account movement).
+    if (resolvedSubType === "self_transfer") {
+      reasons = addReason(reasons, "self_transfer_unresolved");
+    }
+    // Single combo-validity check over the final (possibly overridden) category. Skipped when
+    // the subtype is a guess: wasInferred (classification defaulted it) OR the legacy
+    // llmConfidence===0 signal (CSV/XLS rows whose subtype is a direction default). A dummy
+    // subtype vs a real category is the dummy's fault, not a data error.
+    const subtypeIsGuess = wasInferred || transaction.llmConfidence === 0;
+    if (!subtypeIsGuess && !isValidCombo(resolvedSubType, resolvedCategory.id)) {
+      reasons = addReason(reasons, "invalid_subtype_category");
+    }
+
     return Transaction.fromJSON({
       ...transaction.toJSON(),
-      category: (Category.fromId(result.category) ?? transaction.category).id,
+      category: resolvedCategory.id,
       categoryConfidence: result.confidence,
-      needsReview,
+      reviewReasons: reasons,
       categorizedBy,
-      isSuspense: result.isSuspense ?? false,
+      transactionSubType: resolvedSubType,
+      llmConfidence: wasInferred ? 0 : transaction.llmConfidence,
     });
   });
 }

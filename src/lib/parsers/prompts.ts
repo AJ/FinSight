@@ -5,10 +5,7 @@
  * Organized by extraction pass.
  */
 
-import { TRANSACTION_SUB_TYPES } from '@/models/Transaction';
 import type { JSONSchema } from '@/lib/llm/types';
-
-const SUBTYPE_ENUM = TRANSACTION_SUB_TYPES.map((t) => `"${t}"`).join(' | ');
 
 // Nullable helpers used by the co-located schema constants below (kept as documentation;
 // not sent on the wire — see the schema-enforcement RCA).
@@ -17,41 +14,43 @@ const nullableNumber = (): JSONSchema => ({ type: ['number', 'null'] });
 
 /* ── Type Detection Prompt ────────────────────────────────── */
 
-export const TYPE_DETECTION_PROMPT = `Analyze this document and determine if it is a bank statement or a credit card statement.
+export const TYPE_DETECTION_PROMPT = `Analyze this document and determine whether it is a BANK statement or a CREDIT CARD statement.
 
-Look for these CREDIT CARD indicators:
+DECIDE BY STRUCTURE, NOT BY TRANSACTION CONTENT.
+The statement TYPE is a property of the document's summary/header block, not of its individual transactions. Transaction descriptions can mention credit cards, loans, EMI, payments, or transfers, and such descriptions can appear on EITHER kind of statement (a bank account paying a card bill; a credit card receiving a payment). They are content, not structure, and must NOT determine the type. Judge the TYPE only from the summary/header block.
+
+CREDIT CARD statements carry a SUMMARY BLOCK with fields like:
 - "credit limit", "available credit", "cash limit"
-- "minimum amount due", "minimum due", "min due"
-- "payment due date", "due date"
-- "total amount due", "total due", "outstanding balance"
-- "previous balance", "brought forward"
-- Card number with 16 digits (or last 4 digits shown)
-- "statement period" followed by billing cycle dates
+- "minimum amount due" / "minimum due"
+- "total amount due" / "outstanding balance"
+- "payment due date" / billing cycle / "statement period"
+- "previous balance" / "brought forward"
+- A 16-digit card number (or last 4) identifying the card
 
-Look for these BANK STATEMENT indicators:
-- "account number", "a/c no"
-- "opening balance", "closing balance"
-- "cr" / "dr" columns for credits/debits
-- Running balance column
-- "cheque" references
+BANK statements carry a HEADER/SUMMARY with fields like:
+- "account number" / "a/c no" / CRN / customer ID
+- "opening balance" and "closing balance"
+- A running balance column, or CR/DR columns
 - Account type (savings, current, salary)
 
-CONFIDENCE SCALE (IMPORTANT):
-- 0.9-1.0: Clear, unambiguous signals (e.g., "credit limit" + "minimum due" for CC, or "opening balance" + "closing balance" for bank)
-- 0.7-0.9: Strong signals present but some minor ambiguity
-- 0.5-0.7: Weak or mixed signals (both CC and bank indicators present)
-- <0.5: Very uncertain - indicators are unclear or contradictory
+DECISION RULE (apply in order):
+1. If the document has a credit-card SUMMARY BLOCK (credit limit / minimum due / due date / billing cycle), return "credit_card".
+2. Else if it has a bank HEADER (account number / opening & closing balance / running balance), return "bank".
+3. Return "unknown" ONLY if you genuinely cannot identify a summary/header block of EITHER type — for example the text is garbled, it is not a statement, or both a CC summary block and a bank header are truly present and you cannot tell which the document primarily is. Do NOT return "unknown" merely because transaction descriptions mix card and bank language; in that case apply the structural rule above.
 
-Return ONLY a JSON object with your analysis:
+CONFIDENCE:
+- 0.9-1.0: Clear structural summary block of one type, none of the other.
+- 0.7-0.9: One type's structure clearly dominant.
+- 0.5-0.7: Weak structure, but one type still more likely.
+- <0.5: No structural summary block of either type identifiable.
+
+Return ONLY a JSON object:
 {
   "type": "bank" | "credit_card" | "unknown",
   "confidence": 0.0 to 1.0,
-  "reason": "brief explanation of which indicators were found",
+  "reason": "cite the STRUCTURAL summary fields you found; ignore transaction narration",
   "bankName": "name of the issuing bank or 'unknown' if not found"
 }
-
-If you see BOTH bank and credit card indicators, prioritize credit card indicators.
-If uncertain, return "unknown" with confidence < 0.5.
 
 DOCUMENT TEXT:
 ---
@@ -275,9 +274,8 @@ Return ONLY valid JSON. No explanation. No extra text. No markdown.
       "date": "YYYY-MM-DD",
       "description": "merchant/description",
       "amount": number,
-      "reasoning": "brief explanation of why this is debit or credit, and why this subType was chosen",
+      "reasoning": "brief explanation of why this is debit or credit",
       "type": "debit" | "credit",
-      "transactionSubType": Sub Types are more granular types to describe transactions. Sub Types must be one of ${SUBTYPE_ENUM},
       "localCurrency": "statement local currency ISO code such as USD, EUR, SGD, or INR",
       "isInternationalTransaction": boolean,
       "originalCurrency": "USD" (omit if domestic),
@@ -431,8 +429,8 @@ IMPORTANT: Determine type FIRST, then subtype:
 */
 +
 `
-RULE 8 - Non-Bank FEEs:
-- "FCY MARKUP FEE" is not a bank fee but a currency conversion charge and MUST be classifed as "charge" subtype, not "fee". It is NOT an international transaction — it is a fee charged in the statement's local currency, so set isInternationalTransaction = false. Same for: forex charges, dynamic currency conversion (DCC) charges, international transaction fees, foreign transaction fees.
+RULE 8 - Forex/conversion charges are NOT international transactions:
+- "FCY MARKUP FEE", forex charges, dynamic currency conversion (DCC) charges, international transaction fees, and foreign transaction fees are charged in the statement's local currency, so set isInternationalTransaction = false for them. (Their subtype — charge vs fee — is assigned by a later classification pass, not at extraction.)
 `
 /*
 - "debt_payment": Credit card bill payment; Look for but not exclusive to: PAYMENT, PAID, PAYZAPP, UPI, NEFT, IMPS).
@@ -442,11 +440,10 @@ RULE 8 - Non-Bank FEEs:
 +
 `
 RULE 9 — REASONING (REQUIRED)
-- Every transaction MUST include a "reasoning" field explaining your type and subType classification.
+- Every transaction MUST include a "reasoning" field explaining your type classification.
 - For debit: explain what about the row indicates a charge (prefix, column position, context).
 - For credit: explain what indicates money credited to the card (CR marker, payment keyword, refund context).
-- For subType: explain the keyword or context that led to your choice.
-- Example: "Amount has no prefix and description is a merchant → debit/purchase"
+- Example: "Amount has no prefix and description is a merchant → debit"
 `
 /*
 - Example: "Description contains PAYMENT and amount reduces card balance → credit/debt_payment"
@@ -629,10 +626,24 @@ No commas. No currency symbols.
 Indian lakh-format: 1,23,456.78 → 123456.78
 Overdraft (negative) balances: return as negative numbers.
 
-RULE 4 — IGNORE TRANSACTION ROWS
-Do not extract balances from running balance columns.
-openingBalance and closingBalance are in the account summary section,
-not in the transaction table.
+RULE 4 — EXTRACTING openingBalance AND closingBalance
+
+Treat openingBalance and closingBalance as two independent fields that may come from different locations in the statement. Extract each from wherever its own labelled value appears.
+
+Use values explicitly labelled as an opening or closing balance. Examples include:
+- Opening Balance
+- Closing Balance
+- Balance B/F
+- Balance Brought Forward
+- Balance C/F
+- Balance Carried Forward
+
+These labelled values may appear anywhere — a summary section, header/footer, or the first/last row of the transaction table. Extract from wherever the label appears.
+
+Do NOT infer openingBalance or closingBalance from:
+- the "Balance" or "Running Balance" column of transaction rows
+- the first or last running balance in the transaction table
+- values labelled Current Balance, Available Balance, Ledger Balance, or any other balance that is not explicitly labelled as an opening or closing balance.
 
 --------------------------------
 FIELD DEFINITIONS
@@ -699,13 +710,14 @@ Return ONLY valid JSON. No explanation. No extra text. No markdown.
       "date": "YYYY-MM-DD",
       "description": "merchant/description",
       "amount": number,
-      "reasoning": "brief explanation of why this is debit or credit, and why this subType was chosen",
+      "reasoning": "brief explanation of why this is debit or credit",
       "type": "debit" | "credit",
-      "transactionSubType": Sub Types are more granular types to describe transactions. Sub Types must be one of ${SUBTYPE_ENUM},
       "balance": number | null,
       "confidence": 0.0 to 1.0 (optional)
     }
   ],
+  "openingBalance": number or null,
+  "closingBalance": number or null,
   "_debug": {
     "totalCount": number,
     "droppedTransactions": [
@@ -758,8 +770,9 @@ A transaction MUST have ALL THREE:
 2. A MERCHANT NAME or description
 3. A specific AMOUNT
 
+Opening/closing balance rows are NOT transactions — never place them in the transactions array. Instead, read their values from the labelled rows at the boundaries of the transaction table (the first/last rows, labelled "Opening Balance", "Balance B/F", "Balance Brought Forward", "Closing Balance", "Balance C/F", or "Balance Carried Forward") and report them in the top-level openingBalance and closingBalance fields. If a labelled boundary row is not present, set the field to null.
+
 DO NOT EXTRACT:
-- Opening/closing balance rows
 - Legal disclaimers, terms & conditions
 - Bank contact information
 - Header text, column headers, section titles
@@ -770,8 +783,9 @@ Many statements include a "Balance" column showing running balance.
 - Balance is the account balance AFTER the transaction is applied
 - If not present, return null for balance field
 
-RULE 9 — SUBTYPE CLASSIFICATION
-Assign the most appropriate transactionSubType for each transaction.
+RULE 9 — TYPE ONLY (subtype is assigned by a later classification pass)
+Extract ONLY the transaction "type" (debit/credit). Do NOT assign or emit a transactionSubType —
+that is decided by a separate classification pass. Omit transactionSubType from your output.
 `
 /*
 IF type == "debit":
@@ -795,17 +809,14 @@ IF type == "credit":
 */
 +
 `
-Keywords are hints, not requirements. Use transaction context to classify.
-If no subType clearly matches, use the most logical default.
+Keywords are hints, not requirements. Use transaction context to determine type.
 
 RULE 10 — REASONING (REQUIRED)
-- Every transaction MUST include a "reasoning" field explaining your type and subType classification.
+- Every transaction MUST include a "reasoning" field explaining your type classification.
 - For debit: explain what indicates money going out (column position, keyword, context).
 - For credit: explain what indicates money coming in (column position, keyword, context).
-- For subType: explain the keyword or context that led to your choice.
-- Example: "Amount in Debit column → debit/purchase"
-- Example: "Amount in Credit column with NEFTINW keyword → credit/transfer"
-- Example: "Description contains CC BILL → debit/debt_payment"
+- Example: "Amount in Debit column → debit"
+- Example: "Amount in Credit column with NEFTINW keyword → credit"
 
 --------------------------------
 END
@@ -860,7 +871,6 @@ const transactionBase: Record<string, JSONSchema> = {
   amount: { type: 'number' },
   reasoning: { type: 'string' },
   type: { type: 'string', enum: ['debit', 'credit'] },
-  transactionSubType: { type: 'string', enum: [...TRANSACTION_SUB_TYPES] },
   confidence: { type: 'number' },
 };
 
@@ -920,6 +930,8 @@ export const BANK_TRANSACTIONS_SCHEMA: JSONSchema = {
         additionalProperties: true,
       },
     },
+    openingBalance: nullableNumber(),
+    closingBalance: nullableNumber(),
     _debug: debugSchema,
   },
   required: ['transactions'],

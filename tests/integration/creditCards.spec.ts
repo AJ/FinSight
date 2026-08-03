@@ -27,9 +27,9 @@ const CC_STORAGE = {
 };
 
 const CC_TRANSACTIONS = [
-  { id: 'cctx1', date: '2025-01-05', description: 'Amazon Purchase', amount: -3500, type: 'debit', category: 'shopping', merchant: 'Amazon', needsReview: false, localCurrency: { code: 'INR', symbol: '₹', name: 'Indian Rupee' }, sourceType: 'credit_card', statementId: CC_STATEMENT_ID, cardIssuer: 'HDFC', cardLastFour: '1234' },
-  { id: 'cctx2', date: '2025-01-10', description: 'Swiggy Order', amount: -850, type: 'debit', category: 'dining', merchant: 'Swiggy', needsReview: false, localCurrency: { code: 'INR', symbol: '₹', name: 'Indian Rupee' }, sourceType: 'credit_card', statementId: CC_STATEMENT_ID, cardIssuer: 'HDFC', cardLastFour: '1234' },
-  { id: 'cctx3', date: '2025-01-15', description: 'Payment Received', amount: 20000, type: 'credit', category: 'payment', merchant: 'HDFC', needsReview: false, localCurrency: { code: 'INR', symbol: '₹', name: 'Indian Rupee' }, sourceType: 'credit_card', statementId: CC_STATEMENT_ID, cardIssuer: 'HDFC', cardLastFour: '1234' },
+  { id: 'cctx1', date: '2025-01-05', description: 'Amazon Purchase', amount: -3500, type: 'debit', category: 'shopping', merchant: 'Amazon', localCurrency: { code: 'INR', symbol: '₹', name: 'Indian Rupee' }, sourceType: 'credit_card', statementId: CC_STATEMENT_ID, cardIssuer: 'HDFC', cardLastFour: '1234' },
+  { id: 'cctx2', date: '2025-01-10', description: 'Swiggy Order', amount: -850, type: 'debit', category: 'dining', merchant: 'Swiggy', localCurrency: { code: 'INR', symbol: '₹', name: 'Indian Rupee' }, sourceType: 'credit_card', statementId: CC_STATEMENT_ID, cardIssuer: 'HDFC', cardLastFour: '1234' },
+  { id: 'cctx3', date: '2025-01-15', description: 'Payment Received', amount: 20000, type: 'credit', category: 'payment', merchant: 'HDFC', localCurrency: { code: 'INR', symbol: '₹', name: 'Indian Rupee' }, sourceType: 'credit_card', statementId: CC_STATEMENT_ID, cardIssuer: 'HDFC', cardLastFour: '1234' },
 ];
 
 test.describe('Credit Cards page', () => {

@@ -5,7 +5,7 @@ const mockFetch = vi.fn();
 vi.stubGlobal('fetch', mockFetch);
 
 
-import { detectStatementType } from '@/lib/parsers/typeDetection';
+import { detectStatementType, ManualTypeSelectionError } from '@/lib/parsers/typeDetection';
 import type { LLMRuntimeConfig } from '@/lib/llm/types';
 
 const baseConfig: LLMRuntimeConfig = {
@@ -81,19 +81,28 @@ describe('detectStatementType', () => {
     },
   );
 
-  it('throws on unknown type', async () => {
+  it('returns "unknown" instead of throwing when the model is uncertain', async () => {
     mockFetch.mockResolvedValue(ollamaResponse(JSON.stringify({
       type: 'unknown',
       confidence: 0.3,
+      reason: 'mixed signals',
     })));
 
-    await expect(detectStatementType('text', baseConfig)).rejects.toThrow('Unknown statement type');
+    const result = await detectStatementType('text', baseConfig);
+
+    // 'unknown' is a legitimate model outcome. detectStatementType must NOT throw
+    // here — it returns the result so the pipeline can gate on it and convert the
+    // low-confidence/unknown case into a ManualTypeSelectionError for the UI.
+    expect(result.statementType).toBe('unknown');
+    expect(result.confidence).toBe(0.3);
+    expect(result.reason).toBe('mixed signals');
   });
 
-  it('throws on malformed LLM response', async () => {
+  it('throws ManualTypeSelectionError on a malformed LLM response', async () => {
     mockFetch.mockResolvedValue(ollamaResponse('not json at all'));
 
-    await expect(detectStatementType('text', baseConfig)).rejects.toThrow('Type detection failed');
+    await expect(detectStatementType('text', baseConfig))
+      .rejects.toBeInstanceOf(ManualTypeSelectionError);
   });
 
   it('normalizes bankName "unknown" to null', async () => {
@@ -187,22 +196,26 @@ describe('detectStatementType', () => {
     expect(result.statementType).toBe('credit_card');
   });
 
-  it('throws for null type from LLM response', async () => {
+  it('returns "unknown" for null type from LLM response', async () => {
     mockFetch.mockResolvedValue(ollamaResponse(JSON.stringify({
       type: null,
       confidence: 0.3,
     })));
 
-    await expect(detectStatementType('text', baseConfig)).rejects.toThrow('Unknown statement type');
+    const result = await detectStatementType('text', baseConfig);
+
+    expect(result.statementType).toBe('unknown');
   });
 
-  it('throws for undefined type from LLM response', async () => {
+  it('returns "unknown" for undefined type from LLM response', async () => {
     mockFetch.mockResolvedValue(ollamaResponse(JSON.stringify({
       type: undefined,
       confidence: 0.3,
     })));
 
-    await expect(detectStatementType('text', baseConfig)).rejects.toThrow('Unknown statement type');
+    const result = await detectStatementType('text', baseConfig);
+
+    expect(result.statementType).toBe('unknown');
   });
 
   it('normalizes bankName "Unknown" (capitalized) to null', async () => {
@@ -217,14 +230,32 @@ describe('detectStatementType', () => {
     expect(result.bankName).toBeNull();
   });
 
-  it('preserves undefined confidence when LLM omits it', async () => {
+  it('treats a missing confidence as 0 so the threshold gate rejects it', async () => {
+    // A missing confidence is the lowest-confidence case. Coerce it to 0 so the
+    // pipeline's 0.8 gate rejects it; returning undefined would make `undefined < 0.8`
+    // evaluate to false (NaN comparison) and silently bypass the gate.
     mockFetch.mockResolvedValue(ollamaResponse(JSON.stringify({
       type: 'bank',
     })));
 
     const result = await detectStatementType('text', baseConfig);
 
-    expect(result.confidence).toBeUndefined();
+    expect(result.confidence).toBe(0);
+  });
+
+  it.each([
+    ['a string', 'high'],
+    ['a number above 1', 5],
+    ['a negative number', -0.5],
+  ])('treats invalid confidence (%s) as 0', async (_label, badValue) => {
+    mockFetch.mockResolvedValue(ollamaResponse(JSON.stringify({
+      type: 'bank',
+      confidence: badValue,
+    })));
+
+    const result = await detectStatementType('text', baseConfig);
+
+    expect(result.confidence).toBe(0);
   });
 
   // ── Context overflow guard ────────────────────────────────────────────────────

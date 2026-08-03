@@ -13,7 +13,6 @@ import {
   CC_REWARDS_SCHEMA,
   BANK_SUMMARY_SCHEMA,
 } from '@/lib/parsers/prompts';
-import { TRANSACTION_SUB_TYPES } from '@/models/Transaction';
 
 describe('prompt templates', () => {
   const prompts = [
@@ -40,8 +39,9 @@ describe('prompt templates', () => {
     }
   });
 
-  it('CC transaction prompt contains subtype guidance', () => {
-    expect(CC_TRANSACTIONS_PROMPT).toContain('transactionSubType');
+  it('CC transaction prompt does NOT carry subtype guidance — extraction emits type only (D1)', () => {
+    // D1: transactionSubType is decided by the classification pass, not extraction.
+    expect(CC_TRANSACTIONS_PROMPT).not.toContain('transactionSubType');
   });
 
   it('CC transaction prompt requires reasoning for classification transparency', () => {
@@ -58,10 +58,11 @@ describe('parser structured-output schemas', () => {
     expect(TYPE_DETECTION_SCHEMA.additionalProperties).toBe(true);
   });
 
-  it('CC_TRANSACTIONS_SCHEMA enforces transaction type + subtype enums', () => {
+  it('CC_TRANSACTIONS_SCHEMA enforces the transaction type enum only (D1: no subtype at extraction)', () => {
     const txn = CC_TRANSACTIONS_SCHEMA.properties?.transactions?.items;
     expect(txn?.properties?.type?.enum).toEqual(['debit', 'credit']);
-    expect(txn?.properties?.transactionSubType?.enum).toEqual([...TRANSACTION_SUB_TYPES]);
+    // D1: transactionSubType is a classification-pass output, not an extraction field.
+    expect(txn?.properties?.transactionSubType).toBeUndefined();
     expect(txn?.required).toEqual(['date', 'description', 'amount', 'type']);
     expect(CC_TRANSACTIONS_SCHEMA.required).toEqual(['transactions']);
   });
@@ -89,11 +90,10 @@ describe('parser structured-output schemas', () => {
   });
 });
 
-describe('subtype enum toggle (default true) and prompt trimming', () => {
-  it('subtype list is still present in the transactions prompt', () => {
-    expect(CC_TRANSACTIONS_PROMPT).toContain('Sub Types must be one of');
-    expect(CC_TRANSACTIONS_PROMPT).toContain('"purchase"');
-    expect(BANK_TRANSACTIONS_PROMPT).toContain('Sub Types must be one of');
+describe('extraction prompt trimming (D1: subtype moved to classification)', () => {
+  it('subtype list is NOT in the extraction prompts — classification owns it', () => {
+    expect(CC_TRANSACTIONS_PROMPT).not.toContain('Sub Types must be one of');
+    expect(BANK_TRANSACTIONS_PROMPT).not.toContain('Sub Types must be one of');
   });
 
   it('type detection prompt carries the JSON skeleton (restored)', () => {

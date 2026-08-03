@@ -14,10 +14,29 @@ import { parseLLMJsonResponse } from '@/lib/utils/llm-response-parser';
 import { TYPE_DETECTION_PROMPT, TYPE_DETECTION_SCHEMA } from './prompts';
 
 export interface TypeDetectionResult {
-  statementType: 'credit_card' | 'bank';
+  statementType: 'credit_card' | 'bank' | 'unknown';
   confidence: number;
   reason: string;
   bankName: string | null;
+}
+
+/**
+ * Thrown when statement-type detection cannot settle on bank or credit card —
+ * the model returned 'unknown', confidence was below threshold, or the response
+ * was unreadable. This is a RECOVERABLE outcome, not a pipeline failure: the
+ * upload UI catches it (via isManualTypeSelectionError) and re-prompts the user
+ * to pick the type, after which detection is skipped because an explicit type
+ * is supplied.
+ */
+export class ManualTypeSelectionError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'ManualTypeSelectionError';
+  }
+}
+
+export function isManualTypeSelectionError(error: unknown): boolean {
+  return error instanceof Error && error.name === 'ManualTypeSelectionError';
 }
 
 function normalizeTypeValue(type: unknown): 'credit_card' | 'bank' | 'unknown' {
@@ -79,28 +98,38 @@ export async function detectStatementType(
     const parsed = parseLLMJsonResponse<{ type: string; confidence: number; reason?: string; bankName?: string }>(rawResponse);
     const normalizedType = normalizeTypeValue(parsed.type);
 
-    if (normalizedType === 'unknown') {
-      throw new Error(`Unknown statement type: ${parsed.type}`);
-    }
-
     const rawBank = parsed.bankName;
     const bankName = rawBank && rawBank.toLowerCase() !== 'unknown' ? rawBank : null;
 
+    // 'unknown' is a legitimate model outcome — the prompt invites it when no
+    // structural summary block is identifiable. Return it as-is; the pipeline
+    // decides whether the confidence merits falling back to manual selection.
+    //
+    // Confidence must be a real number in [0, 1]. A missing or invalid value is
+    // coerced to 0 — the lowest-confidence case — so the pipeline's 0.8 gate
+    // rejects it. Returning undefined verbatim would make the gate evaluate
+    // `undefined < 0.8`, which is false (NaN), and silently bypass the gate.
+    const rawConfidence = parsed.confidence;
+    const confidence =
+      typeof rawConfidence === 'number' &&
+      Number.isFinite(rawConfidence) &&
+      rawConfidence >= 0 &&
+      rawConfidence <= 1
+        ? rawConfidence
+        : 0;
+
     return {
       statementType: normalizedType,
-      confidence: parsed.confidence,
+      confidence,
       reason: parsed.reason || '',
       bankName,
     };
-  } catch (error) {
-    if (error instanceof Error && error.message.includes('Unknown statement type')) {
-      throw error;
-    }
-
+  } catch {
+    // parseLLMJsonResponse failed — the response was not valid JSON. Treat as a
+    // detection failure so the caller falls back to manual type selection.
     console.error('[Type Detection] Failed to parse LLM response:', rawResponse);
-    throw new Error(
-      `Type detection failed. LLM returned invalid response: "${rawResponse.slice(0, 100)}...". ` +
-      'Please manually select the statement type and try again.'
+    throw new ManualTypeSelectionError(
+      "Type detection could not read the model's response. Please select the statement type manually.",
     );
   }
 }

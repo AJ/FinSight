@@ -16,14 +16,14 @@ import { cn } from "@/lib/utils";
 
 interface InlineCategoryEditorProps {
   categoryId: string;
-  needsReview?: boolean;
+  needsAttention?: boolean;
   onCategoryChange: (newCategory: string) => void;
   className?: string;
 }
 
 export function InlineCategoryEditor({
   categoryId,
-  needsReview = false,
+  needsAttention = false,
   onCategoryChange,
   className,
 }: InlineCategoryEditorProps) {
@@ -63,7 +63,7 @@ export function InlineCategoryEditor({
             "group flex items-center justify-between gap-2 px-3 py-1.5 rounded-md transition-all duration-200 w-full",
             "border border-border/70 bg-background hover:border-primary/40 hover:bg-muted/30",
             "focus:outline-none focus:ring-2 focus:ring-primary/30",
-            needsReview && "border-amber-400/50 bg-amber-500/5",
+            needsAttention && "border-amber-400/50 bg-amber-500/5",
             className
           )}
         >
@@ -146,7 +146,7 @@ export function InlineCategoryEditor({
         </div>
       </PopoverContent>
 
-      {needsReview && (
+      {needsAttention && (
         <span className="flex items-center gap-1 text-xs text-amber-600 ml-2">
           <AlertCircle className="w-3 h-3" />
           <span className="hidden sm:inline">Review</span>

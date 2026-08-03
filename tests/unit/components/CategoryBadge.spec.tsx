@@ -23,24 +23,4 @@ describe('CategoryBadge', () => {
     render(<CategoryBadge categoryId="transfer" />);
     expect(screen.getByText('Transfer')).toBeTruthy();
   });
-
-  it('shows Review badge when showReviewBadge and needsReview are both true', () => {
-    render(<CategoryBadge categoryId="groceries" showReviewBadge needsReview />);
-    expect(screen.getByText('Review')).toBeTruthy();
-  });
-
-  it('hides Review badge when needsReview is false', () => {
-    render(<CategoryBadge categoryId="groceries" showReviewBadge needsReview={false} />);
-    expect(screen.queryByText('Review')).toBeNull();
-  });
-
-  it('shows Low Confidence badge when confidence < 0.6', () => {
-    render(<CategoryBadge categoryId="groceries" confidence={0.3} />);
-    expect(screen.getByText('Low Confidence')).toBeTruthy();
-  });
-
-  it('hides Low Confidence badge when confidence >= 0.6', () => {
-    render(<CategoryBadge categoryId="groceries" confidence={0.8} />);
-    expect(screen.queryByText('Low Confidence')).toBeNull();
-  });
 });

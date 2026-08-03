@@ -1,4 +1,3 @@
-import { Transaction as CanonicalTransaction } from '@/models/Transaction';
 import type { TransactionSubType } from '@/models/Transaction';
 import { SourceType } from '@/types';
 import type { Transaction } from '@/types';
@@ -52,37 +51,8 @@ export function normalizeCCTransactionSubTypes(transactions: Transaction[]): Tra
       return transaction;
     }
 
-    return new CanonicalTransaction(
-      transaction.id,
-      transaction.date,
-      transaction.description,
-      transaction.amount,
-      transaction.type,
-      transaction.category,
-      transaction.balance,
-      transaction.merchant,
-      transaction.originalText,
-      transaction.budgetMonth,
-      transaction.categoryConfidence,
-      transaction.needsReview,
-      transaction.categorizedBy,
-      transaction.sourceType,
-      transaction.statementId,
-      transaction.cardIssuer,
-      transaction.cardLastFour,
-      transaction.cardHolder,
-      transaction.localCurrency,
-      transaction.originalCurrency,
-      transaction.originalAmount,
-      transaction.isInternational,
-      transaction.isAnomaly,
-      transaction.anomalyTypes,
-      transaction.anomalyDetails,
-      transaction.anomalyDismissed,
-      'refund' as TransactionSubType,
-      transaction.suggestedCategory,
-      transaction.llmConfidence,
-      transaction.verificationConfidence,
-    );
+    return transaction.cloneWith({
+      transactionSubType: 'refund' as TransactionSubType,
+    });
   });
 }

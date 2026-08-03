@@ -52,6 +52,20 @@ describe('parseCSV', () => {
     expect(result.transactions).toHaveLength(2);
   });
 
+  it('does NOT assign a subtype — CSV emits type only; classification owns subtype (D1)', async () => {
+    // D1: CSV no longer infers a direction-default subtype. The classification pass (run on
+    // every import via enrichImportedTransactions) is the subtype authority and sets it later.
+    const result = await parseCSV(makeCsvFile(BANK_CSV));
+
+    const grocery = result.transactions[0]; // debit
+    expect(grocery.transactionSubType).toBeUndefined();
+    expect(grocery.llmConfidence).toBeUndefined();
+
+    const salary = result.transactions[1]; // credit
+    expect(salary.transactionSubType).toBeUndefined();
+    expect(salary.llmConfidence).toBeUndefined();
+  });
+
   it('parses alternate header names (Narration, Withdrawal, Deposit)', async () => {
     const result = await parseCSV(makeCsvFile(NARRATION_CSV));
 
