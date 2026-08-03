@@ -41,11 +41,30 @@ import { format } from "date-fns";
 import { formatCurrency } from "@/lib/currencyFormatter";
 import { getCategoryDisplay } from "@/components/transactions/CategoryBadge";
 import { InlineCategoryEditor } from "@/components/transactions/InlineCategoryEditor";
+import { needsAttention } from "@/lib/review/reviewReasons";
 import { DEFAULT_CATEGORIES } from "@/lib/categorization/categories";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { ANOMALY_LABELS } from "@/lib/anomaly";
 import { CategorizedBy } from "@/types";
+import {
+  applyFilters,
+  activeAnomalyCount as countActiveAnomalies,
+  hasFilters as hasActiveFilters,
+  isAllSelected as computeIsAllSelected,
+  type FilterState,
+} from "./pageFilters";
+
+// Category filter lists alphabetically (registration order is irrelevant to the
+// UI — it only matters for the LLM prompt). "other" is pinned last to match the
+// ReviewEditDialog and InlineCategoryEditor convention.
+const SORTED_CATEGORY_FILTERS = (() => {
+  const regular = DEFAULT_CATEGORIES.filter((c) => c.id !== "other").sort((a, b) =>
+    a.name.localeCompare(b.name),
+  );
+  const other = DEFAULT_CATEGORIES.find((c) => c.id === "other");
+  return other ? [...regular, other] : regular;
+})();
 
 function TransactionsPageContent() {
   const searchParams = useSearchParams();
@@ -74,44 +93,27 @@ function TransactionsPageContent() {
   const [isCategorizing, setIsCategorizing] = useState(false);
 
   // Count active anomalies
-  const activeAnomalyCount = useMemo(() => {
-    return transactions.filter((t) => t.isAnomaly && !t.anomalyDismissed).length;
-  }, [transactions]);
+  const activeAnomalyCount = useMemo(
+    () => countActiveAnomalies(transactions),
+    [transactions],
+  );
 
-  // Sync filter with URL params
-  useEffect(() => {
-    if (searchParams.get("anomaly") === "true" && !filterAnomaly && activeAnomalyCount > 0) {
-      setFilterAnomaly(true);
-    }
-  }, [searchParams, filterAnomaly, activeAnomalyCount]);
+  const filterState = useMemo<FilterState>(
+    () => ({
+      search: searchTerm,
+      category: filterCategory,
+      type: filterType as FilterState["type"],
+      source: filterSource as FilterState["source"],
+      anomalyOnly: filterAnomaly,
+      needsReviewOnly: filterNeedsReview,
+    }),
+    [searchTerm, filterCategory, filterType, filterSource, filterAnomaly, filterNeedsReview],
+  );
 
-  const filteredTransactions = useMemo(() => {
-    return transactions
-      .filter((t) => {
-        const matchesSearch = t.description
-          .toLowerCase()
-          .includes(searchTerm.toLowerCase());
-        const matchesCategory =
-          filterCategory === "all" || t.category.id === filterCategory;
-        const matchesType =
-          filterType === "all" ||
-          (filterType === "income" && t.isIncome) ||
-          (filterType === "expense" && t.isExpense) ||
-          (filterType === "transfer" && t.isExcluded);
-        const matchesSource =
-          filterSource === "all" || t.sourceType === filterSource;
-        const matchesAnomaly =
-          !filterAnomaly || (t.isAnomaly && !t.anomalyDismissed);
-        const matchesNeedsReview = !filterNeedsReview || t.needsReview;
-
-        return matchesSearch && matchesCategory && matchesType && matchesSource && matchesAnomaly && matchesNeedsReview;
-      })
-      .sort((a, b) => {
-        const dateA = a.date instanceof Date ? a.date : new Date(a.date);
-        const dateB = b.date instanceof Date ? b.date : new Date(b.date);
-        return dateB.getTime() - dateA.getTime();
-      });
-  }, [transactions, searchTerm, filterCategory, filterType, filterSource, filterAnomaly, filterNeedsReview]);
+  const filteredTransactions = useMemo(
+    () => applyFilters(transactions, filterState),
+    [transactions, filterState],
+  );
 
   // Auto-clear anomaly filter when no anomalies remain
   useEffect(() => {
@@ -122,8 +124,7 @@ function TransactionsPageContent() {
 
   const needsReviewCount = getTransactionsNeedingReview().length;
   const selectedCount = selectedIds.length;
-  const isAllSelected = filteredTransactions.length > 0 &&
-    filteredTransactions.every((t) => selectedIds.includes(t.id));
+  const isAllSelected = computeIsAllSelected(filteredTransactions, selectedIds);
 
   const handleSelectAll = useCallback(() => {
     if (isAllSelected) {
@@ -155,13 +156,13 @@ function TransactionsPageContent() {
 
       let reviewCount = 0;
       for (const transaction of recategorizedTransactions) {
-        if (transaction.needsReview) reviewCount++;
+        if (needsAttention(transaction.reviewReasons)) reviewCount++;
         useTransactionStore.getState().updateTransaction(transaction.id, {
           merchant: transaction.merchant,
           category: transaction.category,
           categoryConfidence: transaction.categoryConfidence,
-          needsReview: transaction.needsReview,
           categorizedBy: transaction.categorizedBy,
+          reviewReasons: transaction.reviewReasons,
         });
       }
 
@@ -186,11 +187,14 @@ function TransactionsPageContent() {
     const selected = transactions.filter((t) => selectedIds.includes(t.id));
     runCategorization(selected);
   };
-  const handleCategorizeNeedsReview = () => {
-    runCategorization(getTransactionsNeedingReview());
-  };
+  // DEFERRED: the "Reprocess needing review" button is hidden pending the dismiss
+  // CTA (spec §6.4 — persisting advisories are math/fingerprint, which re-running
+  // classification can't clear). When dismiss lands, this becomes the dismiss handler.
+  // const handleCategorizeNeedsReview = () => {
+  //   runCategorization(getTransactionsNeedingReview());
+  // };
 
-  const hasFilters = searchTerm || filterCategory !== "all" || filterType !== "all" || filterSource !== "all" || filterAnomaly || filterNeedsReview;
+  const hasFilters = hasActiveFilters(filterState);
 
   const clearFilters = () => {
     setSearchTerm("");
@@ -262,7 +266,7 @@ function TransactionsPageContent() {
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="all">All Categories</SelectItem>
-              {DEFAULT_CATEGORIES.map((cat) => {
+              {SORTED_CATEGORY_FILTERS.map((cat) => {
                 const display = getCategoryDisplay(cat.id);
                 const IconComponent = display.icon;
                 return (
@@ -439,7 +443,7 @@ function TransactionsPageContent() {
                       // Hover state
                       "hover:bg-muted/40 transition-colors",
                       // Needs review highlight
-                      transaction.needsReview && "bg-amber-500/5",
+                      needsAttention(transaction.reviewReasons) && "bg-amber-500/5",
                       // Anomaly highlight (only for non-dismissed)
                       transaction.isAnomaly && !transaction.anomalyDismissed && "bg-amber-500/5"
                     )}
@@ -548,7 +552,7 @@ function TransactionsPageContent() {
                       <div className="flex items-center gap-2">
                         <InlineCategoryEditor
                           categoryId={transaction.category.id}
-                          needsReview={transaction.needsReview}
+                          needsAttention={needsAttention(transaction.reviewReasons)}
                           onCategoryChange={(newCat) => handleCategoryChange(transaction.id, newCat)}
                         />
                         {/* Dismiss/Restore anomaly button */}
@@ -597,7 +601,11 @@ function TransactionsPageContent() {
           <span>
             Showing {filteredTransactions.length} of {transactions.length}
           </span>
-          {needsReviewCount > 0 && (
+          {/* DEFERRED: "Reprocess needing review" button. Under the list model the
+              persisting advisory (fingerprint_collision) isn't cleared by re-running
+              classification, so this button's old behavior no longer fits. It will be
+              replaced by a dismiss CTA — see handler note above. */}
+          {/* needsReviewCount > 0 && (
             <Button
               variant="link"
               size="sm"
@@ -609,7 +617,7 @@ function TransactionsPageContent() {
               <AlertCircle className="w-3 h-3 mr-1" />
               Reprocess {needsReviewCount} needing review
             </Button>
-          )}
+          ) */}
         </div>
       </div>
     </div>
