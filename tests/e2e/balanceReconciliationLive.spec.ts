@@ -12,6 +12,7 @@ import {
 import { uploadFile } from '@tests/e2e/helpers/e2eHelpers';
 import { clearAllStorage } from '@tests/utils/storageHelpers';
 import * as path from 'path';
+import { LLM_TEST_TIMEOUT, BANK_PIPELINE_TIMEOUT, CC_PIPELINE_TIMEOUT } from '@tests/e2e/helpers/liveTimeouts';
 
 const CC_PDF_FIXTURE = path.join(FIXTURES_DIR, 'cc_statement.pdf');
 const CC_PDF_PASSWORD = process.env.CC_PDF_PASSWORD || undefined;
@@ -23,14 +24,8 @@ test.describe('Balance Reconciliation -- Live LLM E2E', () => {
   // Not using serial mode because test 1 has a known soft failure (reconciliation gap)
   // and serial mode would skip all subsequent tests on any failure.
 
-  // Playwright test timeout (hard ceiling for the entire test)
-  const LLM_TIMEOUT = 300_000;
-  const CC_LLM_TIMEOUT = 600_000;
-
-  // waitForURL timeout — how long we wait for pipeline to complete.
-  // Separate from test timeout so the test fails fast on pipeline errors.
-  const BANK_PIPELINE_TIMEOUT = 240_000;
-  const CC_PIPELINE_TIMEOUT = 540_000;
+  // Timeouts (LLM_TEST_TIMEOUT, BANK_PIPELINE_TIMEOUT, CC_PIPELINE_TIMEOUT) are shared
+  // from @tests/e2e/helpers/liveTimeouts across all live-LLM tests.
 
   test.beforeEach(async ({ context }) => {
     skipIfNoLiveLLM();
@@ -41,7 +36,7 @@ test.describe('Balance Reconciliation -- Live LLM E2E', () => {
   // ── Bank tests ───────────────────────────────────────────────────────────────
 
   test('bank PDF -- full reconciliation flow', async ({ page }) => {
-    test.setTimeout(LLM_TIMEOUT);
+    test.setTimeout(LLM_TEST_TIMEOUT);
     const t0 = Date.now();
 
     await page.goto('/');
@@ -69,8 +64,8 @@ test.describe('Balance Reconciliation -- Live LLM E2E', () => {
     // Log reconciliation values regardless of outcome
     console.log(
       `[bank-1] reconciliation: passed=${reconciliation!.passed}, ` +
-      `computedClosing=${reconciliation!.computedClosing}, ` +
-      `expectedClosing=${reconciliation!.expectedClosing}, ` +
+      `computed=${reconciliation!.computed}, ` +
+      `fromStatement=${reconciliation!.fromStatement}, ` +
       `difference=${reconciliation!.difference}`,
     );
 
@@ -93,7 +88,7 @@ test.describe('Balance Reconciliation -- Live LLM E2E', () => {
   });
 
   test('bank PDF -- verification report structure', async ({ page }) => {
-    test.setTimeout(LLM_TIMEOUT);
+    test.setTimeout(LLM_TEST_TIMEOUT);
     const t0 = Date.now();
 
     await page.goto('/');
@@ -128,7 +123,7 @@ test.describe('Balance Reconciliation -- Live LLM E2E', () => {
   });
 
   test('bank PDF -- flagged transactions', async ({ page }) => {
-    test.setTimeout(LLM_TIMEOUT);
+    test.setTimeout(LLM_TEST_TIMEOUT);
     const t0 = Date.now();
 
     await page.goto('/');
@@ -174,7 +169,7 @@ test.describe('Balance Reconciliation -- Live LLM E2E', () => {
   // ── CC tests ─────────────────────────────────────────────────────────────────
 
   test('CC PDF -- statement totals verification flow', async ({ page }) => {
-    test.setTimeout(CC_LLM_TIMEOUT);
+    test.setTimeout(LLM_TEST_TIMEOUT);
 
     const fs = await import('fs');
     test.skip(!fs.existsSync(CC_PDF_FIXTURE), 'CC PDF fixture not found -- skipping');
@@ -233,7 +228,7 @@ test.describe('Balance Reconciliation -- Live LLM E2E', () => {
   });
 
   test('CC PDF -- verification report structure', async ({ page }) => {
-    test.setTimeout(CC_LLM_TIMEOUT);
+    test.setTimeout(LLM_TEST_TIMEOUT);
 
     const fs = await import('fs');
     test.skip(!fs.existsSync(CC_PDF_FIXTURE), 'CC PDF fixture not found -- skipping');

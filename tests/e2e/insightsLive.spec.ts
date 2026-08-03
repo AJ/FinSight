@@ -6,6 +6,7 @@ import {
   elapsedSince,
 } from '@tests/e2e/helpers/liveTestHelpers';
 import { clearAllStorage } from '@tests/utils/storageHelpers';
+import { LLM_TEST_TIMEOUT } from '@tests/e2e/helpers/liveTimeouts';
 
 // Sample transactions for insights context — realistic data with clear spending patterns
 const SAMPLE_TRANSACTIONS = Array.from({ length: 15 }, (_, i) => ({
@@ -62,7 +63,7 @@ test.describe('Insights — Live LLM', () => {
 
   test('generates insights with valid structure referencing actual data', async ({ context, page }) => {
     skipIfNoLiveLLM();
-    test.setTimeout(120_000);
+    test.setTimeout(LLM_TEST_TIMEOUT);
     await clearAllStorage(context);
     await seedLiveLLMSettings(context);
     await seedTransactions(context, SAMPLE_TRANSACTIONS);
@@ -81,7 +82,7 @@ test.describe('Insights — Live LLM', () => {
     // Wait for the success state — "Regenerate" button only appears after insights are generated.
     // (The loading state shows "Analyzing your spending patterns..." which contains "spending",
     // so matching on that text would falsely detect the loading state as success.)
-    await expect(page.getByRole('button', { name: /regenerate/i })).toBeVisible({ timeout: 60_000 });
+    await expect(page.getByRole('button', { name: /regenerate/i })).toBeVisible({ timeout: 300_000 });
     console.log(`[insights] insights appeared: ${elapsedSince(t0)}`);
 
     // No error state

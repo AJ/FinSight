@@ -14,9 +14,9 @@ import {
 import { uploadFile } from '@tests/e2e/helpers/e2eHelpers';
 import { clearAllStorage } from '@tests/utils/storageHelpers';
 import * as path from 'path';
+import { LLM_TEST_TIMEOUT, BANK_PIPELINE_TIMEOUT } from '@tests/e2e/helpers/liveTimeouts';
 
 const BANK_FIXTURE = path.join(FIXTURES_DIR, 'bank_statement_noisy.pdf');
-const PIPELINE_TIMEOUT = 300_000;
 
 /**
  * Edit a transaction's category via the Edit (pencil) dialog.
@@ -91,7 +91,7 @@ test.describe('Data Integrity — Live LLM', () => {
   });
 
   test('editing category back to original does not learn a merchant rule', async ({ page }) => {
-    test.setTimeout(600_000);
+    test.setTimeout(LLM_TEST_TIMEOUT);
     const consoleLogs = setupConsoleCapture(page);
     const t0 = Date.now();
 
@@ -100,7 +100,7 @@ test.describe('Data Integrity — Live LLM', () => {
     console.log(`[revert] upload: ${elapsedSince(t0)}`);
 
     try {
-      await waitForUploadOrFailure(page, PIPELINE_TIMEOUT);
+      await waitForUploadOrFailure(page, BANK_PIPELINE_TIMEOUT);
     } catch (err) {
       dumpLogsOnFailure(consoleLogs, err, 'revert');
     }
@@ -137,7 +137,7 @@ test.describe('Data Integrity — Live LLM', () => {
   });
 
   test('sequential imports without clearing storage preserve all transactions', async ({ page }) => {
-    test.setTimeout(600_000);
+    test.setTimeout(LLM_TEST_TIMEOUT);
     const consoleLogs = setupConsoleCapture(page);
     const t0 = Date.now();
 
@@ -147,7 +147,7 @@ test.describe('Data Integrity — Live LLM', () => {
     console.log(`[sequential] import 1 upload: ${elapsedSince(t0)}`);
 
     try {
-      await waitForUploadOrFailure(page, PIPELINE_TIMEOUT);
+      await waitForUploadOrFailure(page, BANK_PIPELINE_TIMEOUT);
     } catch (err) {
       dumpLogsOnFailure(consoleLogs, err, 'sequential-1');
     }
@@ -176,7 +176,7 @@ test.describe('Data Integrity — Live LLM', () => {
     console.log(`[sequential] import 2 upload: ${elapsedSince(t0)}`);
 
     try {
-      await waitForUploadOrFailure(page, PIPELINE_TIMEOUT);
+      await waitForUploadOrFailure(page, BANK_PIPELINE_TIMEOUT);
     } catch (err) {
       dumpLogsOnFailure(consoleLogs, err, 'sequential-2');
     }

@@ -17,9 +17,9 @@ import { clearAllStorage } from '@tests/utils/storageHelpers';
 import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
+import { LLM_TEST_TIMEOUT, BANK_PIPELINE_TIMEOUT } from '@tests/e2e/helpers/liveTimeouts';
 
 const BANK_FIXTURE = path.join(FIXTURES_DIR, 'bank_statement_noisy.pdf');
-const PIPELINE_TIMEOUT = 300_000;
 
 test.describe('File Upload Lifecycle — Live LLM', () => {
   test.describe.configure({ mode: 'serial' });
@@ -31,7 +31,7 @@ test.describe('File Upload Lifecycle — Live LLM', () => {
   });
 
   test('bank PDF — full upload to save lifecycle', async ({ page }) => {
-    test.setTimeout(600_000);
+    test.setTimeout(LLM_TEST_TIMEOUT);
     const consoleLogs = setupConsoleCapture(page);
     const t0 = Date.now();
 
@@ -43,7 +43,7 @@ test.describe('File Upload Lifecycle — Live LLM', () => {
     console.log(`[lifecycle] upload: ${elapsedSince(t0)}`);
 
     try {
-      await waitForUploadOrFailure(page, PIPELINE_TIMEOUT);
+      await waitForUploadOrFailure(page, BANK_PIPELINE_TIMEOUT);
     } catch (err) {
       dumpLogsOnFailure(consoleLogs, err, 'lifecycle');
     }
@@ -153,7 +153,7 @@ test.describe('File Upload Lifecycle — Live LLM', () => {
     console.log(`[lifecycle] re-upload: ${elapsedSince(t0)}`);
 
     try {
-      await waitForUploadOrFailure(page, PIPELINE_TIMEOUT);
+      await waitForUploadOrFailure(page, BANK_PIPELINE_TIMEOUT);
     } catch (err) {
       dumpLogsOnFailure(consoleLogs, err, 'lifecycle-reupload');
     }

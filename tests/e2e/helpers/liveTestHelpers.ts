@@ -1,5 +1,6 @@
 import { test } from '@playwright/test';
 import { waitForUploadCompletion } from '@tests/e2e/helpers/e2eHelpers';
+import { getCategoryIds } from '@/lib/categorization/categories';
 import * as path from 'path';
 import * as fs from 'fs';
 
@@ -24,12 +25,12 @@ const CC_PDF_PASSWORD = process.env.CC_PDF_PASSWORD || undefined;
 
 export const FIXTURES_DIR = path.resolve(__dirname, '../../fixtures');
 
-export const VALID_CATEGORIES = new Set([
-  'groceries', 'dining', 'transportation', 'utilities', 'housing',
-  'healthcare', 'entertainment', 'shopping', 'income', 'interest',
-  'cashback', 'transfer', 'bills', 'investment', 'insurance',
-  'education', 'travel', 'fees', 'taxes', 'interest-expense', 'other',
-]);
+// Derived from the production registry so it can never drift from it. Previously this
+// was a hand-maintained copy of the registry IDs, which silently broke live e2e when a
+// category was added to the registry without updating this list (exactly how
+// cc_bill_payment and loans broke the live suite). The categoryListSync unit test that
+// guarded the drift is now redundant (registry ⊆ itself is always true).
+export const VALID_CATEGORIES = new Set(getCategoryIds());
 
 export const VALID_CATEGORY_SOURCES = new Set([
   'ai', 'rule', 'keyword', 'manual',

@@ -14,9 +14,9 @@ import {
 import { uploadFile } from '@tests/e2e/helpers/e2eHelpers';
 import { clearAllStorage } from '@tests/utils/storageHelpers';
 import * as path from 'path';
+import { LLM_TEST_TIMEOUT, BANK_PIPELINE_TIMEOUT } from '@tests/e2e/helpers/liveTimeouts';
 
 const BANK_FIXTURE = path.join(FIXTURES_DIR, 'bank_statement_noisy.pdf');
-const PIPELINE_TIMEOUT = 300_000;
 
 test.describe('Transactions Lifecycle — Live LLM', () => {
   test.describe.configure({ mode: 'serial' });
@@ -28,7 +28,7 @@ test.describe('Transactions Lifecycle — Live LLM', () => {
   });
 
   test('AI categorization produces valid categories and edits persist', async ({ page }) => {
-    test.setTimeout(360_000);
+    test.setTimeout(LLM_TEST_TIMEOUT);
     const consoleLogs = setupConsoleCapture(page);
     const t0 = Date.now();
 
@@ -37,7 +37,7 @@ test.describe('Transactions Lifecycle — Live LLM', () => {
     console.log(`[txn-life] upload: ${elapsedSince(t0)}`);
 
     try {
-      await waitForUploadOrFailure(page, PIPELINE_TIMEOUT);
+      await waitForUploadOrFailure(page, BANK_PIPELINE_TIMEOUT);
     } catch (err) {
       dumpLogsOnFailure(consoleLogs, err, 'txn-life');
     }

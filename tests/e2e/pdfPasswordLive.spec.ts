@@ -13,10 +13,10 @@ import { uploadFile } from '@tests/e2e/helpers/e2eHelpers';
 import { clearAllStorage } from '@tests/utils/storageHelpers';
 import * as path from 'path';
 import * as fs from 'fs';
+import { LLM_TEST_TIMEOUT, BANK_PIPELINE_TIMEOUT } from '@tests/e2e/helpers/liveTimeouts';
 
 const CC_FIXTURE = path.join(FIXTURES_DIR, 'cc_statement.pdf');
 const CC_PDF_PASSWORD = process.env.CC_PDF_PASSWORD || undefined;
-const PIPELINE_TIMEOUT = 540_000;
 
 test.describe('PDF Password — Live LLM', () => {
   test.describe.configure({ mode: 'serial' });
@@ -28,7 +28,7 @@ test.describe('PDF Password — Live LLM', () => {
   });
 
   test('encrypted CC PDF — correct password extracts successfully', async ({ page }) => {
-    test.setTimeout(600_000);
+    test.setTimeout(LLM_TEST_TIMEOUT);
     test.skip(!fs.existsSync(CC_FIXTURE), 'CC PDF fixture not found — skipping');
 
     const consoleLogs = setupConsoleCapture(page);
@@ -42,7 +42,7 @@ test.describe('PDF Password — Live LLM', () => {
     console.log(`[pdf-pw] upload: ${elapsedSince(t0)}`);
 
     try {
-      await waitForUploadOrFailure(page, PIPELINE_TIMEOUT);
+      await waitForUploadOrFailure(page, BANK_PIPELINE_TIMEOUT);
     } catch (err) {
       dumpLogsOnFailure(consoleLogs, err, 'pdf-pw');
     }
@@ -69,7 +69,7 @@ test.describe('PDF Password — Live LLM', () => {
   });
 
   test('wrong password shows error, correct password succeeds on retry', async ({ page }) => {
-    test.setTimeout(600_000);
+    test.setTimeout(LLM_TEST_TIMEOUT);
     test.skip(!fs.existsSync(CC_FIXTURE), 'CC PDF fixture not found — skipping');
     test.skip(!CC_PDF_PASSWORD, 'CC_PDF_PASSWORD not set — skipping');
 
@@ -96,7 +96,7 @@ test.describe('PDF Password — Live LLM', () => {
     await page.getByRole('button', { name: /unlock.*parse/i }).click();
 
     // Should eventually reach review page
-    await waitForUploadOrFailure(page, 540_000);
+    await waitForUploadOrFailure(page, BANK_PIPELINE_TIMEOUT);
     await expect(page).toHaveURL(/\/review/);
 
     const session = await getReviewSession(page);

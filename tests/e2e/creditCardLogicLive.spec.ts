@@ -15,10 +15,10 @@ import { uploadFile } from '@tests/e2e/helpers/e2eHelpers';
 import { clearAllStorage } from '@tests/utils/storageHelpers';
 import * as path from 'path';
 import * as fs from 'fs';
+import { LLM_TEST_TIMEOUT, CC_PIPELINE_TIMEOUT } from '@tests/e2e/helpers/liveTimeouts';
 
 const CC_FIXTURE = path.join(FIXTURES_DIR, 'cc_statement.pdf');
 const CC_PDF_PASSWORD = process.env.CC_PDF_PASSWORD || undefined;
-const PIPELINE_TIMEOUT = 540_000;
 
 test.describe('CC Logic — Live LLM', () => {
   test.describe.configure({ mode: 'serial' });
@@ -31,7 +31,7 @@ test.describe('CC Logic — Live LLM', () => {
   });
 
   test('CC PDF — full 3-pass pipeline with valid data', async ({ page }) => {
-    test.setTimeout(600_000);
+    test.setTimeout(LLM_TEST_TIMEOUT);
     const consoleLogs = setupConsoleCapture(page);
     const t0 = Date.now();
 
@@ -40,7 +40,7 @@ test.describe('CC Logic — Live LLM', () => {
     console.log(`[cc-logic] upload: ${elapsedSince(t0)}`);
 
     try {
-      await waitForUploadOrFailure(page, PIPELINE_TIMEOUT);
+      await waitForUploadOrFailure(page, CC_PIPELINE_TIMEOUT);
     } catch (err) {
       dumpLogsOnFailure(consoleLogs, err, 'cc-logic');
     }
