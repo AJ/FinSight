@@ -6,6 +6,7 @@ import {
   elapsedSince,
 } from '@tests/e2e/helpers/liveTestHelpers';
 import { clearAllStorage } from '@tests/utils/storageHelpers';
+import { LLM_TEST_TIMEOUT } from '@tests/e2e/helpers/liveTimeouts';
 
 // Sample transactions for chat context
 const SAMPLE_TRANSACTIONS = [
@@ -43,7 +44,7 @@ test.describe('Chat With Data — Live LLM', () => {
 
   test('sends message and receives streaming response', async ({ context, page }) => {
     skipIfNoLiveLLM();
-    test.setTimeout(120_000);
+    test.setTimeout(LLM_TEST_TIMEOUT);
     await clearAllStorage(context);
     await seedLiveLLMSettings(context);
     await seedTransactions(context, SAMPLE_TRANSACTIONS);
@@ -77,46 +78,16 @@ test.describe('Chat With Data — Live LLM', () => {
     console.log(`[chat] total: ${elapsedSince(t0)}`);
   });
 
-  test('streaming delivers tokens progressively, not all at once', async ({ context, page }) => {
-    skipIfNoLiveLLM();
-    test.setTimeout(120_000);
-    await clearAllStorage(context);
-    await seedLiveLLMSettings(context);
-    await seedTransactions(context, SAMPLE_TRANSACTIONS);
-
-    await page.goto('/chat');
-    await expect(page.getByText(/chat with your/i)).toBeVisible({ timeout: 10_000 });
-
-    const textarea = page.locator('textarea');
-    await textarea.fill('What are my top expenses?');
-    await textarea.press('Enter');
-
-    // Wait for the response container to start appearing
-    const responseLocator = page.locator('[class*="bg-muted"], .markdown-body').last();
-    await expect(responseLocator).toBeVisible({ timeout: 60_000 });
-
-    // Capture text at multiple intervals — streaming must produce progressive growth
-    // Poll every 300ms for up to 3 samples to handle fast LLM responses
-    const samples: number[] = [];
-    for (let i = 0; i < 6; i++) {
-      const text = (await responseLocator.textContent()) ?? '';
-      samples.push(text.length);
-      await page.waitForTimeout(300);
-    }
-
-    // At least one sample must have content, and at least one later sample must be longer
-    const firstNonEmpty = samples.findIndex((s) => s > 0);
-    expect(firstNonEmpty, 'No response content captured during streaming').toBeGreaterThanOrEqual(0);
-
-    const laterSamples = samples.slice(firstNonEmpty + 1);
-    const grew = laterSamples.some((s) => s > samples[firstNonEmpty]);
-    expect(grew, 'Response did not grow during streaming — tokens may not arrive progressively').toBe(true);
-    console.log(`[chat-stream] progressive: ${samples.filter(s => s > 0).join(' → ')} chars`);
-  });
+  // NOTE: a "streaming delivers tokens progressively" test lived here. It sampled the on-screen
+  // answer length and required growth — racy on fast local models (a short answer arrives within
+  // one sample window) and unable to distinguish "streamed fast" from "not streamed at all".
+  // Progressive streaming is now covered reliably at two deterministic layers:
+  //   - chatStreamProgressiveLive.spec.ts: the real LLM streams multiple chunks over the wire.
+  //   - tests/unit/llm/chatStreamProgressive.spec.ts: chatStream yields each chunk separately.
 
   test('suggestion chip sends pre-built query', async ({ context, page }) => {
     skipIfNoLiveLLM();
-    test.setTimeout(120_000);
+    test.setTimeout(LLM_TEST_TIMEOUT);
     await clearAllStorage(context);
     await seedLiveLLMSettings(context);
     await seedTransactions(context, SAMPLE_TRANSACTIONS);
