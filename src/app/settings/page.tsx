@@ -221,7 +221,7 @@ export default function SettingsPage() {
               )}
             </div>
             <CardDescription>
-              Connect to {llmProvider === 'lmstudio' ? 'LM Studio' : 'Ollama'} — local or remote. Use any model
+              Connect to {PROVIDERS[llmProvider].name} — local or remote. Use any model
               you like (Gemma, Llama, Mistral, Phi, Qwen, etc.).
             </CardDescription>
           </CardHeader>
@@ -291,7 +291,7 @@ export default function SettingsPage() {
               </div>
               <p className="text-xs text-muted-foreground">
                 Default: <code>{PROVIDERS[llmProvider].defaultUrl}</code>.
-                Change if {llmProvider === 'lmstudio' ? 'LM Studio' : 'Ollama'} runs on another port or machine.
+                Change if {PROVIDERS[llmProvider].name} runs on another port or machine.
               </p>
             </div>
 
@@ -323,7 +323,7 @@ export default function SettingsPage() {
               ) : (
                 <div className="rounded-md border border-dashed p-4 text-center text-sm text-muted-foreground">
                   {connectionStatus === 'failed'
-                    ? `Connect to ${llmProvider === 'lmstudio' ? 'LM Studio' : 'Ollama'} first to see available models.`
+                    ? `Connect to ${PROVIDERS[llmProvider].name} first to see available models.`
                     : `No models found. ${llmProvider === 'lmstudio' ? 'Load a model in LM Studio first.' : 'Pull one with: ollama pull <model>'}`}
                 </div>
               )}

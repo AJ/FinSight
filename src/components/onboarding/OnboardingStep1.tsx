@@ -8,7 +8,7 @@ import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { Loader2, CheckCircle2, XCircle, Plug, Cpu } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { LLMProvider, DEFAULT_URLS, ModelInfo } from '@/lib/llm/types';
+import { LLMProvider, PROVIDERS, ModelInfo } from '@/lib/llm/types';
 import { useSettingsStore } from '@/lib/store/settingsStore';
 import { checkLLMConnection } from '@/lib/store/llmConnectionStore';
 import type { ConnectionStatus } from './OnboardingWizard';
@@ -65,26 +65,30 @@ export function OnboardingStep1({
         setModels(modelIds);
         setModelInfos(status.models);
         onModelsChange(modelIds);
-        onErrorChange(null);
-        setError(null); // Clear local error on success
 
         // Store context length of first model if available
         if (status.models[0]?.contextLength) {
           useSettingsStore.getState().setModelContextLength(status.models[0].contextLength);
         }
+
+        if (modelIds.length === 0) {
+          // Server reachable but exposes no models. Surface guidance instead of
+          // silently showing a "connected" state with nothing to pick, and the
+          // Continue button stays disabled (canContinue requires models).
+          const providerName = PROVIDERS[selectedProvider].name;
+          const msg = `Connected to ${providerName}, but no models are loaded. Please load a model and try again.`;
+          setError(msg);
+          onErrorChange(msg);
+        } else {
+          setError(null);
+          onErrorChange(null);
+        }
       } else {
         setConnectionStatus('failed');
-        const providerName = selectedProvider === 'ollama' ? 'Ollama' : 'LM Studio';
-        let msg = '';
-
-        // Check if we get models back (server running but no models loaded)
-        if (status.models && status.models.length > 0) {
-          msg = `Connected to ${providerName}, but no models are loaded. Please load a model and try again.`;
-        } else {
-          // Could be server starting up or not running at all
-          msg = `Cannot reach ${providerName}. Make sure it is running and the server has fully started.`;
-        }
-
+        const providerName = PROVIDERS[selectedProvider].name;
+        // Both adapters return an empty model list when the server is unreachable,
+        // so there is no "connected but empty" case to distinguish here.
+        const msg = `Cannot reach ${providerName}. Make sure it is running and the server has fully started.`;
         setError(msg);
         onErrorChange(msg);
       }
@@ -98,7 +102,7 @@ export function OnboardingStep1({
 
   const handleProviderSelect = useCallback((provider: LLMProvider) => {
     setSelectedProvider(provider);
-    const defaultUrl = DEFAULT_URLS[provider];
+    const defaultUrl = PROVIDERS[provider].defaultUrl;
     setServerUrl(defaultUrl);
     setConnectionStatus('disconnected');
     setModels([]);
@@ -114,7 +118,8 @@ export function OnboardingStep1({
     }
   }, [connectionStatus, models, modelInfos, onComplete, selectedProvider, serverUrl]);
 
-  const canContinue = connectionStatus === 'connected' && selectedProvider !== null;
+  const canContinue =
+    connectionStatus === 'connected' && selectedProvider !== null && models.length > 0;
 
   const handleUrlChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     setServerUrl(e.target.value);
@@ -203,7 +208,7 @@ export function OnboardingStep1({
             value={serverUrl}
             onChange={handleUrlChange}
             onKeyDown={handleKeyDown}
-            placeholder={selectedProvider ? DEFAULT_URLS[selectedProvider] : DEFAULT_URLS.ollama}
+            placeholder={selectedProvider ? PROVIDERS[selectedProvider].defaultUrl : PROVIDERS.ollama.defaultUrl}
             className="flex-1"
             disabled={!selectedProvider}
             title={!selectedProvider ? 'Select a provider first' : undefined}
