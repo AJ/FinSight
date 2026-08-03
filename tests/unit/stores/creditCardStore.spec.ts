@@ -3,7 +3,7 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { useCreditCardStore, createCreditCardStatement } from '@/lib/store/creditCardStore';
 import type { CreditCardStatement } from '@/types/creditCard';
 import { makeTransaction } from '@tests/unit/factories';
-import { SourceType, Category, CategoryType } from '@/types';
+import { SourceType, Category } from '@/types';
 
 beforeEach(() => {
   useCreditCardStore.setState({ statements: [], isParsing: false });
@@ -636,13 +636,13 @@ describe('creditCardStore', () => {
       Object.defineProperty(txnIn1, 'sourceType', { value: SourceType.CreditCard, writable: true });
       Object.defineProperty(txnIn1, 'cardIssuer', { value: 'HDFC', writable: true });
       Object.defineProperty(txnIn1, 'cardLastFour', { value: '1234', writable: true });
-      txnIn1.category = new Category('dining', 'dining', CategoryType.Expense);
+      txnIn1.category = new Category('dining', 'dining', true);
 
       const txnIn2 = makeTransaction({ id: 'cc-2', amount: 3000, date: new Date('2024-05-20') });
       Object.defineProperty(txnIn2, 'sourceType', { value: SourceType.CreditCard, writable: true });
       Object.defineProperty(txnIn2, 'cardIssuer', { value: 'HDFC', writable: true });
       Object.defineProperty(txnIn2, 'cardLastFour', { value: '1234', writable: true });
-      txnIn2.category = new Category('groceries', 'groceries', CategoryType.Expense);
+      txnIn2.category = new Category('groceries', 'groceries', true);
 
       // Transaction outside period — should be excluded
       const txnOut = makeTransaction({ id: 'cc-3', amount: 9999, date: new Date('2024-04-15') });

@@ -10,7 +10,6 @@ import { useMerchantRuleStore } from '@/lib/store/merchantRuleStore';
 import { useRecurringStore } from '@/lib/store/recurringStore';
 import { useSettingsStore } from '@/lib/store/settingsStore';
 import { useOnboardingStore } from '@/lib/store/onboardingStore';
-import { useCategoryStore } from '@/lib/store/categoryStore';
 import { makeTransactions } from '@tests/unit/factories';
 import type { CreditCardStatement } from '@/types/creditCard';
 import type { Insight } from '@/lib/insights/types';
@@ -148,26 +147,22 @@ describe('clearAllUserData', () => {
     expect(useRecurringStore.getState().lastScanned).toBeNull();
   });
 
-  it('leaves settings, onboarding, and the category catalog untouched', () => {
+  it('leaves settings and onboarding untouched', () => {
     // Put the config stores into a non-default state.
     useSettingsStore.setState({ llmModel: 'keep-this-model', llmProvider: 'ollama' });
     useOnboardingStore.getState().markOnboardingComplete();
-    useCategoryStore.getState().initializeDefaultCategories();
 
     const settingsBefore = dataSnapshot(useSettingsStore.getState());
     const onboardingBefore = dataSnapshot(useOnboardingStore.getState());
-    const categoryBefore = dataSnapshot(useCategoryStore.getState());
 
     clearAllUserData();
 
     expect(dataSnapshot(useSettingsStore.getState())).toEqual(settingsBefore);
     expect(dataSnapshot(useOnboardingStore.getState())).toEqual(onboardingBefore);
-    expect(dataSnapshot(useCategoryStore.getState())).toEqual(categoryBefore);
 
     // Explicit pinning of the fields that matter most (regression guard: if
-    // someone wires settings/category/onboarding into the wipe, these fail).
+    // someone wires settings/onboarding into the wipe, these fail).
     expect(useSettingsStore.getState().llmModel).toBe('keep-this-model');
     expect(useOnboardingStore.getState().hasCompletedOnboarding).toBe(true);
-    expect(useCategoryStore.getState().categories.length).toBeGreaterThan(0);
   });
 });

@@ -2,24 +2,28 @@
  * Transaction utility functions.
  */
 
-import { Transaction } from "@/types";
-import { CategoryType } from "@/models/CategoryType";
-import { getCategoryById } from "./categorization/categories";
+import { Transaction, TransactionType } from "@/types";
 
 /**
  * Generate a unique signature for a transaction based on its content.
  * Used for deduplication - two transactions with the same signature are considered duplicates.
+ *
+ * `type` is part of the signature so a credit and a debit that share a date, amount,
+ * and description are not treated as the same transaction. Direction lives in `type`,
+ * not the amount sign: amounts are always positive at runtime, so a sign-based check
+ * would never distinguish them.
  */
 export function getTransactionSignature(t: {
   date: Date | string;
   amount: number;
   description: string;
+  type: TransactionType;
 }): string {
   const dateStr =
     t.date instanceof Date ? t.date.toISOString().split("T")[0] : new Date(t.date).toISOString().split("T")[0];
-  const amountStr = Math.abs(t.amount).toFixed(2);
+  const amountStr = t.amount.toFixed(2);
   const descStr = t.description.toLowerCase().trim().substring(0, 100);
-  return `${dateStr}|${amountStr}|${descStr}`;
+  return `${dateStr}|${t.type}|${amountStr}|${descStr}`;
 }
 
 /**
@@ -34,39 +38,4 @@ export function deduplicateTransactions(
     existingTxns.map((t) => getTransactionSignature(t))
   );
   return newTxns.filter((t) => !existingSignatures.has(getTransactionSignature(t)));
-}
-
-// ============================================================================
-// Deprecated functions - use Transaction class getters instead
-// ============================================================================
-
-/**
- * @deprecated Use `transaction.category.type` directly.
- */
-export function getCategoryType(
-  transaction: Transaction
-): CategoryType {
-  const category = getCategoryById(transaction.category.id);
-  return category?.type ?? CategoryType.Expense;
-}
-
-/**
- * @deprecated Use `transaction.isIncome` instead.
- */
-export function isIncome(transaction: Transaction): boolean {
-  return getCategoryType(transaction) === "income";
-}
-
-/**
- * @deprecated Use `transaction.isExpense` instead.
- */
-export function isExpense(transaction: Transaction): boolean {
-  return getCategoryType(transaction) === "expense";
-}
-
-/**
- * @deprecated Use `transaction.isExcluded` instead.
- */
-export function isExcluded(transaction: Transaction): boolean {
-  return getCategoryType(transaction) === "excluded";
 }

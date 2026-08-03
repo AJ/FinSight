@@ -6,14 +6,14 @@ import {
   confirmRemoteUrl,
   isRemoteUrlConfirmed,
 } from '@/lib/store/settingsStore';
-import { DEFAULT_URLS } from '@/lib/llm/types';
+import { PROVIDERS } from '@/lib/llm/types';
 
 const initialState = {
   currency: { code: 'INR', symbol: '₹', name: 'Indian Rupee' },
   dateFormat: 'auto',
   theme: 'light' as const,
   llmProvider: 'ollama' as const,
-  llmServerUrl: DEFAULT_URLS.ollama,
+  llmServerUrl: PROVIDERS.ollama.defaultUrl,
   llmModel: null,
   llmModelContextLength: null,
 };

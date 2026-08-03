@@ -2,7 +2,6 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { format } from 'date-fns';
 import { useBudgetStore } from '@/lib/store/budgetStore';
 import { makeTransaction, makeCategory } from '@tests/unit/factories';
-import { CategoryType } from '@/types';
 
 describe('useBudgetStore (redesigned)', () => {
   beforeEach(() => {
@@ -312,7 +311,7 @@ describe('useBudgetStore (redesigned)', () => {
       store.savePeriod('2026-04');
 
       const txns = [
-        makeTransaction({ category: makeCategory('salary', CategoryType.Income), amount: 4000, date: new Date('2026-04-10') }),
+        makeTransaction({ category: makeCategory('salary', false), amount: 4000, date: new Date('2026-04-10') }),
         makeTransaction({ category: makeCategory('groceries'), amount: 3000, date: new Date('2026-04-10') }),
       ];
 
@@ -464,6 +463,43 @@ describe('useBudgetStore (redesigned)', () => {
       expect(period!.hiddenCategories).toEqual([]);
       expect(period!.createdAt).toBeDefined();
       expect(period!.updatedAt).toBeDefined();
+    });
+  });
+
+  describe('clearAll', () => {
+    it('wipes saved periods and resets notifications', () => {
+      const store = useBudgetStore.getState();
+      store.setIncome('2026-04', 50000);
+      store.setAllocation('2026-04', 'groceries', 10000);
+      store.savePeriod('2026-04');
+      store.dismissNotification('noBudget', '2026-04');
+      store.dismissNotification('eom', '2026-04');
+
+      store.clearAll();
+
+      expect(Object.keys(useBudgetStore.getState().periods)).toHaveLength(0);
+      expect(useBudgetStore.getState().notifications).toEqual({
+        dismissedNoBudget: null,
+        dismissedEOM: null,
+      });
+    });
+
+    it('clears unsaved working-state drafts so they do not survive the wipe', () => {
+      // workingState is module-level and lives outside the persisted store, so it
+      // must be cleared explicitly. Seed an unsaved income draft, clearAll, then
+      // start a fresh draft for the same month and save — the leaked income must
+      // NOT reappear.
+      const store = useBudgetStore.getState();
+      store.setIncome('2026-04', 50000); // draft only, never saved
+
+      store.clearAll();
+
+      store.setAllocation('2026-04', 'groceries', 10000); // fresh draft
+      store.savePeriod('2026-04');
+
+      const period = useBudgetStore.getState().getPeriod('2026-04')!;
+      expect(period.income).toBeNull(); // would be 50000 if workingState leaked
+      expect(period.allocations).toHaveLength(1);
     });
   });
 });

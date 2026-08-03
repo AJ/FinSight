@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import { Currency, Settings } from "@/types";
-import { LLMProvider, DEFAULT_URLS } from "@/lib/llm/types";
+import { LLMProvider, PROVIDERS } from "@/lib/llm/types";
 import { debugWarn } from '@/lib/utils/debug';
 import validator from 'validator';
 
@@ -177,7 +177,7 @@ export const useSettingsStore = create<SettingsStore>()(
 
       // LLM defaults
       llmProvider: "ollama",
-      llmServerUrl: DEFAULT_URLS.ollama,
+      llmServerUrl: PROVIDERS.ollama.defaultUrl,
       llmModel: null,
       llmModelContextLength: null,
 
@@ -187,7 +187,7 @@ export const useSettingsStore = create<SettingsStore>()(
       getAvailableCurrencies: () => availableCurrencies,
       setLLMProvider: (provider) => set({
         llmProvider: provider,
-        llmServerUrl: DEFAULT_URLS[provider], // Auto-switch URL to provider default
+        llmServerUrl: PROVIDERS[provider].defaultUrl, // Auto-switch URL to provider default
         llmModel: null, // Clear model selection when switching providers
         llmModelContextLength: null,
       }),

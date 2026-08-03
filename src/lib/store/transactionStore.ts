@@ -2,10 +2,12 @@ import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { Transaction, Category, TransactionJSON, CategorizedBy, SourceType } from '@/types';
 import { deduplicateTransactions } from '@/lib/transactionUtils';
+import { needsAttention } from '@/lib/review/reviewReasons';
 import {
   buildStoredTransactionCategoryUpdate,
   handleStoredTransactionManualCategoryEdit,
 } from '@/lib/services/storedTransactionEditService';
+import { migrateTransactionCategories, restoreCorruptedCategory } from '@/lib/analytics/migration';
 import type { BankStatementSummary } from '@/models/BankStatementSummary';
 import '@/lib/categorization/categories'; // Ensure categories are registered before store hydrates
 
@@ -67,7 +69,6 @@ interface TransactionStore {
   getActiveAnomalies: () => Transaction[];
   hasFileImported: (hash: string) => {
     alreadyImported: boolean;
-    importDate?: Date;
     sourceType?: SourceType;
   };
 }
@@ -90,13 +91,8 @@ export const useTransactionStore = create<TransactionStore>()(
           if (toAdd.length < rehydrated.length) {
             console.log(`[Store] Filtered ${rehydrated.length - toAdd.length} duplicate transaction(s)`);
           }
-          // Defensive: strip staging-only isSuspense flag before persisting.
-          // The pipeline should have already cleared it, but guard against leaks.
-          const cleaned = toAdd.some(t => t.isSuspense)
-            ? toAdd.map(t => t.isSuspense ? t.cloneWith({ isSuspense: undefined }) : t)
-            : toAdd;
           return {
-            transactions: [...state.transactions, ...cleaned],
+            transactions: [...state.transactions, ...toAdd],
           };
         }),
 
@@ -133,8 +129,8 @@ export const useTransactionStore = create<TransactionStore>()(
               budgetMonth: updates.budgetMonth ?? txn.budgetMonth,
               categoryConfidence:
                 updates.categoryConfidence ?? txn.categoryConfidence,
-              needsReview: updates.needsReview ?? txn.needsReview,
               categorizedBy: updates.categorizedBy ?? txn.categorizedBy,
+              reviewReasons: updates.reviewReasons ?? txn.reviewReasons,
               sourceType: updates.sourceType ?? txn.sourceType,
               statementId: updates.statementId ?? txn.statementId,
               cardIssuer: updates.cardIssuer ?? txn.cardIssuer,
@@ -256,7 +252,7 @@ export const useTransactionStore = create<TransactionStore>()(
       },
 
       getTransactionsNeedingReview: () => {
-        return get().transactions.filter((txn) => txn.needsReview === true);
+        return get().transactions.filter((txn) => needsAttention(txn.reviewReasons));
       },
 
       // Anomaly actions
@@ -295,19 +291,65 @@ export const useTransactionStore = create<TransactionStore>()(
         if (matching.length === 0) {
           return { alreadyImported: false };
         }
-        const earliest = matching.reduce((a, b) =>
-          a.date < b.date ? a : b
-        );
         return {
           alreadyImported: true,
-          importDate: earliest.date,
-          sourceType: earliest.sourceType ?? undefined,
+          sourceType: matching[0].sourceType ?? undefined,
         };
       },
     }),
     {
       name: 'transaction-storage',
       version: 4,
+      migrate: (persistedState, version) => {
+        const state = persistedState as Record<string, unknown>;
+        if (version < 3 && !state.bankSummaries) {
+          state.bankSummaries = [];
+        }
+        if (version < 2 && Array.isArray(state.transactions)) {
+          const txns = state.transactions as Array<Record<string, unknown>>;
+          for (let i = 0; i < txns.length; i++) {
+            const result = migrateTransactionCategories({
+              category: txns[i].category as string | { id: string } | undefined,
+              transactionSubType: txns[i].transactionSubType as string | undefined,
+              description: txns[i].description as string | undefined,
+              sourceType: txns[i].sourceType as string | undefined,
+              type: txns[i].type as string | undefined,
+            });
+            if (result.changed) {
+              txns[i].category = result.categoryId;
+              txns[i].transactionSubType = result.transactionSubType;
+            }
+          }
+        }
+        // Version 4: restore categories corrupted by buggy v3 migration.
+        // The v3 migration's migrateTransactionCategories treated string categories
+        // as { id: string } objects, wiping categories to '' for transactions
+        // with old subTypes. This pass restores them using description-based inference.
+        if (version < 4 && Array.isArray(state.transactions)) {
+          const txns = state.transactions as Array<Record<string, unknown>>;
+          let restored = 0;
+          for (let i = 0; i < txns.length; i++) {
+            const cat = txns[i].category as string | undefined;
+            if (!cat || cat === '') {
+              const restoredCat = restoreCorruptedCategory({
+                category: cat,
+                transactionSubType: txns[i].transactionSubType as string | undefined,
+                description: txns[i].description as string | undefined,
+                sourceType: txns[i].sourceType as string | undefined,
+                type: txns[i].type as string | undefined,
+              });
+              if (restoredCat && restoredCat !== cat) {
+                txns[i].category = restoredCat;
+                restored++;
+              }
+            }
+          }
+          if (restored > 0) {
+            console.log(`[Migration v4] Restored categories for ${restored} corrupted transaction(s)`);
+          }
+        }
+        return persistedState;
+      },
       merge: (persistedState, currentState) => {
         const merged = { ...currentState, ...(persistedState as Partial<typeof currentState>) };
         if (merged.transactions) {

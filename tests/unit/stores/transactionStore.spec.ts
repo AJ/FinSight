@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { useTransactionStore } from '@/lib/store/transactionStore';
-import { Category, CategoryType, CategorizedBy, SourceType, type Transaction } from '@/types';
+import { Category, CategorizedBy, SourceType, type Transaction } from '@/types';
 import { makeTransaction as _makeTransaction, makeCategory } from '@tests/unit/factories';
 
 function makeTransaction(id: string = 'txn-1', amount: number = 1299, description: string = 'Test Transaction') {
@@ -124,15 +124,30 @@ describe('useTransactionStore', () => {
       expect(txn.anomalyDismissed).toBe(true);
     });
 
-    it('updates needsReview and categoryConfidence', () => {
+    it('updates categoryConfidence', () => {
       useTransactionStore.getState().addTransactions([makeTransaction('upd-conf')]);
       useTransactionStore.getState().updateTransaction('upd-conf', {
-        needsReview: false,
         categoryConfidence: 0.95,
       });
       const txn = useTransactionStore.getState().transactions[0];
-      expect(txn.needsReview).toBe(false);
       expect(txn.categoryConfidence).toBe(0.95);
+    });
+
+    it('persists reviewReasons when passed in the patch', () => {
+      // Reprocess re-categorization computes new review reasons (self_transfer_unresolved,
+      // invalid_subtype_category) and must be able to land them via updateTransaction.
+      useTransactionStore.getState().addTransactions([makeTransaction('upd-reasons')]);
+      useTransactionStore.getState().updateTransaction('upd-reasons', {
+        reviewReasons: ['invalid_subtype_category'],
+      });
+      expect(useTransactionStore.getState().transactions[0].reviewReasons).toContain('invalid_subtype_category');
+    });
+
+    it('preserves existing reviewReasons when the patch omits them', () => {
+      const seeded = _makeTransaction({ id: 'upd-keep-reasons', reviewReasons: ['low_confidence'] });
+      useTransactionStore.getState().addTransactions([seeded]);
+      useTransactionStore.getState().updateTransaction('upd-keep-reasons', { description: 'Changed' });
+      expect(useTransactionStore.getState().transactions[0].reviewReasons).toEqual(['low_confidence']);
     });
   });
 
@@ -231,15 +246,15 @@ describe('useTransactionStore', () => {
 
   describe('getTotalIncome', () => {
     it('sums income without date range', () => {
-      const txn = _makeTransaction({ id: 'inc-1', date: new Date('2024-01-15'), description: 'Income test', amount: 50000, type: 'credit', category: makeCategory('income', CategoryType.Income) });
+      const txn = _makeTransaction({ id: 'inc-1', date: new Date('2024-01-15'), description: 'Income test', amount: 50000, type: 'credit', category: makeCategory('income', false) });
       useTransactionStore.getState().addTransactions([txn]);
       expect(useTransactionStore.getState().getTotalIncome()).toBe(50000);
     });
 
     it('filters by date range', () => {
       useTransactionStore.getState().addTransactions([
-        _makeTransaction({ id: 'inc-2', date: new Date('2024-01-15'), amount: 10000, type: 'credit', category: makeCategory('income', CategoryType.Income) }),
-        _makeTransaction({ id: 'inc-3', date: new Date('2024-06-15'), amount: 20000, type: 'credit', category: makeCategory('income', CategoryType.Income) }),
+        _makeTransaction({ id: 'inc-2', date: new Date('2024-01-15'), amount: 10000, type: 'credit', category: makeCategory('income', false) }),
+        _makeTransaction({ id: 'inc-3', date: new Date('2024-06-15'), amount: 20000, type: 'credit', category: makeCategory('income', false) }),
       ]);
       const total = useTransactionStore.getState().getTotalIncome(
         new Date('2024-06-01'),
@@ -250,7 +265,7 @@ describe('useTransactionStore', () => {
 
     it('excludes expense transactions from income total', () => {
       useTransactionStore.getState().addTransactions([
-        _makeTransaction({ id: 'inc-4', amount: 50000, type: 'credit', category: makeCategory('income', CategoryType.Income) }),
+        _makeTransaction({ id: 'inc-4', amount: 50000, type: 'credit', category: makeCategory('income', false) }),
         _makeTransaction({ id: 'inc-5', amount: 3000, type: 'debit', category: makeCategory('shopping') }),
       ]);
       expect(useTransactionStore.getState().getTotalIncome()).toBe(50000);
@@ -286,14 +301,14 @@ describe('useTransactionStore', () => {
     it('excludes income transactions from expense total', () => {
       useTransactionStore.getState().addTransactions([
         _makeTransaction({ id: 'exp-4', amount: 5000, type: 'debit', category: makeCategory('shopping') }),
-        _makeTransaction({ id: 'exp-5', amount: 10000, type: 'credit', category: makeCategory('income', CategoryType.Income) }),
+        _makeTransaction({ id: 'exp-5', amount: 10000, type: 'credit', category: makeCategory('income', false) }),
       ]);
       expect(useTransactionStore.getState().getTotalExpenses()).toBe(5000);
     });
 
     it('returns 0 when no expenses exist', () => {
       useTransactionStore.getState().addTransactions([
-        _makeTransaction({ id: 'exp-6', amount: 10000, type: 'credit', category: makeCategory('income', CategoryType.Income) }),
+        _makeTransaction({ id: 'exp-6', amount: 10000, type: 'credit', category: makeCategory('income', false) }),
       ]);
       expect(useTransactionStore.getState().getTotalExpenses()).toBe(0);
     });
@@ -366,18 +381,13 @@ describe('useTransactionStore', () => {
       expect(useTransactionStore.getState().transactions[0].categorizedBy).toBe(CategorizedBy.AI);
     });
 
-    it('sets needsReview to false', () => {
-      useTransactionStore.getState().addTransactions([_makeTransaction({ id: 'uc-6', needsReview: true })]);
-      useTransactionStore.getState().updateCategory('uc-6', 'dining');
-      expect(useTransactionStore.getState().transactions[0].needsReview).toBe(false);
-    });
   });
 
   describe('getTransactionsNeedingReview', () => {
-    it('returns transactions with needsReview=true', () => {
+    it('returns transactions that carry review reasons', () => {
       useTransactionStore.getState().addTransactions([
-        _makeTransaction({ id: 'rev-1', needsReview: true }),
-        _makeTransaction({ id: 'rev-2', needsReview: false }),
+        _makeTransaction({ id: 'rev-1', reviewReasons: ['fingerprint_collision'] }),
+        _makeTransaction({ id: 'rev-2', reviewReasons: [] }),
       ]);
       const result = useTransactionStore.getState().getTransactionsNeedingReview();
       expect(result).toHaveLength(1);
@@ -386,7 +396,7 @@ describe('useTransactionStore', () => {
 
     it('returns empty when no transactions need review', () => {
       useTransactionStore.getState().addTransactions([
-        _makeTransaction({ id: 'rev-3', needsReview: false }),
+        _makeTransaction({ id: 'rev-3', reviewReasons: [] }),
       ]);
       expect(useTransactionStore.getState().getTransactionsNeedingReview()).toHaveLength(0);
     });
@@ -456,16 +466,19 @@ describe('useTransactionStore', () => {
       expect(result.sourceType).toBe(SourceType.Bank);
     });
 
-    it('returns earliest date when multiple transactions match hash', () => {
+    it('returns alreadyImported across multiple transactions sharing a hash, with no import date', () => {
+      // No import timestamp is recorded anywhere, so hasFileImported must not
+      // synthesize one from the transactions' own dates (it previously returned
+      // the earliest transaction date mislabeled as the import date).
       useTransactionStore.getState().addTransactions([
         _makeTransaction({ id: 'hash-early', date: new Date('2024-01-10'), sourceFileHash: 'same-hash', sourceType: SourceType.Bank }),
-        _makeTransaction({ id: 'hash-late', date: new Date('2024-06-15'), sourceFileHash: 'same-hash', sourceType: SourceType.CreditCard }),
+        _makeTransaction({ id: 'hash-late', date: new Date('2024-06-15'), sourceFileHash: 'same-hash', sourceType: SourceType.Bank }),
       ]);
 
       const result = useTransactionStore.getState().hasFileImported('same-hash');
       expect(result.alreadyImported).toBe(true);
-      expect(result.importDate!.getFullYear()).toBe(2024);
-      expect(result.importDate!.getMonth()).toBe(0); // January
+      expect(result.sourceType).toBe(SourceType.Bank);
+      expect('importDate' in result).toBe(false);
     });
 
     it('returns sourceType from matching transaction', () => {
@@ -564,6 +577,106 @@ describe('useTransactionStore', () => {
       const result = freshStore.getState().hasFileImported('xyz');
       expect(result.alreadyImported).toBe(true);
       expect(result.sourceType).toBeUndefined();
+
+      localStorage.removeItem('transaction-storage');
+    });
+  });
+
+  describe('persist migration (v2/v3/v4)', () => {
+    // The store upgrades old saved data on load. The migration helpers
+    // themselves (migrateTransactionCategories, restoreCorruptedCategory) are
+    // unit-tested in analytics/migration.spec.ts. These tests cover the store's
+    // part: which step runs for which saved version, and that the result lands
+    // on the loaded transactions.
+
+    it('v3 step: adds an empty bankSummaries list when one is missing (saved version < 3)', async () => {
+      localStorage.setItem('transaction-storage', JSON.stringify({
+        state: { transactions: [] },
+        version: 2,
+      }));
+
+      const { useTransactionStore: freshStore } = await import('@/lib/store/transactionStore?' + Date.now());
+      expect(freshStore.getState().bankSummaries).toEqual([]);
+
+      localStorage.removeItem('transaction-storage');
+    });
+
+    it('v2 step: migrates an old category/subType (saved version < 2)', async () => {
+      // 'bills' + 'bill_payment' + a CC-payment description → cc_bill_payment / debt_payment.
+      localStorage.setItem('transaction-storage', JSON.stringify({
+        state: {
+          transactions: [{
+            id: 'mig-v2', date: '2024-01-15T00:00:00.000Z', description: 'NEFT-HDFC CC Payment',
+            amount: 5000, type: 'debit', category: 'bills', transactionSubType: 'bill_payment', balance: null,
+          }],
+        },
+        version: 1,
+      }));
+
+      const { useTransactionStore: freshStore } = await import('@/lib/store/transactionStore?' + Date.now());
+      const txn = freshStore.getState().transactions[0];
+      expect(txn.category.id).toBe('cc_bill_payment');
+      expect(txn.transactionSubType).toBe('debt_payment');
+
+      localStorage.removeItem('transaction-storage');
+    });
+
+    it('v4 step: restores a category the buggy v3 migration wiped empty (saved version < 4)', async () => {
+      // Empty category + a salary description is inferred back to 'salary'.
+      localStorage.setItem('transaction-storage', JSON.stringify({
+        state: {
+          transactions: [{
+            id: 'mig-v4', date: '2024-02-15T00:00:00.000Z', description: 'Salary - February',
+            amount: 50000, type: 'credit', category: '', transactionSubType: 'income',
+            sourceType: 'bank', balance: null,
+          }],
+        },
+        version: 3,
+      }));
+
+      const { useTransactionStore: freshStore } = await import('@/lib/store/transactionStore?' + Date.now());
+      expect(freshStore.getState().transactions[0].category.id).toBe('income');
+
+      localStorage.removeItem('transaction-storage');
+    });
+
+    it('version gating: the v4 restore does not run for already-current (version 4) data', async () => {
+      // Same empty-category input as the v4 test, but saved at version 4. The
+      // restore step (saved version < 4) is skipped, so the empty category is
+      // not inferred — fromJSON defaults it to 'other'.
+      localStorage.setItem('transaction-storage', JSON.stringify({
+        state: {
+          transactions: [{
+            id: 'mig-gate', date: '2024-02-15T00:00:00.000Z', description: 'Salary - February',
+            amount: 50000, type: 'credit', category: '', transactionSubType: 'income',
+            sourceType: 'bank', balance: null,
+          }],
+        },
+        version: 4,
+      }));
+
+      const { useTransactionStore: freshStore } = await import('@/lib/store/transactionStore?' + Date.now());
+      expect(freshStore.getState().transactions[0].category.id).toBe(Category.DEFAULT_ID);
+
+      localStorage.removeItem('transaction-storage');
+    });
+
+    it('version 0 data runs every step: category migrated and bankSummaries added', async () => {
+      localStorage.setItem('transaction-storage', JSON.stringify({
+        state: {
+          transactions: [{
+            id: 'mig-v0', date: '2024-01-15T00:00:00.000Z', description: 'EMI - Personal Loan',
+            amount: 15000, type: 'debit', category: 'bills', transactionSubType: 'bill_payment', balance: null,
+          }],
+        },
+        version: 0,
+      }));
+
+      const { useTransactionStore: freshStore } = await import('@/lib/store/transactionStore?' + Date.now());
+      const txn = freshStore.getState().transactions[0];
+      expect(txn.category.id).toBe('loans');
+      expect(txn.transactionSubType).toBe('debt_payment');
+      expect(freshStore.getState().bankSummaries).toEqual([]);
 
       localStorage.removeItem('transaction-storage');
     });
