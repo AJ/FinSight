@@ -144,7 +144,7 @@ export function PasswordDialog({
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent
-        className="sm:max-w-md"
+        className="z-[70] sm:max-w-md"
         onPointerDownOutside={(e) => e.preventDefault()}
       >
         <DialogHeader>

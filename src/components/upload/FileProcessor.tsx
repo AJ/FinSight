@@ -5,6 +5,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import { FileUpload } from "./FileUpload";
 import { PasswordDialog } from "./PasswordDialog";
 import { isPasswordError } from "@/lib/parsers/documentExtraction";
+import { isManualTypeSelectionError } from "@/lib/parsers/typeDetection";
 import { runPreReviewPipeline } from "@/lib/pipelines/preReviewPipeline";
 import { AbortManager } from '@/lib/utils/AbortManager';
 import { subscribeToLLMConnection } from '@/lib/store/llmConnectionStore';
@@ -86,10 +87,12 @@ export function FileProcessor({ onSuccess, onProcessingChange }: FileProcessorPr
   const [statementType, setStatementType] = useState<'auto' | 'bank' | 'credit_card' | undefined>(undefined);
   const [pendingTypeFile, setPendingTypeFile] = useState<File | null>(null);
   const [pendingTypePassword, setPendingTypePassword] = useState<string | undefined>();
+  // True when auto-detection already failed for the pending file — the dialog
+  // re-opens with auto-detect withdrawn so the user must pick a type explicitly.
+  const [typeDetectionFailed, setTypeDetectionFailed] = useState(false);
 
   // Duplicate file detection state
   const [duplicateDialogOpen, setDuplicateDialogOpen] = useState(false);
-  const [duplicateImportDate, setDuplicateImportDate] = useState<Date | null>(null);
   const [duplicateSourceType, setDuplicateSourceType] = useState<SourceType | null>(null);
   const [pendingHash, setPendingHash] = useState<string | null>(null);
 
@@ -115,6 +118,9 @@ export function FileProcessor({ onSuccess, onProcessingChange }: FileProcessorPr
     if (wasCancelledRef.current) {
       return;
     }
+
+    // Successful parse — clear any prior auto-detection failure flag.
+    setTypeDetectionFailed(false);
 
     if (transactionCount === 0) {
       throw new Error(
@@ -168,6 +174,17 @@ export function FileProcessor({ onSuccess, onProcessingChange }: FileProcessorPr
     setTimeout(() => router.push("/review"), 1000);
   }, [llmModel, llmStatus?.selectedModel, setModel, onSuccess, router]);
 
+  // Recovery for failed auto type-detection: re-open the statement-type dialog
+  // with auto-detect withdrawn (typeDetectionFailed) so the user must pick an
+  // explicit type. The pending file is retained for the re-run.
+  const reopenTypeDialogForManualSelection = useCallback(() => {
+    setTypeDetectionFailed(true);
+    setStatementType(undefined);
+    setStatementTypeDialogOpen(true);
+    setIsProcessing(false);
+    setProgress(null);
+  }, []);
+
   // Process file after statement type is selected
   const processFileWithStatementType = useCallback(async (
     file: File,
@@ -213,10 +230,12 @@ export function FileProcessor({ onSuccess, onProcessingChange }: FileProcessorPr
 
       if (isPasswordError(err)) {
         setPendingFile(file);
-        setPasswordDialogOpen(true);
         setPendingTypeFile(file);
         setPendingTypePassword(password);
         setStatementType(selectedType);
+        setIsProcessing(false);
+        setProgress(null);
+        setPasswordDialogOpen(true);
         throw err;
       }
 
@@ -246,16 +265,23 @@ export function FileProcessor({ onSuccess, onProcessingChange }: FileProcessorPr
     const fileToProcess = pendingFile ?? pendingTypeFile;
     if (!fileToProcess) return;
 
+    // Close the dialog immediately on submit. The parse pipeline (PDF decrypt + LLM
+    // extraction + categorization) is slow, so awaiting it before closing left the dialog
+    // stuck in "Unlocking..." for the whole parse. The dialog is reopened below ONLY when
+    // the password turns out to be wrong.
     setPasswordDialogOpen(false);
     setIsProcessing(true);
     setProgress("Parsing PDF with password...");
+    setPasswordError(null);
 
     try {
       // Use the saved statement type from the type dialog (or 'auto' if coming from old flow)
       const typeToUse = statementType ?? 'auto';
-      await processFileWithStatementType(fileToProcess, typeToUse, password);
-      // Success - clear password state
-      debugLog('[FileProcessor][PasswordSubmit] Password correct, file processed successfully. Clearing password state and setpendingfile to null');
+      // Forward the hash so postReviewPipeline stamps it on every transaction.
+      // Without it, re-uploading the same password-protected file later can't be
+      // matched (transactions have no sourceFileHash), so duplicate detection fails.
+      await processFileWithStatementType(fileToProcess, typeToUse, password, pendingHash ?? undefined);
+      // Success - clear password state (dialog already closed above)
       setPendingFile(null);
       setPasswordAttempts(0);
       setPendingTypeFile(null);
@@ -273,9 +299,18 @@ export function FileProcessor({ onSuccess, onProcessingChange }: FileProcessorPr
           setPendingTypePassword(undefined);
           setError("Too many failed password attempts. Please try uploading again.");
         } else {
+          setIsProcessing(false);
+          setProgress(null);
           setPasswordError(`Incorrect password. ${retry.remaining} attempt${retry.remaining > 1 ? "s" : ""} remaining.`);
           setPasswordDialogOpen(true);
         }
+      } else if (isManualTypeSelectionError(err)) {
+        // Detection failed after the password succeeded — re-prompt for type.
+        // Retain the password so the re-run with an explicit type can reuse it.
+        setPendingFile(null);
+        setPasswordAttempts(0);
+        setPendingTypePassword(password);
+        reopenTypeDialogForManualSelection();
       } else {
         setPendingFile(null);
         setPasswordAttempts(0);
@@ -284,11 +319,10 @@ export function FileProcessor({ onSuccess, onProcessingChange }: FileProcessorPr
         setError(err instanceof Error ? err.message : "Failed to parse PDF file");
       }
     } finally {
-      debugLog('[FileProcessor][PasswordSubmit] Finally block reached. Clearing processing state if not waiting for password. pendingFile:', pendingFile, 'passwordDialogOpen:', passwordDialogOpen);
       setIsProcessing(false);
       setProgress(null);
     }
-  }, [pendingFile, passwordAttempts, processFileWithStatementType, pendingTypeFile, statementType, passwordDialogOpen]);
+  }, [pendingFile, passwordAttempts, processFileWithStatementType, pendingTypeFile, statementType, reopenTypeDialogForManualSelection, pendingHash]);
 
   // Handle password dialog cancel
   const handlePasswordCancel = useCallback(() => {
@@ -323,6 +357,10 @@ export function FileProcessor({ onSuccess, onProcessingChange }: FileProcessorPr
           // Clear password attempt state since this is the first password attempt
           setPasswordAttempts(0);
           setPasswordError(null);
+        } else if (isManualTypeSelectionError(err)) {
+          // Auto-detection failed — re-prompt for an explicit type. Keep
+          // pendingTypeFile so the re-opened dialog can re-process it.
+          reopenTypeDialogForManualSelection();
         } else {
           const errorMessage = err instanceof Error ? err.message : "Failed to process file";
           setError(errorMessage);
@@ -333,7 +371,7 @@ export function FileProcessor({ onSuccess, onProcessingChange }: FileProcessorPr
         }
       }
     }
-  }, [pendingTypeFile, statementType, pendingTypePassword, pendingHash, processFileWithStatementType]);
+  }, [pendingTypeFile, statementType, pendingTypePassword, pendingHash, processFileWithStatementType, reopenTypeDialogForManualSelection]);
 
   // Handle statement type dialog cancel
   const handleStatementTypeCancel = useCallback(() => {
@@ -379,7 +417,6 @@ export function FileProcessor({ onSuccess, onProcessingChange }: FileProcessorPr
     setDuplicateDialogOpen(false);
     setPendingTypeFile(null);
     setPendingHash(null);
-    setDuplicateImportDate(null);
     setDuplicateSourceType(null);
     setIsProcessing(false);
     setProgress(null);
@@ -393,13 +430,13 @@ export function FileProcessor({ onSuccess, onProcessingChange }: FileProcessorPr
     setProgress(null);
     setPasswordAttempts(0);
     setPasswordError(null);
+    setTypeDetectionFailed(false);
 
     try {
       // Check for duplicate file
       const hash = await computeFileHash(file);
       const check = hasFileImported(hash);
       if (check.alreadyImported) {
-        setDuplicateImportDate(check.importDate ?? null);
         setDuplicateSourceType(check.sourceType ?? null);
         setPendingHash(hash);
         setPendingTypeFile(file);
@@ -499,7 +536,6 @@ export function FileProcessor({ onSuccess, onProcessingChange }: FileProcessorPr
         }}
         onSubmit={handlePasswordSubmit}
         error={passwordError || undefined}
-        isProcessing={false}
         reason={passwordAttempts > 0 ? 2 : 1}
       />
 
@@ -551,7 +587,9 @@ export function FileProcessor({ onSuccess, onProcessingChange }: FileProcessorPr
           <DialogHeader>
             <DialogTitle>Statement Type</DialogTitle>
             <DialogDescription>
-              How should we detect the statement type?
+              {typeDetectionFailed
+                ? "Couldn't determine the statement type automatically — please select it."
+                : "How should we detect the statement type?"}
             </DialogDescription>
           </DialogHeader>
           <RadioGroup
@@ -565,7 +603,7 @@ export function FileProcessor({ onSuccess, onProcessingChange }: FileProcessorPr
             }}
           >
             {/* Auto-detect is only available for PDFs */}
-            {isAutoDetectAvailable(pendingTypeFile?.name ?? null) && (
+            {isAutoDetectAvailable(pendingTypeFile?.name ?? null) && !typeDetectionFailed && (
               <div className="flex items-start space-x-2">
                 <RadioGroupItem value="auto" id="auto-detect" />
                 <Label htmlFor="auto-detect" className="flex-1">
@@ -612,11 +650,8 @@ export function FileProcessor({ onSuccess, onProcessingChange }: FileProcessorPr
           <DialogHeader>
             <DialogTitle>Duplicate Statement Detected</DialogTitle>
             <DialogDescription>
-              This statement was already imported
-              {duplicateImportDate && (
-                <> on {duplicateImportDate.toLocaleDateString()}</>
-              )}
-              . Importing it again will create duplicate transactions.
+              This statement was already imported. Importing it again will create
+              duplicate transactions.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter className="gap-2">
