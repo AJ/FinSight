@@ -493,16 +493,16 @@ describe.skipIf(shouldSkip())('Token Budget Instrumentation', () => {
 
   it('calibrates CHARS_PER_TOKEN against actual tokenizer', async () => {
     const samples = [
-      // Short text
-      'HDFC Bank Credit Card Statement REDACTED',
-      // Medium — typical transaction row
-      'REDACTED',
-      // Larger — account summary section
+      // Short text (synthetic — no real PII)
+      'HDFC Bank Credit Card Statement ALEX SMITH 1234',
+      // Medium — typical transaction row (synthetic)
+      '03/08/2025 17:25:01 ACME RETAIL PRIVATE BANGALORE 1,242.50',
+      // Larger — account summary section (synthetic balances)
       `Account Summary
 Opening Payment/ Purchase/ Finance
 Total Dues
 Balance Credits Debits Charges
-REDACTED`,
+50,000.00 55,000.00 30,000.00 0.00 25,000.00`,
     ];
 
     console.log('');

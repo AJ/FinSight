@@ -5,9 +5,11 @@ import { clearAllStorage } from '@tests/utils/storageHelpers';
 import * as path from 'path';
 
 // PDF fixture — CSV files bypass LLM extraction entirely (direct parseCSV path),
-// so we need a PDF to actually trigger the LLM retry loop.
-const PDF_FIXTURE = path.resolve(__dirname, '../../public/test.pdf');
-const PDF_PASSWORD = 'REDACTED';
+// so we need a PDF to actually trigger the LLM retry loop. Uses the synthetic
+// encrypted fixture (created with jspdf, password "correctpass") — never a real
+// statement. See tests/e2e/pdfPassword.spec.ts for the same fixture's origin.
+const PDF_FIXTURE = path.resolve(__dirname, '../fixtures/bank_encrypted.pdf');
+const PDF_PASSWORD = 'correctpass';
 
 test.describe('retryEngine Prompt Evolution', () => {
   test.beforeEach(async ({ page, context }) => {
