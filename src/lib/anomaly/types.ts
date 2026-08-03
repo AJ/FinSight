@@ -6,7 +6,7 @@
 
 export type AnomalyType =
   | 'high_amount'        // Unusually high for category
-  | 'low_amount'         // Unusually low (large refund/credit)
+  | 'low_amount'         // Unusually low expense for the category (far below the mean)
   | 'duplicate'          // Potential duplicate charge
   | 'unusual_frequency'; // Multiple charges to same merchant
 
