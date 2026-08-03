@@ -10,8 +10,13 @@ export interface StatementLike {
   statementDate: Date | string;
 }
 
+import { parseDate } from "@/lib/parsers/dateParser";
+
 export function toDate(v: Date | string): Date {
-  return v instanceof Date ? v : new Date(v);
+  if (v instanceof Date) return v;
+  // Parse via the shared parser; fall back to a raw Date so this never returns Invalid for
+  // inputs parseDate rejects (preserving the original never-null contract).
+  return parseDate(v) ?? new Date(v);
 }
 
 export function groupStatementsByCard<T extends StatementLike>(

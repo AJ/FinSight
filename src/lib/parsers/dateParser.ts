@@ -243,6 +243,42 @@ export function extractDateFromText(text: string): Date | null {
 }
 
 /**
+ * Extract EVERY date token in `text` (not just the first), each parsed under `preferredOrder`.
+ * Used by verification to answer "does this transaction's date appear in the text?" — matching
+ * the original "appears anywhere" semantics, including lines that carry both a value date and a
+ * posting date (where a first-token-only match would miss).
+ */
+export function extractAllDatesFromText(
+  text: string,
+  preferredOrder: "DMY" | "MDY" = "DMY"
+): Date[] {
+  if (!text) return [];
+  const results: Date[] = [];
+
+  const direct = parseDate(text, preferredOrder);
+  if (direct) results.push(direct);
+
+  const dateRegexes = [
+    /\d{4}[-/]\d{1,2}[-/]\d{1,2}/,             // YYYY-MM-DD
+    /\d{1,2}[-/]\d{1,2}[-/]\d{4}/,             // DD/MM/YYYY
+    /\d{1,2}[-/]\d{1,2}[-/]\d{2}(?!\d)/,       // DD/MM/YY
+    /\d{1,2}[-/\s][A-Za-z]{3,9}[-/\s,]*\d{2,4}/, // DD-Mon-YYYY
+    /[A-Za-z]{3,9}\s+\d{1,2},?\s*\d{2,4}/,     // Mon DD, YYYY
+    /\d{1,2}\.\d{1,2}\.\d{2,4}/,               // DD.MM.YYYY
+  ];
+
+  for (const re of dateRegexes) {
+    const global = new RegExp(re.source, re.flags.includes("g") ? re.flags : re.flags + "g");
+    let m: RegExpExecArray | null;
+    while ((m = global.exec(text)) !== null) {
+      const parsed = parseDate(m[0], preferredOrder);
+      if (parsed) results.push(parsed);
+    }
+  }
+  return results;
+}
+
+/**
  * Given a batch of date strings, detect whether the format is DD/MM or MM/DD.
  * Useful for disambiguating numeric-only dates.
  * Returns 'DMY' or 'MDY'.
@@ -279,5 +315,26 @@ export function excelSerialToDate(serial: number): Date | null {
   const d = new Date(epoch.getTime() + serial * 86400000);
   if (d.getFullYear() < 1990 || d.getFullYear() > 2100) return null;
   return d;
+}
+
+// "Does this text look like a date?" — single source of truth for the parser pipeline
+// (moved from datePatterns.ts, now deleted). Shared by rowBuilder and tableDetector.
+const DATE_DIGIT_SEP = /\d{1,2}[\/\-.]\d{1,2}/;
+const DATE_MONTH_SEP = /\d{1,2}[\/\-\s.](?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)/i;
+
+export function isDateLike(text: string): boolean {
+  return DATE_DIGIT_SEP.test(text) || DATE_MONTH_SEP.test(text);
+}
+
+/**
+ * Parse a form <input type="date"> value ("yyyy-MM-dd") to LOCAL midnight.
+ * Date-only strings parse as UTC midnight by default, which is inconsistent with the rest of
+ * the dialog (local-midnight bounds, date-fns in local time). Append T00:00:00 so the value
+ * parses as local midnight — the calendar date the user typed, in their own timezone.
+ */
+export function parseFormDate(value: string): Date | null {
+  if (!value) return null;
+  const parsed = new Date(`${value}T00:00:00`);
+  return isNaN(parsed.getTime()) ? null : parsed;
 }
 
