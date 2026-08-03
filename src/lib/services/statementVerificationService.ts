@@ -7,16 +7,33 @@ function mergeVerificationConfidence(
   transactions: Transaction[],
   report: VerificationReport,
 ): Transaction[] {
-  const verifiedMap = new Map(
-    report.verified.map((t) => [t.id, t.confidence]),
-  );
+  // Verified and rejected both carry an engine score (0-100). Key both so a rejected row
+  // gets its low score stamped — otherwise it reads verificationConfidence undefined and
+  // the review tooltip can only show category confidence, hiding the verification failure
+  // that flagged it.
+  const scoreById = new Map<string, number>();
+  for (const v of report.verified) {
+    if (v && typeof v.id === 'string' && typeof v.confidence === 'number') {
+      scoreById.set(v.id, v.confidence);
+    }
+  }
+  for (const r of report.rejected) {
+    if (r && typeof r.id === 'string' && typeof r.confidence === 'number') {
+      scoreById.set(r.id, r.confidence);
+    }
+  }
 
-  return transactions.map((t) =>
-    Transaction.fromJSON({
+  return transactions.map((t) => {
+    const raw = scoreById.get(t.id);
+    return Transaction.fromJSON({
       ...t.toJSON(),
-      verificationConfidence: verifiedMap.get(t.id),
-    }),
-  );
+      // The report scores confidence 0-100 (a weighted sum in verificationEngine).
+      // Transaction.verificationConfidence is 0-1, matching categoryConfidence and
+      // llmConfidence, and what ReviewTransactionRow's thresholds expect. Normalize
+      // at this boundary so the report's native scale doesn't leak onto the model.
+      verificationConfidence: typeof raw === 'number' ? raw / 100 : undefined,
+    });
+  });
 }
 
 function buildVerificationWarning(
@@ -96,9 +113,15 @@ export function attachVerificationToExtractionBundle(
 
   const inputs = bundle.verificationInputs;
 
+  // Verify the CLASSIFIED transactions (bundle.transactions), not inputs.transactions. The
+  // verification inputs are built at extraction time (pre-classification) and carry no subtypes,
+  // so the CC aggregate's subtype sums (totalPayments, totalPurchases, …) would all read 0 if
+  // verified against them. Classification only changes category/subtype/confidence — never
+  // id/amount/date/description/type — so matching against the classified set is identical, and
+  // the aggregate now reflects the classified subtypes (D3: extract → classify → verify).
   const report = verifyStatement(
     inputs.rawText,
-    inputs.transactions,
+    bundle.transactions,
     { kind: inputs.kind, ...inputs.meta },
   );
 

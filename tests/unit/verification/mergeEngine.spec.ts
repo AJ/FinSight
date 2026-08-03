@@ -1,7 +1,8 @@
 import { describe, it, expect } from 'vitest';
-import { mergeOutputs } from '@/lib/verification/mergeEngine';
+import { mergeOutputs, validateCCCrossSection, validateBankCrossSection } from '@/lib/verification/mergeEngine';
 import { mergeChunkTransactions } from '@/lib/parsers/transactionChunking';
 import type { BankSummary, CCSummary } from '@/lib/parsers/extractSummary';
+import type { ExtractedTransaction } from '@/types/extractedTransaction';
 import { makeExtractedTransaction as makeTxn } from '@tests/unit/factories';
 
 describe('mergeOutputs — bank statement', () => {
@@ -415,5 +416,111 @@ describe('mergeOutputs — chunk overlap amount conflicts', () => {
 
     expect(result.transactions).toHaveLength(2);
     expect(result.meta.warnings.some(w => w.includes('potential duplicate'))).toBe(false);
+  });
+});
+
+// --- Boundary tests added 2026-07-18 (depth-audit section D) ---
+// The near-duplicate / cross-section / confidence thresholds were previously tested
+// only far from the boundary. These pin each decision line from the side that flips it.
+
+describe('mergeOutputs — near-duplicate similarity threshold (0.95) isolated', () => {
+  it('does NOT flag same-amount/same-date txns when description similarity < 0.95', () => {
+    // Amount and date pass every gate, so the ONLY thing that can flag is the bigram
+    // Dice similarity. "amazon" vs "amazing": intersection {am,ma,az}=3 over 5+6 bigrams
+    // → 2*3/11 = 0.545, well below 0.95. This isolates the similarity threshold.
+    const txn1 = makeTxn({ description: 'amazon', amount: 1299, type: 'debit', date: '2024-01-15' });
+    const txn2 = makeTxn({ description: 'amazing', amount: 1299, type: 'debit', date: '2024-01-15' });
+    const result = mergeOutputs('bank', null, { transactions: [txn1, txn2] }, null, []);
+    expect(result.meta.warnings.some(w => w.includes('potential duplicate'))).toBe(false);
+  });
+
+  it('DOES flag same-amount/same-date txns when descriptions are identical (similarity 1.0)', () => {
+    // The matching side of the 0.95 threshold — identical descriptions score 1.0.
+    const txn1 = makeTxn({ description: 'amazon retail', amount: 1299, type: 'debit', date: '2024-01-15' });
+    const txn2 = makeTxn({ description: 'amazon retail', amount: 1299, type: 'debit', date: '2024-01-15' });
+    const result = mergeOutputs('bank', null, { transactions: [txn1, txn2] }, null, []);
+    expect(result.meta.warnings.some(w => w.includes('potential duplicate'))).toBe(true);
+  });
+});
+
+describe('mergeOutputs — confidence deduction pinned to exact values', () => {
+  it('one potential-duplicate warning deducts exactly 0.05 (1.0 → 0.95)', () => {
+    // Valid, reconciling summary (no summary-fail / balance / cross-section warnings),
+    // no balances on txns (so balance-reconciliation is skipped), no accountNumber
+    // (so bank cross-section is skipped). The ONLY warning is the single duplicate.
+    const summary = {
+      statementDate: '2024-01-31',
+      statementPeriodStart: '2024-01-01',
+      statementPeriodEnd: '2024-01-31',
+      openingBalance: 50000,
+      closingBalance: 50000,
+    } as BankSummary;
+    const txns = [
+      makeTxn({ description: 'amazon retail', amount: 1299, type: 'debit', date: '2024-01-15' }),
+      makeTxn({ description: 'amazon retail', amount: 1299, type: 'debit', date: '2024-01-15' }),
+    ];
+    const result = mergeOutputs('bank', summary, { transactions: txns }, null, []);
+    expect(result.meta.confidence).toBe(0.95);
+  });
+
+  it('a summary-extraction-failed warning deducts exactly 0.30 (1.0 → 0.70)', () => {
+    // computeConfidence subtracts per matching warning STRING. The duplicate path emits
+    // a single aggregated string (so N pairs still only deduct 0.05 once); a null summary
+    // emits exactly one "Summary extraction failed" string → 0.30 deduction.
+    const result = mergeOutputs('bank', null, {
+      transactions: [makeTxn({ description: 'amazon retail', amount: 1299, type: 'debit', date: '2024-01-15' })],
+    }, null, []);
+    expect(result.meta.confidence).toBe(0.70);
+  });
+});
+
+describe('validateCCCrossSection — 15% tolerance boundary', () => {
+  // debitGapPct > 0.15 warns (strictly greater). Both sides of the line.
+  it('does NOT warn when the debit gap is exactly 15%', () => {
+    const summary = { purchasesAndCharges: 1000 } as CCSummary;
+    const txns = [makeTxn({ amount: 850, type: 'debit' })] as ExtractedTransaction[]; // gap 150 → 15.0%
+    expect(validateCCCrossSection(summary, txns)).toEqual([]);
+  });
+
+  it('DOES warn when the debit gap is just over 15%', () => {
+    const summary = { purchasesAndCharges: 1000 } as CCSummary;
+    const txns = [makeTxn({ amount: 849, type: 'debit' })] as ExtractedTransaction[]; // gap 151 → 15.1%
+    const warnings = validateCCCrossSection(summary, txns);
+    expect(warnings.some(w => w.includes('cross-section'))).toBe(true);
+  });
+
+  it('does NOT warn when the credit gap is exactly 15%', () => {
+    const summary = { paymentsReceived: 1000 } as CCSummary;
+    const txns = [makeTxn({ amount: 850, type: 'credit' })] as ExtractedTransaction[];
+    expect(validateCCCrossSection(summary, txns)).toEqual([]);
+  });
+
+  it('DOES warn when the credit gap is just over 15%', () => {
+    const summary = { paymentsReceived: 1000 } as CCSummary;
+    const txns = [makeTxn({ amount: 849, type: 'credit' })] as ExtractedTransaction[];
+    expect(validateCCCrossSection(summary, txns).some(w => w.includes('cross-section'))).toBe(true);
+  });
+});
+
+describe('validateBankCrossSection — 1.0 tolerance boundary', () => {
+  // diff > 1.0 warns (strictly greater). calculatedClosing = opening + credit - debit.
+  it('does NOT warn when the calculated-vs-stated closing diff is exactly 1.0', () => {
+    const summary = { openingBalance: 1000, closingBalance: 899 } as BankSummary;
+    // one 100 debit → calculatedClosing = 900; |900 - 899| = 1.0 → not > 1.0
+    const txns = [makeTxn({ amount: 100, type: 'debit' })] as ExtractedTransaction[];
+    expect(validateBankCrossSection(summary, txns)).toEqual([]);
+  });
+
+  it('DOES warn when the calculated-vs-stated closing diff is just over 1.0', () => {
+    const summary = { openingBalance: 1000, closingBalance: 898.99 } as BankSummary;
+    // calculatedClosing = 900; |900 - 898.99| = 1.01 → > 1.0
+    const txns = [makeTxn({ amount: 100, type: 'debit' })] as ExtractedTransaction[];
+    expect(validateBankCrossSection(summary, txns).some(w => w.includes('cross-section'))).toBe(true);
+  });
+
+  it('returns no warnings when balances are null', () => {
+    const summary = { openingBalance: null, closingBalance: null } as unknown as BankSummary;
+    const txns = [makeTxn({ amount: 100, type: 'debit' })] as ExtractedTransaction[];
+    expect(validateBankCrossSection(summary, txns)).toEqual([]);
   });
 });

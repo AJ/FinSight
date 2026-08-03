@@ -260,6 +260,48 @@ describe('attachVerificationToExtractionBundle', () => {
     expect(unmatched).toBeDefined();
   });
 
+  it('stamps verificationConfidence on the 0-1 scale, not the report 0-100 scale', () => {
+    // The engine scores 0-100 (weighted sum up to 100); Transaction.verificationConfidence
+    // is documented and consumed (ReviewTransactionRow) as 0-1. A matched transaction must
+    // land in (0, 1] — never the raw 0-100 value, which would make every verified row trip
+    // the row's diff check and skip its graduated bands.
+    const matchedTxn = makeTransaction({ id: 'tx-matched', description: 'Test Transaction', amount: 100 });
+    const bundle = makeBundle({
+      transactions: [matchedTxn],
+      verificationInputs: bankVerificationInputs({
+        rawText: '2024-01-15 Test Transaction 100 debit',
+        transactions: [matchedTxn],
+        meta: { openingBalance: 1000, closingBalance: 900, currency: 'INR' },
+      }),
+    });
+
+    const result = attachVerificationToExtractionBundle(bundle);
+    const matched = result.transactions.find((t) => t.id === 'tx-matched');
+    expect(matched?.verificationConfidence).toBeGreaterThan(0);
+    expect(matched?.verificationConfidence).toBeLessThanOrEqual(1);
+  });
+
+  it('stamps verificationConfidence on rejected transactions (so the low score is displayable)', () => {
+    // A rejected transaction (< MIN_CONFIDENCE_ACCEPT) is scored by the engine but the
+    // score must reach the Transaction so the review tooltip can show the actual
+    // verification confidence — otherwise a flagged row displays only its (high) category
+    // confidence and hides the verification failure that flagged it.
+    const rejectedTxn = makeTransaction({ id: 'tx-rejected', description: 'Phantom Not In Text', amount: 99999, type: 'debit' });
+    const bundle = makeBundle({
+      transactions: [rejectedTxn],
+      verificationInputs: bankVerificationInputs({
+        rawText: 'completely unrelated text with no amounts',
+        transactions: [rejectedTxn],
+        meta: { openingBalance: 1000, closingBalance: 1000, currency: 'INR' },
+      }),
+    });
+
+    const result = attachVerificationToExtractionBundle(bundle);
+    const stamped = result.transactions.find((t) => t.id === 'tx-rejected');
+    expect(stamped?.verificationConfidence).toBeDefined();
+    expect(stamped!.verificationConfidence!).toBeLessThan(0.75);
+  });
+
   // ── Nuanced warning tests ────────────────────────────────────────────────────
 
   it('bank: recon passes but unverified transactions → nuanced warning', () => {
@@ -267,6 +309,7 @@ describe('attachVerificationToExtractionBundle', () => {
     // But rawText is generic — transaction won't verify against it
     const txn = makeTransaction({ amount: 100, type: 'credit', description: 'Something Not In Text' });
     const bundle = makeBundle({
+      transactions: [txn],
       verificationInputs: bankVerificationInputs({
         rawText: 'unrelated text without transaction details',
         transactions: [txn],

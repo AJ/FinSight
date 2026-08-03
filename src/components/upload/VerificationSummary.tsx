@@ -13,6 +13,13 @@ import {
 interface VerificationSummaryProps {
   report: VerificationReport;
   currency: Currency;
+  // Count of transactions that carry any review reason — the SAME "flagged" definition
+  // the rows use (a flag renders when reviewReasons.length > 0). Passed in from the page
+  // so the summary's count and the row markers can never disagree. report.rejected alone
+  // undercounted: rows also flag for non-rejection reasons (low category confidence,
+  // missing fields), and — before rejection was surfaced as a reason — rejected rows
+  // flagged nowhere despite being counted here.
+  flaggedCount: number;
 }
 
 function MismatchDetail({ label, extracted, expected, currency }: {
@@ -25,23 +32,24 @@ function MismatchDetail({ label, extracted, expected, currency }: {
     <div className="flex items-center justify-between text-xs pl-4">
       <span className="text-muted-foreground">{label}</span>
       <span className="text-red-400">
-        {formatCurrency(extracted, currency, false)} extracted vs {formatCurrency(expected, currency, false)} expected
+        {/* showSign=true: a computed closing can be legitimately negative (overdraft / wrong
+            opening balance). Swallowing the "-"" here hid a ~90k discrepancy as ~8k. */}
+        {formatCurrency(extracted, currency, true)} extracted vs {formatCurrency(expected, currency, true)} expected
       </span>
     </div>
   );
 }
 
-export function VerificationSummary({ report, currency }: VerificationSummaryProps) {
+export function VerificationSummary({ report, currency, flaggedCount }: VerificationSummaryProps) {
   const [isExpanded, setIsExpanded] = useState(false);
 
   const kind = classifyVerificationReport(report);
   const passed = getVerificationPassed(report, kind);
-  const rejected = report.rejected;
 
   const ccReport = report.ccAggregate ?? null;
 
-  // Don't show anything if verification passed cleanly
-  if (passed && rejected.length === 0) {
+  // Don't show anything if verification passed cleanly and no rows need attention.
+  if (passed && flaggedCount === 0) {
     return null;
   }
 
@@ -105,11 +113,11 @@ export function VerificationSummary({ report, currency }: VerificationSummaryPro
                   currency={currency}
                 />
               )}
-              {!ccReport.transactionSums.passed && ccReport.transactionSums.totalCredits !== undefined && ccReport.transactionSums.statementPayments !== undefined && (
+              {!ccReport.transactionSums.passed && ccReport.transactionSums.totalPayments !== undefined && ccReport.transactionSums.statementPayments !== undefined && (
                 <MismatchDetail
                   label="Payments"
                   extracted={ccReport.transactionSums.statementPayments}
-                  expected={ccReport.transactionSums.totalCredits}
+                  expected={ccReport.transactionSums.totalPayments}
                   currency={currency}
                 />
               )}
@@ -140,10 +148,10 @@ export function VerificationSummary({ report, currency }: VerificationSummaryPro
             </>
           )}
 
-          {rejected.length > 0 && (
+          {flaggedCount > 0 && (
             <div className="flex items-center justify-between">
               <span className="text-muted-foreground">Flagged Transactions</span>
-              <span className="text-red-500">{rejected.length}</span>
+              <span className="text-red-500">{flaggedCount}</span>
             </div>
           )}
 

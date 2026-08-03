@@ -11,6 +11,12 @@ import { ExtractedTransaction } from '@/types/extractedTransaction';
 import { debugLog } from '@/lib/utils/debug';
 import { parseDate } from '@/lib/parsers/dateParser';
 
+// Coerce an LLM-supplied balance value to number | null. Non-numeric values (strings the model
+// sometimes returns) collapse to null rather than poisoning downstream arithmetic.
+function coerceNullableNumber(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
 /**
  * Validate CC summary.
  */
@@ -26,6 +32,7 @@ export function validateCCSummary(summary: unknown): ValidationResult<CCSummary>
 
   const s = summary as Partial<CCSummary & { previousBalanceCandidates?: Array<{ label: string; value: number }> }>;
   const errors: string[] = [];
+  const warnings: string[] = [];
 
   // Date format checks - validate and convert to Date objects
   if (s.statementDate !== null && s.statementDate !== undefined) {
@@ -78,15 +85,19 @@ export function validateCCSummary(summary: unknown): ValidationResult<CCSummary>
     errors.push('summary.availableCredit must be <= creditLimit');
   }
 
-  // CRITICAL: previousBalance must be <= creditLimit
+  // Over-limit previousBalance is often legitimate (fees, interest, over-limit spending),
+  // so a strict exceedance is a warning, not a hard error. A field-swap extraction mistake
+  // usually makes previousBalance EQUAL creditLimit (which passes below); strict exceedance
+  // is more plausibly a real over-limit balance. Keep it as a warning so the signal surfaces
+  // without triggering retries that would push the model to corrupt a correct value.
   if (
     s.previousBalance !== null && s.previousBalance !== undefined &&
     s.creditLimit !== null && s.creditLimit !== undefined &&
     s.previousBalance > s.creditLimit
   ) {
-    errors.push(
-      'summary.previousBalance must be <= creditLimit — ' +
-      'likely wrong field extracted (creditLimit or availableCredit grabbed instead)'
+    warnings.push(
+      'summary.previousBalance > creditLimit — possibly a wrong field extracted ' +
+      '(creditLimit or availableCredit grabbed instead), but may be a legitimate over-limit balance'
     );
   }
 
@@ -99,7 +110,7 @@ export function validateCCSummary(summary: unknown): ValidationResult<CCSummary>
   return {
     valid: errors.length === 0,
     errors,
-    warnings: [],
+    warnings,
     data: s as CCSummary
   };
 }
@@ -239,8 +250,29 @@ export function validateTransactions(data: unknown): ValidationResult<Transactio
       continue;
     }
 
+    // Our extraction formatter joins columns with "||" before feeding the text to the LLM.
+    // If a returned field still contains "||", the model failed to split the columns and
+    // merged adjacent ones (e.g. swallowed the amount column into the description). Reject
+    // the row so retryEngine re-prompts with this feedback — do not silently carry the
+    // merged value through. Real narration never contains "||".
+    if (typeof tx.description === 'string' && tx.description.includes('||')) {
+      errors.push(
+        `Transaction[${i}]: description "${tx.description}" contains the "||" column delimiter — each || column maps to exactly one field, do not merge columns`,
+      );
+      continue;
+    }
+
     // Noise row rejection - only reject if description EXACTLY matches pattern
     if (tx.description && NOISE_ROW_PATTERNS.some(p => p.test(tx.description!.trim()))) {
+      // Observability: the opening/closing balance rows live in the transaction table for many
+      // statements, and the transaction regime (column-extracted) is more reliable than the
+      // summary section (whose label/value grid scrambles under PDF text flattening). Log these
+      // before dropping so we can confirm the extracted amount/type before wiring them in as a
+      // recovery source for the summary pass.
+      const descLower = tx.description.trim().toLowerCase();
+      if (/^opening\s+balance/.test(descLower) || /^closing\s+balance/.test(descLower)) {
+        debugLog('validation', `Balance row dropped: desc="${tx.description}" amount=${tx.amount} type=${tx.type} subType=${tx.transactionSubType ?? '(none)'}`);
+      }
       warnings.push(`Transaction[${i}]: "${tx.description}" looks like a balance/total row — skipped`);
       continue;
     }
@@ -280,6 +312,10 @@ export function validateTransactions(data: unknown): ValidationResult<Transactio
     valid: errors.length === 0,
     errors,
     warnings,
-    data: { transactions: validTxns }
+    data: {
+      transactions: validTxns,
+      openingBalance: coerceNullableNumber((normalized as Record<string, unknown>).openingBalance),
+      closingBalance: coerceNullableNumber((normalized as Record<string, unknown>).closingBalance),
+    }
   };
 }

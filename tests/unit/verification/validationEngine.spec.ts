@@ -154,13 +154,17 @@ describe('validateCCSummary', () => {
     expect(result.valid).toBe(true);
   });
 
-  it('rejects previousBalance > creditLimit', () => {
+  it('warns (does not hard-error) on previousBalance > creditLimit', () => {
+    // Over-limit balances are legitimate (fees, interest, over-limit spending), so an
+    // over-limit previousBalance is a suspicion, not a hard validation failure. It must
+    // not trigger retries or rejection — only surface as a warning.
     const result = validateCCSummary({
       previousBalance: 150000,
       creditLimit: 100000,
     });
-    expect(result.valid).toBe(false);
-    expect(result.errors.some(e => e.includes('previousBalance'))).toBe(true);
+    expect(result.valid).toBe(true);
+    expect(result.errors).toEqual([]);
+    expect(result.warnings.some(w => w.includes('previousBalance'))).toBe(true);
   });
 
   it('passes when previousBalance equals creditLimit', () => {
@@ -503,6 +507,26 @@ describe('validateTransactions', () => {
     expect(result.valid).toBe(false);
   });
 
+  it('rejects a description that still contains the "||" column delimiter (model merged columns)', () => {
+    // Our extraction formatter joins columns with "||". If the model returns a field still
+    // containing "||", it failed to split columns (e.g. swallowed the amount column into the
+    // description). Reject so the retry loop re-prompts, rather than silently carrying the
+    // merged value through.
+    const result = validateTransactions([
+      { date: '2024-01-15', description: 'UPI/Deshna Saraogi/From Khushboo||-1,950.00', amount: 1950, type: 'debit' },
+    ]);
+    expect(result.valid).toBe(false);
+    expect(result.errors.some((e) => e.includes('column delimiter'))).toBe(true);
+    expect(result.data!.transactions).toHaveLength(0);
+  });
+
+  it('accepts normal narration containing single slashes/pipes (only "||" is our delimiter)', () => {
+    const result = validateTransactions([
+      { date: '2024-01-15', description: 'UPI/Deshna/5673/Paid via CRED', amount: 1950, type: 'debit' },
+    ]);
+    expect(result.valid).toBe(true);
+  });
+
   it('warns but does not reject noise row "Opening Balance"', () => {
     const result = validateTransactions([
       { date: '2024-01-15', description: 'Opening Balance', amount: 50000, type: 'credit' },
@@ -657,5 +681,36 @@ describe('validateTransactions', () => {
     ]);
     expect(result.valid).toBe(true);
     expect(result.warnings.some(w => w.includes('international') && w.includes('originalCurrency'))).toBe(true);
+  });
+
+  // ─── Balance side-channel (openingBalance / closingBalance) ───────────────
+
+  it('passes through openingBalance/closingBalance when present as numbers', () => {
+    const result = validateTransactions({
+      transactions: [],
+      openingBalance: 90117.27,
+      closingBalance: 49154.62,
+    });
+    expect(result.valid).toBe(true);
+    expect(result.data?.openingBalance).toBe(90117.27);
+    expect(result.data?.closingBalance).toBe(49154.62);
+  });
+
+  it('coerces non-numeric balance values to null', () => {
+    const result = validateTransactions({
+      transactions: [],
+      openingBalance: 'n/a',
+      closingBalance: null,
+    });
+    expect(result.valid).toBe(true);
+    expect(result.data?.openingBalance).toBeNull();
+    expect(result.data?.closingBalance).toBeNull();
+  });
+
+  it('defaults missing balance fields to null', () => {
+    const result = validateTransactions({ transactions: [] });
+    expect(result.valid).toBe(true);
+    expect(result.data?.openingBalance).toBeNull();
+    expect(result.data?.closingBalance).toBeNull();
   });
 });

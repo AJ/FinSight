@@ -1,4 +1,4 @@
-import { parse, isValid, format } from "date-fns"
+import { extractAllDatesFromText, detectDateOrder } from '@/lib/parsers/dateParser';
 import { Transaction } from '@/models/Transaction';
 import { SourceType } from '@/models/SourceType';
 import { debugLog } from '@/lib/utils/debug';
@@ -20,6 +20,10 @@ export type StatementMeta =
       interestCharged?: number;
       lateFee?: number;
       otherCharges?: number;
+      // NOTE: cashbackEarned ("earned this cycle") is NOT the same as cashback credited
+      // (the amount actually applied to the card this cycle). Earned is often accrued and
+      // credited in a later cycle. Only the CREDITED figure is relevant to this app's
+      // reconciliation — the realized credit is the rewards transaction, not this summary field.
       cashbackEarned?: number;
       currency?: string;
     };
@@ -38,7 +42,10 @@ export interface VerifiedTransaction extends Transaction {
 
 export interface VerificationReport {
   verified: VerifiedTransaction[]
-  rejected: Transaction[]
+  // Rejected rows were scored (< MIN_CONFIDENCE_ACCEPT) — they carry their confidence so
+  // downstream stampers can surface the low verification score on the row, not just the
+  // fact of rejection.
+  rejected: VerifiedTransaction[]
   duplicates: Transaction[]
   reconciliation: {
     passed: boolean
@@ -57,6 +64,7 @@ export interface VerificationReport {
       totalDebits: number
       totalCredits: number
       totalFees: number
+      totalPayments?: number
       statementPurchases?: number
       statementPayments?: number
       statementFees?: number
@@ -84,6 +92,10 @@ export function verifyStatement(
 ): VerificationReport {
 
   const normalizedText = normalize(rawText)
+  // Detect dd/MM vs MM/dd order once from the statement's numeric dates, so ambiguous numeric
+  // dates verify correctly under the right convention. Month-name dates (e.g. HDFC "03 nov, 2025")
+  // are unambiguous and unaffected. Defaults to DMY when nothing scores either way.
+  const preferredOrder = detectDateOrder(rawText.match(/\d{1,2}[-/]\d{1,2}[-/]\d{2,4}/g) ?? []);
   const structured = parseStructuredRows(rawText)
 
   debugLog('verification', `parseStructuredRows result: ${structured ? `rows=${structured.rows.length} headers=${structured.headers.join(',')} delimiter=${structured.delimiter}` : 'null'}`);
@@ -94,7 +106,7 @@ export function verifyStatement(
   }
 
   const verified: VerifiedTransaction[] = []
-  const rejected: Transaction[] = []
+  const rejected: VerifiedTransaction[] = []
   const duplicates: Transaction[] = []
 
   const signatureSet = new Set<string>()
@@ -105,9 +117,9 @@ export function verifyStatement(
     let result: VerifiedTransaction;
 
     if (structured && usedRowIndices) {
-      result = verifyTransactionStructured(tx, structured.rows, usedRowIndices, normalizedText, usedPositions);
+      result = verifyTransactionStructured(tx, structured.rows, usedRowIndices, normalizedText, usedPositions, preferredOrder);
     } else {
-      result = verifyTransactionProgressive(tx, normalizedText, usedPositions);
+      result = verifyTransactionProgressive(tx, normalizedText, usedPositions, preferredOrder);
     }
 
     debugLog('verification', `Transaction "${tx.description?.substring(0, 40)}" | amount=${tx.amount} type=${tx.type}`, {
@@ -131,7 +143,9 @@ export function verifyStatement(
       signatureSet.add(signature)
       verified.push(result)
     } else {
-      rejected.push(tx)
+      // Push the scored result, not the bare txn — the confidence is needed downstream to
+      // stamp verificationConfidence on the row so the low score is displayable.
+      rejected.push(result)
     }
   }
 
@@ -163,6 +177,7 @@ function verifyTransactionProgressive(
   tx: Transaction,
   rawText: string,
   usedPositions: Set<number>,
+  preferredOrder: "DMY" | "MDY" = "DMY",
 ): VerifiedTransaction {
   const amountVariants = generateAmountVariants(tx.amount);
   const candidates: Array<{ position: number; context: string }> = [];
@@ -208,21 +223,19 @@ function verifyTransactionProgressive(
   if (typeFiltered.length > 0) filtered = typeFiltered;
 
   if (filtered.length === 1) {
-    return scoreCandidate(tx, filtered[0], usedPositions, amountVariants);
+    return scoreCandidate(tx, filtered[0], usedPositions, amountVariants, preferredOrder);
   }
 
-  // Date filter
+  // Date filter — match by parsing (order-aware), fixing the HDFC comma form here too
+  // (the previous raw substring.includes() missed "03 nov, 2025").
   const isValidDate = tx.date instanceof Date && !isNaN(tx.date.getTime());
   if (isValidDate) {
-    const dateVariants = generateDateVariants(format(tx.date, 'yyyy-MM-dd'));
-    const dateFiltered = filtered.filter(c =>
-      dateVariants.some(d => c.context.includes(d.toLowerCase()))
-    );
+    const dateFiltered = filtered.filter(c => dateMatchesInText(c.context, tx, preferredOrder));
     if (dateFiltered.length > 0) filtered = dateFiltered;
   }
 
   if (filtered.length === 1) {
-    return scoreCandidate(tx, filtered[0], usedPositions, amountVariants);
+    return scoreCandidate(tx, filtered[0], usedPositions, amountVariants, preferredOrder);
   }
 
   // Score remaining by description
@@ -236,7 +249,7 @@ function verifyTransactionProgressive(
     }
   }
 
-  return scoreCandidate(tx, bestCandidate, usedPositions, amountVariants);
+  return scoreCandidate(tx, bestCandidate, usedPositions, amountVariants, preferredOrder);
 }
 
 type TypeEvidence =
@@ -276,13 +289,20 @@ function checkTypeEvidence(context: string, tx: Transaction, amountVariants: str
     if (hasPlusSign) return { kind: 'structural' };
     if (hasCreditKeyword && !hasDebitKeyword) return { kind: 'keyword' };
     if (hasDRSuffix) return { kind: 'contradicted' };
-    if (hasDebitKeyword && !hasCreditKeyword) return { kind: 'contradicted' };
+    // DISABLED: a debit-flavored keyword that isn't glued to the amount (no DR suffix) is
+    // too weak to contradict. On credit-card statements "credit"/"in" are ambient and
+    // falsely killed correctly-extracted debits (scored type=0 → 72 → rejected). Only the
+    // structural markers above (DR suffix) may contradict; keyword-only opposition falls
+    // through to 'none'.
+    // if (hasDebitKeyword && !hasCreditKeyword) return { kind: 'contradicted' };
   } else {
     if (hasDRSuffix) return { kind: 'structural' };
     if (hasMinusSign) return { kind: 'structural' };
     if (hasDebitKeyword && !hasCreditKeyword) return { kind: 'keyword' };
     if (hasCRSuffix) return { kind: 'contradicted' };
-    if (hasCreditKeyword && !hasDebitKeyword) return { kind: 'contradicted' };
+    // DISABLED: symmetric to the credit branch above. A credit-flavored keyword not glued
+    // to the amount (no CR suffix) is too weak to contradict — see the comment above.
+    // if (hasCreditKeyword && !hasDebitKeyword) return { kind: 'contradicted' };
   }
   return { kind: 'none' };
 }
@@ -303,6 +323,7 @@ function scoreCandidate(
   candidate: { position: number; context: string },
   usedPositions: Set<number>,
   amountVariants: string[],
+  preferredOrder: "DMY" | "MDY" = "DMY",
 ): VerifiedTransaction {
   usedPositions.add(candidate.position);
 
@@ -310,12 +331,7 @@ function scoreCandidate(
   const typeResult = checkTypeEvidence(candidate.context, tx, amountVariants);
   const typeMatched = typeResult.kind !== 'none' && typeResult.kind !== 'contradicted';
 
-  const isValidDate = tx.date instanceof Date && !isNaN(tx.date.getTime());
-  const dateMatched = isValidDate
-    ? generateDateVariants(format(tx.date, 'yyyy-MM-dd')).some(d =>
-        candidate.context.includes(d.toLowerCase())
-      )
-    : false;
+  const dateMatched = dateMatchesInText(candidate.context, tx, preferredOrder);
 
   const descriptionMatched = scoreDescriptionMatch(candidate.context, tx) >= 0.6;
 
@@ -353,17 +369,18 @@ function verifyTransactionStructured(
   usedRowIndices: Set<number>,
   normalizedText: string,
   usedPositions: Set<number>,
+  preferredOrder: "DMY" | "MDY" = "DMY",
 ): VerifiedTransaction {
-  const match = findBestMatchingRow(rows, tx.amount, tx, usedRowIndices);
+  const match = findBestMatchingRow(rows, tx.amount, tx, usedRowIndices, preferredOrder);
 
   if (!match) {
-    return verifyTransactionProgressive(tx, normalizedText, usedPositions);
+    return verifyTransactionProgressive(tx, normalizedText, usedPositions, preferredOrder);
   }
 
   const { row } = match;
 
   const amountMatched = true;
-  const dateMatched = matchDateField(row, tx);
+  const dateMatched = matchDateField(row, tx, preferredOrder);
   const descriptionMatched = matchDescriptionField(row, tx);
   const typeResult = matchTypeField(row, tx);
   const typeMatched = typeResult === true;
@@ -377,7 +394,7 @@ function verifyTransactionStructured(
   if (confidence < MIN_CONFIDENCE_ACCEPT) {
     // Structured match found but confidence too low (e.g., ambiguous type).
     // Release the row and try progressive matching — it may find better evidence.
-    return verifyTransactionProgressive(tx, normalizedText, usedPositions);
+    return verifyTransactionProgressive(tx, normalizedText, usedPositions, preferredOrder);
   }
 
   usedRowIndices.add(row.rowIndex);
@@ -392,6 +409,7 @@ function findBestMatchingRow(
   amount: number,
   tx: Transaction,
   usedRowIndices: Set<number>,
+  preferredOrder: "DMY" | "MDY" = "DMY",
 ): { row: StructuredRow; score: number } | null {
   const candidates = rows.filter(row => !usedRowIndices.has(row.rowIndex));
 
@@ -409,7 +427,7 @@ function findBestMatchingRow(
     if (!debitMatches && !creditMatches && !amountMatches) continue;
 
     let score = 0;
-    if (matchDateField(row, tx)) score += 2;
+    if (matchDateField(row, tx, preferredOrder)) score += 2;
     if (matchDescriptionField(row, tx)) score += 1;
 
     if (!best || score > best.score) {
@@ -420,16 +438,10 @@ function findBestMatchingRow(
   return best;
 }
 
-function matchDateField(row: StructuredRow, tx: Transaction): boolean {
+function matchDateField(row: StructuredRow, tx: Transaction, preferredOrder: "DMY" | "MDY" = "DMY"): boolean {
   const dateCell = row.cells['date'] ?? '';
   if (!dateCell) return false;
-
-  const isValidDate = tx.date instanceof Date && !isNaN(tx.date.getTime());
-  if (!isValidDate) return false;
-
-  const dateVariants = generateDateVariants(format(tx.date, 'yyyy-MM-dd'));
-  const cellLower = dateCell.toLowerCase();
-  return dateVariants.some(d => cellLower.includes(d.toLowerCase()));
+  return dateMatchesInText(dateCell, tx, preferredOrder);
 }
 
 function matchDescriptionField(row: StructuredRow, tx: Transaction): boolean {
@@ -528,7 +540,7 @@ function buildCCAggregate(
 
   // Debit breakdown
   const totalPurchases = sumBySubType(transactions, 'debit', ['purchase']);
-  const totalFees = sumBySubType(transactions, 'debit', ['fee', 'interest']);
+  const totalFees = sumBySubType(transactions, 'debit', ['bank_charge', 'interest']);
 
   // Credit breakdown
   const totalPayments = sumBySubType(transactions, 'credit', ['debt_payment']);
@@ -538,8 +550,11 @@ function buildCCAggregate(
     + (meta.interestCharged ?? 0)
     + (meta.lateFee ?? 0)
     + (meta.otherCharges ?? 0);
-  const statementCredits = (meta.paymentsReceived ?? 0)
-    + (meta.cashbackEarned ?? 0);
+  // The realized cashback is the rewards transaction itself (already summed into totalCredits);
+  // the summary figure doesn't reliably represent the amount credited this cycle. Use the
+  // extracted rewards sum on both sides so creditTotalsMatch stays like-for-like.
+  const extractedCashback = sumBySubType(transactions, 'credit', ['rewards']);
+  const statementCredits = (meta.paymentsReceived ?? 0) + extractedCashback;
 
   // Like-for-like comparisons
   // Primary: full debit/credit totals against full statement sums
@@ -572,6 +587,10 @@ function buildCCAggregate(
       totalDebits,
       totalCredits,
       totalFees,
+      // totalPayments = sum of credit debt_payment transactions (bill payments). Exposed so the
+      // report's "Payments" row compares payments vs payments — NOT totalCredits, which folds in
+      // cashback/refunds and falsely flags a mismatch.
+      totalPayments,
       statementPurchases: meta.purchasesAndCharges,
       statementPayments: meta.paymentsReceived,
       statementFees: (meta.interestCharged ?? 0) + (meta.lateFee ?? 0),
@@ -628,8 +647,8 @@ function computeCCOverallConfidence(
         Math.abs(sums.totalDebits - (sums.statementPurchases ?? 0)) < CATEGORIZATION_TOLERANCE) {
       transactionSumsConfidence += 34;
     }
-    if (sums.statementPayments === undefined ||
-        Math.abs(sums.totalCredits - (sums.statementPayments ?? 0)) < CATEGORIZATION_TOLERANCE) {
+    if (sums.statementPayments === undefined || sums.totalPayments === undefined ||
+        Math.abs((sums.totalPayments ?? 0) - (sums.statementPayments ?? 0)) < CATEGORIZATION_TOLERANCE) {
       transactionSumsConfidence += 33;
     }
     if (sums.statementFees === undefined ||
@@ -667,38 +686,27 @@ function generateAmountVariants(amount: number): string[] {
   ]
 }
 
-function generateDateVariants(dateStr: string): string[] {
-  const parseFormats = [
-    "dd/MM/yyyy",
-    "MM/dd/yyyy",
-    "dd-MM-yyyy",
-    "yyyy-MM-dd",
-    "d MMM yyyy",
-    "dd MMM yyyy"
-  ]
+// Whether tx.date appears in `haystack`, by PARSING every date token in the text and comparing
+// by calendar day. Replaces the generate-and-substring variant matcher, which had drifted from
+// the parser and missed HDFC's "03 nov, 2025" comma form. `preferredOrder` disambiguates numeric
+// dd/MM vs MM/dd dates (detected once per statement in verifyStatement). Extracts ALL date tokens
+// so a transaction whose date is the second token (e.g. a posting date after a value date) still
+// matches — preserving the original "appears anywhere" semantics.
+export function dateMatchesInText(
+  haystack: string,
+  tx: Transaction,
+  preferredOrder: "DMY" | "MDY" = "DMY",
+): boolean {
+  const isValidDate = tx.date instanceof Date && !isNaN(tx.date.getTime());
+  if (!isValidDate) return false;
 
-  const outputFormats = [
-    "dd/MM/yyyy",
-    "MM/dd/yyyy",
-    "dd-MM-yyyy",
-    "yyyy-MM-dd",
-    "dd MMM yyyy",
-    "d MMM yyyy",
-  ]
-
-  const variants: string[] = []
-
-  for (const fmt of parseFormats) {
-    const parsed = parse(dateStr, fmt, new Date())
-    if (isValid(parsed)) {
-      for (const outFmt of outputFormats) {
-        variants.push(format(parsed, outFmt))
-      }
-      break
-    }
-  }
-
-  return [...new Set([dateStr, ...variants])]
+  const found = extractAllDatesFromText(haystack, preferredOrder);
+  return found.some(
+    (d) =>
+      d.getFullYear() === tx.date.getFullYear() &&
+      d.getMonth() === tx.date.getMonth() &&
+      d.getDate() === tx.date.getDate(),
+  );
 }
 
 function createSignature(

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { verifyStatement } from '@/lib/verification/verificationEngine';
+import { verifyStatement, dateMatchesInText } from '@/lib/verification/verificationEngine';
 import { validateCCCrossSection, validateBankCrossSection } from '@/lib/verification/mergeEngine';
 import type { ExtractedTransaction } from '@/types/extractedTransaction';
 import type { CCSummary, BankSummary } from '@/lib/parsers/extractSummary';
@@ -140,7 +140,7 @@ describe('CC aggregate checks via verifyStatement', () => {
   it('calculates correct subtype breakdown', () => {
     const txns = [
       makeTransaction({ amount: 1000, type: 'debit', transactionSubType: 'purchase' }),
-      makeTransaction({ amount: 500, type: 'debit', transactionSubType: 'fee' }),
+      makeTransaction({ amount: 500, type: 'debit', transactionSubType: 'bank_charge' }),
       makeTransaction({ amount: 200, type: 'credit', transactionSubType: 'rewards' }),
     ];
     const result = verifyStatement('text', txns, { kind: 'credit_card' });
@@ -259,7 +259,7 @@ describe('validateBankCrossSection', () => {
 describe('CC aggregate — partial transaction sums', () => {
   it('marks transaction sums as failed when fees mismatch', () => {
     const txns = [
-      makeTransaction({ amount: 1000, type: 'debit', transactionSubType: 'fee' }),
+      makeTransaction({ amount: 1000, type: 'debit', transactionSubType: 'bank_charge' }),
     ];
     const result = verifyStatement('text', txns, {
       kind: 'credit_card',
@@ -272,7 +272,7 @@ describe('CC aggregate — partial transaction sums', () => {
     const txns = [
       makeTransaction({ amount: 500, type: 'debit', transactionSubType: 'purchase' }),
       makeTransaction({ amount: 200, type: 'credit', transactionSubType: 'debt_payment' }),
-      makeTransaction({ amount: 100, type: 'debit', transactionSubType: 'fee' }),
+      makeTransaction({ amount: 100, type: 'debit', transactionSubType: 'bank_charge' }),
     ];
     const result = verifyStatement('text', txns, {
       kind: 'credit_card',
@@ -292,7 +292,7 @@ describe('CC aggregate — subtype decomposition', () => {
     // 1000 purchase + 500 fee = 1500 total debits, but purchasesAndCharges should only match purchase portion
     const txns = [
       makeTransaction({ amount: 1000, type: 'debit', transactionSubType: 'purchase' }),
-      makeTransaction({ amount: 500, type: 'debit', transactionSubType: 'fee' }),
+      makeTransaction({ amount: 500, type: 'debit', transactionSubType: 'bank_charge' }),
       makeTransaction({ amount: 300, type: 'credit', transactionSubType: 'debt_payment' }),
     ];
     const result = verifyStatement('text', txns, {
@@ -310,7 +310,7 @@ describe('CC aggregate — subtype decomposition', () => {
   it('passes when debits match full statement stack including fees', () => {
     const txns = [
       makeTransaction({ amount: 1000, type: 'debit', transactionSubType: 'purchase' }),
-      makeTransaction({ amount: 500, type: 'debit', transactionSubType: 'fee' }),
+      makeTransaction({ amount: 500, type: 'debit', transactionSubType: 'bank_charge' }),
       makeTransaction({ amount: 300, type: 'credit', transactionSubType: 'debt_payment' }),
     ];
     const result = verifyStatement('text', txns, {
@@ -360,9 +360,42 @@ describe('CC aggregate — subtype decomposition', () => {
     // paymentsMatch: totalPayments(300) ≈ paymentsReceived(500) ✗
     expect(result.ccAggregate!.transactionSums.passed).toBe(false);
   });
+
+  it('uses the credited cashback, not the earned figure, when they differ', () => {
+    // When the summary's cashbackEarned differs from the actual rewards transaction credited
+    // this cycle, creditTotalsMatch must reconcile against the realized rewards transaction
+    // (it is in totalCredits), not the summary figure — otherwise a correct extraction falsely
+    // fails by the difference.
+    const txns = [
+      makeTransaction({ amount: 1000, type: 'debit', transactionSubType: 'purchase' }),
+      makeTransaction({ amount: 300, type: 'credit', transactionSubType: 'debt_payment' }),
+      makeTransaction({ amount: 513, type: 'credit', transactionSubType: 'rewards' }),
+    ];
+    const result = verifyStatement('text', txns, {
+      kind: 'credit_card',
+      purchasesAndCharges: 1000,
+      paymentsReceived: 300,
+      cashbackEarned: 657, // differs from the credited rewards transaction (513)
+    });
+    // totalCredits = 300 + 513 = 813; statementCredits must use the credited 513, not the 657.
+    expect(result.ccAggregate!.transactionSums.passed).toBe(true);
+  });
 });
 
 describe('verifyStatement — type matching with contradictory evidence', () => {
+  it('does NOT let ambient credit keywords contradict a debit (credit-card statements)', () => {
+    // Credit-card statements contain "credit" everywhere (credit card, credit limit).
+    // A correctly extracted debit whose amount merely sits NEAR such ambient text — not
+    // adjacent to the amount — must not be branded a type contradiction. Only a hard
+    // marker (Cr/Dr suffix, +/- sign) may contradict; keyword-only opposition resolves
+    // to 'none'. Otherwise the row scores 72 (type=0) instead of 86 (type=14) and is
+    // falsely rejected.
+    const rawText = 'credit card statement 2024-01-15 AVENUE E COMMERCE 130.00 balance 5000';
+    const txn = makeTransaction({ description: 'AVENUE E COMMERCE', amount: 130, type: 'debit', date: '2024-01-15' });
+    const result = verifyStatement(rawText, [txn], { kind: 'bank' });
+    expect(result.verified.length).toBe(1);
+  });
+
   it('rejects credit transaction with contradictory debit evidence', () => {
     // A credit transaction found in raw text with "debit" keyword but no "credit" keyword.
     // With redistributed weights: amount(34) + date(23) + desc(15) = 72 < 75 threshold
@@ -633,5 +666,102 @@ describe('verifyStatement — progressive raw text matching (fallback)', () => {
     const result = verifyStatement(rawText, txns, { kind: 'bank' });
     expect(result.verified.length).toBe(2);
     expect(result.rejected.length).toBe(1);
+  });
+});
+
+describe('dateMatchesInText — parse-based date match', () => {
+  // dateMatchesInText now parses every date token in the text via the shared dateParser and
+  // compares by calendar day, instead of generating format variants and substring-searching.
+  // HDFC renders dates as "dd MMM, yyyy" (comma after the month, e.g. "03 nov, 2025"); the old
+  // variant matcher emitted "03 Nov 2025" and a literal includes() missed on every row, tanking
+  // the verification score to 77%. Parsing handles punctuation natively. Ambiguous numeric
+  // dd/MM vs MM/dd dates are resolved by the preferredOrder argument (detected once per statement).
+  it('matches the HDFC "dd MMM, yyyy" shape (comma after the month)', () => {
+    const txn = makeTransaction({ description: 'UPI/HARISHA R', amount: 4512, type: 'debit', date: '2025-11-03' });
+    expect(dateMatchesInText('03 nov, 2025', txn)).toBe(true);
+  });
+
+  it('matches the date inside a full HDFC ||-delimited line', () => {
+    const txn = makeTransaction({ description: 'UPI/HARISHA R', amount: 4512, type: 'debit', date: '2025-11-03' });
+    const line = '03 nov, 2025||upi/harisha r/567304827304/paid via cred||upi-530718837102||-4,512.00||||85,605.27';
+    expect(dateMatchesInText(line, txn)).toBe(true);
+  });
+
+  it('still matches the comma-less "dd MMM yyyy" form (no regression)', () => {
+    const txn = makeTransaction({ description: 'x', amount: 100, type: 'debit', date: '2025-11-03' });
+    expect(dateMatchesInText('03 Nov 2025', txn)).toBe(true);
+  });
+
+  it('matches numeric slash and hyphen forms', () => {
+    const txn = makeTransaction({ description: 'x', amount: 100, type: 'debit', date: '2025-11-03' });
+    expect(dateMatchesInText('03/11/2025', txn)).toBe(true);
+    expect(dateMatchesInText('03-11-2025', txn)).toBe(true);
+  });
+
+  it('matches dotted and hyphenated-month forms the old variants missed', () => {
+    const txn = makeTransaction({ description: 'x', amount: 100, type: 'debit', date: '2025-11-03' });
+    expect(dateMatchesInText('03.11.2025', txn)).toBe(true);
+    expect(dateMatchesInText('03-Nov-2025', txn)).toBe(true);
+  });
+
+  it('does not match a date that is absent from the text', () => {
+    const txn = makeTransaction({ description: 'x', amount: 100, type: 'debit', date: '2025-11-03' });
+    expect(dateMatchesInText('15 nov, 2025||some other row', txn)).toBe(false);
+  });
+
+  it('returns false when tx.date is not a valid Date', () => {
+    const txn = makeTransaction({ description: 'x', amount: 100, type: 'debit', date: '2025-11-03' });
+    // Simulate a corrupted date (Invalid Date instance).
+    Object.defineProperty(txn, 'date', { value: new Date(NaN), writable: true });
+    expect(dateMatchesInText('03 nov, 2025', txn)).toBe(false);
+  });
+
+  it('resolves ambiguous numeric dates by preferredOrder (DMY vs MDY)', () => {
+    // "03/11" is ambiguous (both ≤ 12). Under DMY it is 3 Nov; under MDY it is 11 Mar.
+    const nov3 = makeTransaction({ description: 'x', amount: 100, type: 'debit', date: '2025-11-03' });
+    expect(dateMatchesInText('03/11/2025', nov3, 'DMY')).toBe(true);
+    expect(dateMatchesInText('03/11/2025', nov3, 'MDY')).toBe(false);
+
+    const mar11 = makeTransaction({ description: 'x', amount: 100, type: 'debit', date: '2025-03-11' });
+    expect(dateMatchesInText('03/11/2025', mar11, 'MDY')).toBe(true);
+    expect(dateMatchesInText('03/11/2025', mar11, 'DMY')).toBe(false);
+  });
+
+  it('matches when the transaction date is the SECOND token (value date + posting date)', () => {
+    // Regression guard: a first-token-only matcher would read 03/11 and miss the 05/11 posting
+    // date. extractAllDatesFromText reads every token, so the second one still matches.
+    const txn = makeTransaction({ description: 'AMZN', amount: 5000, type: 'debit', date: '2025-11-05' });
+    expect(dateMatchesInText('03/11/2025  05/11/2025  AMZN 5000', txn, 'DMY')).toBe(true);
+  });
+});
+
+describe('verifyStatement — date-order detection is threaded to matching', () => {
+  // detectDateOrder runs once on the statement's numeric dates in verifyStatement, then the
+  // preferredOrder is threaded through every per-transaction matcher. This guards that wiring.
+
+  it('detects MDY from a >12 anchor and resolves an ambiguous row date as MM/DD', () => {
+    // "02/13/2025" can only be MM/DD (13 is not a month) → statement is MDY. Under MDY the row
+    // date "03/11/2025" is March 11; under the DMY default it would be Nov 3.
+    const mar11 = makeTransaction({ description: 'store', amount: 100, type: 'debit', date: '2025-03-11' });
+    const withMdyAnchor = verifyStatement(
+      'opening 02/13/2025\n03/11/2025 store 100.00',
+      [mar11],
+      { kind: 'bank' },
+    );
+    expect(withMdyAnchor.verified).toHaveLength(1);
+    expect(withMdyAnchor.verified[0].verification.dateMatched).toBe(true);
+  });
+
+  it('defaults to DMY when no >12 anchor is present (same row date then fails to match Mar 11)', () => {
+    // No token has a value > 12, so detectDateOrder returns DMY. "03/11/2025" reads as Nov 3,
+    // which must NOT date-match a March-11 transaction.
+    const mar11 = makeTransaction({ description: 'store', amount: 100, type: 'debit', date: '2025-03-11' });
+    const dmyDefault = verifyStatement(
+      'opening 01/02/2025\n03/11/2025 store 100.00',
+      [mar11],
+      { kind: 'bank' },
+    );
+    const matched = dmyDefault.verified.find((t) => t.id === mar11.id)?.verification.dateMatched;
+    expect(matched).not.toBe(true);
   });
 });
