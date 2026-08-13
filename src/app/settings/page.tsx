@@ -7,6 +7,8 @@ import { PROVIDERS } from '@/lib/llm/types';
 import { clearAllUserData } from '@/lib/store/clearAllData';
 import { usePersistHydrated } from '@/lib/store/usePersistHydrated';
 import { checkLLMConnection } from '@/lib/store/llmConnectionStore';
+import { ensureModelCalibrated } from '@/lib/llm/calibrationProbe';
+import type { LLMRuntimeConfig } from '@/lib/llm/types';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import {
@@ -74,6 +76,7 @@ export default function SettingsPage() {
   const [models, setModels] = useState<string[]>([]);
   const [modelInfos, setModelInfos] = useState<import('@/lib/llm/types').ModelInfo[]>([]);
   const [isConnecting, setIsConnecting] = useState(false);
+  const [isCalibrating, setIsCalibrating] = useState(false);
   const [connectionStatus, setConnectionStatus] = useState<
     'idle' | 'connected' | 'failed'
   >('idle');
@@ -82,6 +85,30 @@ export default function SettingsPage() {
   const [pendingUrl, setPendingUrl] = useState<string | null>(null);
   const [showRemoteWarning, setShowRemoteWarning] = useState(false);
   const [dontShowAgain, setDontShowAgain] = useState(false);
+
+  // Fires the token-ratio calibration probe for a newly-selected model so the
+  // user is not surprised by a ~180s cost at first import. Both selection paths
+  // (silent auto-select on Connect, and an explicit dropdown pick) share this.
+  // baseUrl is passed in (not read from the store closure) because Connect saves
+  // the URL via setLLMServerUrl in the same tick it calls this — a useCallback
+  // over llmServerUrl would capture the pre-save value.
+  // ensureModelCalibrated is best-effort — it never throws — but a try/finally
+  // is still required to clear the isCalibrating flag that disables the Select.
+  const calibrateModel = useCallback(
+    async (model: string, baseUrl: string) => {
+      setIsCalibrating(true);
+      try {
+        await ensureModelCalibrated({
+          provider: llmProvider,
+          baseUrl,
+          model,
+        } satisfies LLMRuntimeConfig);
+      } finally {
+        setIsCalibrating(false);
+      }
+    },
+    [llmProvider],
+  );
 
   const testConnection = useCallback(
     async (url: string, silent = false) => {
@@ -128,6 +155,10 @@ export default function SettingsPage() {
             if (selected?.contextLength) {
               setModelContextLength(selected.contextLength);
             }
+            // Proactively calibrate the silently-selected model so the first
+            // import is not surprised by the probe cost. Connect already blocks
+            // the UI; awaiting here is acceptable per the accepted trade-off.
+            await calibrateModel(modelIds[0], url);
           }
         } else {
           setConnectionStatus('failed');
@@ -140,7 +171,7 @@ export default function SettingsPage() {
         setIsConnecting(false);
       }
     },
-    [llmModel, setLLMServerUrl, setLLMModel, setModelContextLength]
+    [llmModel, setLLMServerUrl, setLLMModel, setModelContextLength, calibrateModel]
   );
 
   // Test connection on mount with saved URL
@@ -301,25 +332,34 @@ export default function SettingsPage() {
             <div className="space-y-2">
               <Label htmlFor="model-select">Model</Label>
               {models.length > 0 ? (
-                <Select
-                  value={llmModel || ''}
-                  onValueChange={(v) => {
-                    setLLMModel(v);
-                    const match = modelInfos.find(m => m.id === v);
-                    setModelContextLength(match?.contextLength ?? null);
-                  }}
-                >
-                  <SelectTrigger id="model-select">
-                    <SelectValue placeholder="Choose a model…" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {models.map((m) => (
-                      <SelectItem key={m} value={m}>
-                        {m}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                <>
+                  <Select
+                    value={llmModel || ''}
+                    disabled={isCalibrating}
+                    onValueChange={(v) => {
+                      setLLMModel(v);
+                      const match = modelInfos.find(m => m.id === v);
+                      setModelContextLength(match?.contextLength ?? null);
+                      void calibrateModel(v, llmServerUrl);
+                    }}
+                  >
+                    <SelectTrigger id="model-select">
+                      <SelectValue placeholder="Choose a model…" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {models.map((m) => (
+                        <SelectItem key={m} value={m}>
+                          {m}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  {isCalibrating && (
+                    <p className="text-xs text-muted-foreground">
+                      Optimizing for your model…
+                    </p>
+                  )}
+                </>
               ) : (
                 <div className="rounded-md border border-dashed p-4 text-center text-sm text-muted-foreground">
                   {connectionStatus === 'failed'

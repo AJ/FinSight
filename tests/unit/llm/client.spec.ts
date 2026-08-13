@@ -674,3 +674,39 @@ describe('createClient edge cases', () => {
     vi.useRealTimers();
   });
 });
+
+// ── generateWithUsage ─────────────────────────────────────────────────────────
+
+describe('LLMClient.generateWithUsage', () => {
+  const realFetch = globalThis.fetch;
+
+  beforeEach(() => {
+    globalThis.fetch = vi.fn(async () =>
+      new Response(
+        JSON.stringify({
+          choices: [{ message: { content: '{"x":1}' } }],
+          usage: { prompt_tokens: 40, completion_tokens: 120 },
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      ),
+    ) as unknown as typeof fetch;
+  });
+
+  afterEach(() => {
+    globalThis.fetch = realFetch;
+  });
+
+  it('returns both text and the server-reported usage', async () => {
+    const client = createClient('lmstudio');
+    const result = await client.generateWithUsage(
+      'http://localhost:1234',
+      'test-model',
+      'extract these',
+      { temperature: 0, responseFormat: 'text', signal: new AbortController().signal },
+    );
+    expect(result.text).toBe('{"x":1}');
+    expect(result.usage).toBeDefined();
+    expect(result.usage?.promptTokens).toBe(40);
+    expect(result.usage?.completionTokens).toBe(120);
+  });
+});

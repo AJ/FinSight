@@ -6,6 +6,7 @@ import type {
   ChatChunk,
   ModelInfo,
   StatusResult,
+  TokenUsage,
 } from './types';
 import { PROVIDERS } from './types';
 import { ollamaAdapter } from './ollamaAdapter';
@@ -84,7 +85,7 @@ export function createClient(provider: LLMProvider): LLMClient {
   const adapter = getAdapter(provider);
 
   return {
-    async generate(baseUrl, model, prompt, options: LLMCallOptions): Promise<string> {
+    async generateWithUsage(baseUrl, model, prompt, options: LLMCallOptions): Promise<{ text: string; usage?: TokenUsage }> {
       const temperature = options.temperature ?? 0;
       const stage = options.stage ?? 'unknown';
       let lastError: LLMError | null = null;
@@ -99,7 +100,7 @@ export function createClient(provider: LLMProvider): LLMClient {
         try {
           // The surface owns no prompt content: the bare `prompt` (user content) and the
           // caller-supplied `systemPrompt` are forwarded separately — the adapter delivers
-          // the system prompt as a system message (spec §10). No concatenation.
+          // the system prompt as a system message. No concatenation.
           const result = await adapter.generate(baseUrl, model, prompt, {
             temperature,
             topP: options.topP,
@@ -125,7 +126,7 @@ export function createClient(provider: LLMProvider): LLMClient {
             );
           }
 
-          return result.text.trim();
+          return { text: result.text.trim(), usage: result.usage };
         } catch (e: unknown) {
           const error = classifyError(e, config.name, options.signal);
 
@@ -141,6 +142,10 @@ export function createClient(provider: LLMProvider): LLMClient {
       }
 
       throw lastError ?? new LLMError('Unexpected retry loop exit', 'unknown');
+    },
+
+    async generate(baseUrl, model, prompt, options: LLMCallOptions): Promise<string> {
+      return (await this.generateWithUsage(baseUrl, model, prompt, options)).text;
     },
 
     async *chatStream(baseUrl, model, messages, options: LLMCallOptions): AsyncIterable<ChatChunk> {

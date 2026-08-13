@@ -52,6 +52,13 @@ export type Summary = CCSummary | BankSummary;
 
 /**
  * Build summary extraction prompt.
+ *
+ * TODO(summary-chunking): this is a single-object pass with no chunking. The full statement
+ * text is substituted into {RAW_TEXT}; if the summary section alone exceeds the model's context
+ * window, extraction fails hard (pipeline treats summary failure as fatal). The fix is a
+ * header-section extraction pass that feeds only the statement header, not the whole document.
+ * Out of scope for the token-ratio-calibration work; tracked here. See
+ * docs/superpowers/specs/2026-08-12-token-ratio-calibration-design.md.
  */
 export function buildSummaryPrompt(
   normalizedText: string,

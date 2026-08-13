@@ -20,6 +20,12 @@ export interface RewardsOutput {
 
 /**
  * Build rewards extraction prompt.
+ *
+ * TODO(rewards-chunking): single-object pass, no chunking — same shape as the summary pass. A
+ * rewards section that alone overflows the window surfaces as a soft warning (pipeline treats
+ * rewards failure as non-fatal). Fix path mirrors summary-chunking: header-section extraction.
+ * Out of scope for the token-ratio-calibration work; tracked here. See
+ * docs/superpowers/specs/2026-08-12-token-ratio-calibration-design.md.
  */
 export function buildRewardsPrompt(normalizedText: string): string {
   // Check if statement has rewards section

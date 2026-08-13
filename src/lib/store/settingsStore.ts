@@ -151,12 +151,33 @@ const availableCurrencies: Currency[] = [
   { code: "BDT", symbol: "৳", name: "Bangladeshi Taka" },
 ];
 
+/**
+ * Measured input/output token ratios for one (provider, model). Produced by the calibration
+ * probe (calibrationProbe.ts) and cached so each model is probed at most once — re-selecting a
+ * previously-probed model is a cache hit, no re-probe.
+ */
+export interface CalibrationRatios {
+  inputCharsPerToken: number;
+  outputTokensPerInputLine: number;
+}
+
+/**
+ * Cache key for per-model calibration. Returns null when no model is selected — callers must
+ * not cache against a null model. Embeds provider so ratios never leak across providers even
+ * if two providers happen to serve a model with the same id.
+ */
+export function calibrationKey(provider: LLMProvider, model: string | null): string | null {
+  if (!model) return null;
+  return `${provider}|${model}`;
+}
+
 interface SettingsStore extends Settings {
   // LLM settings
   llmProvider: LLMProvider;
   llmServerUrl: string; // Active LLM server URL (auto-switches on provider change)
   llmModel: string | null;
   llmModelContextLength: number | null;
+  calibrationByModel: Record<string, CalibrationRatios>;
 
   setCurrency: (currency: Currency) => void;
   setDateFormat: (format: string) => void;
@@ -166,6 +187,7 @@ interface SettingsStore extends Settings {
   setLLMServerUrl: (url: string) => void;
   setLLMModel: (model: string | null) => void;
   setModelContextLength: (length: number | null) => void;
+  setModelCalibration: (ratios: CalibrationRatios) => void;
 }
 
 export const useSettingsStore = create<SettingsStore>()(
@@ -180,16 +202,25 @@ export const useSettingsStore = create<SettingsStore>()(
       llmServerUrl: PROVIDERS.ollama.defaultUrl,
       llmModel: null,
       llmModelContextLength: null,
+      calibrationByModel: {},
 
       setCurrency: (currency) => set({ currency }),
       setDateFormat: (format) => set({ dateFormat: format }),
       setTheme: (theme) => set({ theme }),
       getAvailableCurrencies: () => availableCurrencies,
-      setLLMProvider: (provider) => set({
-        llmProvider: provider,
-        llmServerUrl: PROVIDERS[provider].defaultUrl, // Auto-switch URL to provider default
-        llmModel: null, // Clear model selection when switching providers
-        llmModelContextLength: null,
+      setLLMProvider: (provider) => set((state) => {
+        // Re-affirming the same provider must be a no-op. Radix Select fires onValueChange on
+        // re-select (no dedup), so without this guard re-picking the current provider would
+        // silently wipe a custom server URL and the selected model. calibrationByModel is
+        // retained regardless of provider change — it is keyed by (provider, model), so entries
+        // for other providers stay and become cache hits when that provider+model returns.
+        if (state.llmProvider === provider) return {};
+        return {
+          llmProvider: provider,
+          llmServerUrl: PROVIDERS[provider].defaultUrl, // Auto-switch URL to provider default
+          llmModel: null, // Clear model selection when switching providers
+          llmModelContextLength: null,
+        };
       }),
       setLLMServerUrl: (url) => {
         const result = validateLlmServerUrl(url);
@@ -200,8 +231,27 @@ export const useSettingsStore = create<SettingsStore>()(
           set({ llmServerUrl: url });
         }
       },
-      setLLMModel: (model) => set({ llmModel: model }),
+      setLLMModel: (model) => set((state) => {
+        // Re-affirming the same model id must be a no-op. Callers like AIConnectionBar's connect
+        // handler re-select the current model on every connection check; an unconditional clear
+        // there would wipe llmModelContextLength (re-fetched on the next connection). Calibration
+        // ratios are NOT cleared on model switch — they live in calibrationByModel keyed by
+        // (provider, model), so switching back to a previously probed model is a cache hit with
+        // no re-probe. Only the single-slot contextLength is invalidated.
+        if (state.llmModel === model) return {};
+        return {
+          llmModel: model,
+          llmModelContextLength: null,
+        };
+      }),
       setModelContextLength: (length) => set({ llmModelContextLength: length }),
+      setModelCalibration: (ratios) => set((state) => {
+        const key = calibrationKey(state.llmProvider, state.llmModel);
+        if (!key) return {}; // No model selected — nothing to cache against.
+        return {
+          calibrationByModel: { ...state.calibrationByModel, [key]: ratios },
+        };
+      }),
     }),
     {
       name: "settings-storage",
@@ -215,9 +265,31 @@ export const useSettingsStore = create<SettingsStore>()(
         if (state.llmModelContextLength === undefined) {
           state.llmModelContextLength = null;
         }
+        // v3 → v4: calibration ratios moved from single slots to a map keyed by
+        // (provider, model), so each model is probed at most once and re-selecting a previously
+        // probed model is a cache hit. Migrate any existing single-slot ratios for the current
+        // model into the map. llmModelContextLength stays a single slot (cheap to re-fetch).
+        if (state.calibrationByModel === undefined) {
+          const map: Record<string, CalibrationRatios> = {};
+          const oldInput = state.llmModelInputCharsPerToken;
+          const oldOutput = state.llmModelOutputTokensPerInputLine;
+          const model = state.llmModel;
+          const provider = state.llmProvider;
+          if (
+            typeof model === 'string' &&
+            typeof oldInput === 'number' &&
+            typeof oldOutput === 'number'
+          ) {
+            const key = `${typeof provider === 'string' ? provider : 'ollama'}|${model}`;
+            map[key] = { inputCharsPerToken: oldInput, outputTokensPerInputLine: oldOutput };
+          }
+          state.calibrationByModel = map;
+        }
+        delete state.llmModelInputCharsPerToken;
+        delete state.llmModelOutputTokensPerInputLine;
         return state as unknown as SettingsStore;
       },
-      version: 2,
+      version: 4,
     },
   ),
 );

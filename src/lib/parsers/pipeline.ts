@@ -7,6 +7,7 @@
 
 import type { LLMRuntimeConfig } from '@/lib/llm/types';
 import { getContextWindowInfo } from '@/lib/llm/contextWindow';
+import { EXTRACTION_SYSTEM_PROMPT } from '@/lib/llm/prompts';
 import { debugLog, debugWarn } from '@/lib/utils/debug';
 import type { ExtractedTransaction } from '@/types/extractedTransaction';
 import { Transaction as CanonicalTransaction } from '@/models/Transaction';
@@ -392,7 +393,13 @@ async function runTransactionExtraction(
   const responseSchema = statementType === 'credit_card' ? CC_TRANSACTIONS_SCHEMA : BANK_TRANSACTIONS_SCHEMA;
   const schemaName = stage;
 
-  const chunkPlan = createTransactionChunkPlan(normalizedText, contextWindowTokens);
+  // Fixed prompt prefix the overflow guard sees minus the variable raw text: the system prompt
+  // plus the transactions template with its {RAW_TEXT} placeholder removed ({BANK_CONTEXT}
+  // resolved to the real bank name). Lets the chunker size each chunk to the guard's own budget.
+  const overheadText = contextWindowTokens
+    ? `${EXTRACTION_SYSTEM_PROMPT}\n\n${buildTransactionsPrompt('', statementType, bankName)}`
+    : undefined;
+  const chunkPlan = createTransactionChunkPlan(normalizedText, contextWindowTokens, overheadText);
 
   if (!chunkPlan.chunkingUsed) {
     const transactionsPrompt = buildTransactionsPrompt(normalizedText, statementType, bankName);

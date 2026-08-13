@@ -9,7 +9,7 @@ import { parseLLMJsonResponse } from '@/lib/utils/llm-response-parser';
 import { getClient } from '@/lib/llm/index';
 import { LLMError } from '@/lib/llm/types';
 import type { LLMRuntimeConfig, JSONSchema } from '@/lib/llm/types';
-import { calculateMaxOutputTokens, overflowKind } from '@/lib/llm/contextWindow';
+import { calculateMaxOutputTokens, overflowKind, getInputCharsPerToken } from '@/lib/llm/contextWindow';
 import { EXTRACTION_SYSTEM_PROMPT } from '@/lib/llm/prompts';
 import { debugLog } from '@/lib/utils/debug';
 
@@ -49,14 +49,19 @@ export interface ValidationResult<T> {
   data: T | null;
 }
 
-function buildRetryPrompt(
+// Reserve this fraction of the context window for output when sizing the retry prompt. The
+// retry must PASS the pre-flight guard (which needs output room), so the prompt is capped to
+// leave (1 - PROMPT_WINDOW_FRACTION) of the window free for generation.
+const PROMPT_WINDOW_FRACTION = 0.75;
+
+export function buildRetryPrompt(
   basePrompt: string,
   previousOutput: string,
   errors: string[],
-  attempt: number
+  attempt: number,
+  opts: { contextWindowTokens?: number; systemPrompt: string },
 ): string {
   let strictnessInstruction = '';
-
   if (attempt === 2) {
     strictnessInstruction = 'Fix ALL errors listed above. Return ONLY valid JSON.';
   } else if (attempt >= 3) {
@@ -65,20 +70,66 @@ function buildRetryPrompt(
     strictnessInstruction = 'Fix all errors and return valid JSON.';
   }
 
-  return `${basePrompt}
+  const errorsBlock = errors.map(e => `- ${e}`).join('\n');
+  // Split the framing into the part before the previousOutput slice and the part after, so the
+  // slice budget can account for the REAL after-part length (errorsBlock + strictnessInstruction
+  // + tail). The concatenated string is identical to the old single-template version.
+  const tail = '\nDo not include explanations or markdown fences.';
+  const beforePrev = '\n\n---\nPREVIOUS OUTPUT (INVALID):\n';
+  const afterPrev = `\n\n---\nVALIDATION ERRORS TO FIX:\n${errorsBlock}\n\n---\nINSTRUCTIONS:\n${strictnessInstruction}${tail}`;
+  const framing = (prevSlice: string) => `${beforePrev}${prevSlice}${afterPrev}`;
 
----
-PREVIOUS OUTPUT (INVALID):
-${previousOutput}
+  // Decide how much of previousOutput can be included without blowing the prompt budget. The
+  // framing length (before + after) is passed in so the budget accounts for the real errorsBlock
+  // and strictness text — not a fixed placeholder that silently under-counts them.
+  const prevSlice = allowedPreviousSlice(basePrompt, previousOutput, opts, beforePrev.length + afterPrev.length);
 
----
-VALIDATION ERRORS TO FIX:
-${errors.map(e => `- ${e}`).join('\n')}
+  return `${basePrompt}${framing(prevSlice)}`;
+}
 
----
-INSTRUCTIONS:
-${strictnessInstruction}
-Do not include explanations or markdown fences.`;
+/**
+ * Return the slice of previousOutput that fits the prompt budget, or '' if even a minimal
+ * inclusion leaves too little output room. When contextWindow is unknown (guard skipped),
+ * include the whole thing (the guard cannot trip). Tail-truncate because JSON errors cluster
+ * at the end (trailing fields, fence artifacts).
+ */
+function allowedPreviousSlice(
+  basePrompt: string,
+  previousOutput: string,
+  opts: { contextWindowTokens?: number; systemPrompt: string },
+  framingChars: number,
+): string {
+  const { contextWindowTokens, systemPrompt } = opts;
+  const inputRatio = getInputCharsPerToken();
+  // Budget in prompt chars: leave (1 - PROMPT_WINDOW_FRACTION) of the window for output.
+  const maxPromptChars = contextWindowTokens
+    ? contextWindowTokens * PROMPT_WINDOW_FRACTION * inputRatio
+    : Infinity;
+
+  // Length of everything in the prompt EXCEPT the previousOutput slice: system + base, the
+  // real framing (errorsBlock + strictnessInstruction + tail, passed in via framingChars), and a
+  // truncation marker allowance. This is a faithful lower bound — every component is measured,
+  // none are a fixed placeholder.
+  const marker = '\n[…truncated…]';
+  const overhead = `${systemPrompt}\n\n${basePrompt}`.length + framingChars + marker.length;
+
+  if (overhead >= maxPromptChars) {
+    // No room for any previousOutput — retry on the error list alone. The base prompt alone
+    // fit on attempt 1, so this is always recoverable.
+    return '';
+  }
+
+  const budget = maxPromptChars - overhead;
+  // If the usable slice is shorter than the truncation marker itself, keeping it would add the
+  // marker plus a few stray chars of noise — pointless. Retry on the error list alone instead.
+  if (budget < marker.length) {
+    return '';
+  }
+  if (previousOutput.length <= budget) {
+    return previousOutput;
+  }
+  // Tail-truncate: keep the final `budget` chars (where JSON breakage usually is).
+  return `${marker}\n` + previousOutput.slice(-Math.floor(budget));
 }
 
 export async function runWithRetry<T>(
@@ -102,7 +153,10 @@ export async function runWithRetry<T>(
     try {
       const prompt = attempt === 1
         ? basePrompt.replace('{RAW_TEXT}', normalizedText)
-        : buildRetryPrompt(basePrompt, lastRawOutput!, errors, attempt);
+        : buildRetryPrompt(basePrompt, lastRawOutput!, errors, attempt, {
+            contextWindowTokens: config.contextWindowTokens,
+            systemPrompt: EXTRACTION_SYSTEM_PROMPT,
+          });
 
       if (attempt === 1 && (config.stage === 'cc_transactions' || config.stage === 'bank_transactions')) {
         debugLog(config.stage, 'Normalized text sent to LLM for transaction extraction:');
@@ -164,6 +218,13 @@ export async function runWithRetry<T>(
           debugLog(config.stage, 'Raw LLM response:', rawResponse);
         }
       } catch (parseErr: unknown) {
+        // TODO(detect-and-shrink): a common cause of "Invalid JSON" here is output truncation —
+        // the model hit its maxOutputTokens cap mid-JSON. Calibration (per-model output ratio)
+        // prevents this in the common case, but a pathological statement can still overrun its
+        // chunk. The safety net: surface finish_reason from the adapter (currently debug-logged
+        // only, not returned in GenerateResult), and on "length" re-split the offending chunk
+        // smaller and re-extract. See docs/superpowers/specs/2026-08-12-token-ratio-calibration-design.md
+        // ("Out of scope — tracked as code TODOs").
         errors.length = 0;
         errors.push(`Invalid JSON: ${parseErr instanceof Error ? parseErr.message : 'Unknown error'}`);
         continue;

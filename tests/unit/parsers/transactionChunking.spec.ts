@@ -1,9 +1,13 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, afterEach } from 'vitest';
 import {
   createTransactionChunkPlan,
   mergeChunkTransactions,
   getDroppedTransactionCount,
 } from '@/lib/parsers/transactionChunking';
+import { calculateMaxOutputTokens, estimateTokens, getOutputTokensPerInputLine } from '@/lib/llm/contextWindow';
+import { useSettingsStore } from '@/lib/store/settingsStore';
+import { EXTRACTION_SYSTEM_PROMPT } from '@/lib/llm/prompts';
+import { buildTransactionsPrompt } from '@/lib/parsers/extractTransactions';
 import type { ExtractedTransaction } from '@/types/extractedTransaction';
 
 const CHUNK_OVERLAP_LINE_COUNT = 12;
@@ -219,17 +223,15 @@ describe('createTransactionChunkPlan', () => {
     expect(plan.chunks[0].text).toBe(text);
   });
 
-  describe('dynamic thresholds from contextWindowTokens', () => {
-    it('uses dynamic thresholds when contextWindowTokens provided', () => {
-      // 16K context: budgetTokens = (16000 - 2500) / 2.5 = 5400
-      // budgetChars = 5400 * 2.3 = 12420
-      // budgetLines = 12420 / 55 ≈ 225
-      const text = makeLines(360, 'y'.repeat(60));
-      const plan = createTransactionChunkPlan(text, 16000);
+  describe('guard-aligned (contextWindowTokens + overhead) sizing', () => {
+    // Mirror how pipeline.ts builds the fixed overhead the guard sees: the system prompt plus
+    // the transactions template with {RAW_TEXT} removed and {BANK_CONTEXT} resolved.
+    const overhead = (type: 'credit_card' | 'bank') =>
+      `${EXTRACTION_SYSTEM_PROMPT}\n\n${buildTransactionsPrompt('', type, null)}`;
 
-      expect(plan.chunkingUsed).toBe(true);
-      expect(plan.contextWindowTokens).toBe(16000);
-    });
+    // The guard the retry engine runs on each chunk. A chunk passes iff this is non-zero.
+    const guardBudget = (chunkText: string, type: 'credit_card' | 'bank', ctx: number) =>
+      calculateMaxOutputTokens(ctx, `${EXTRACTION_SYSTEM_PROMPT}\n\n${buildTransactionsPrompt(chunkText, type, null)}`);
 
     it('falls back to static thresholds when contextWindowTokens undefined', () => {
       const text = makeLines(260);
@@ -240,36 +242,79 @@ describe('createTransactionChunkPlan', () => {
       expect(plan.contextWindowTokens).toBeUndefined();
     });
 
-    it('clamps minimum budget for very small context windows', () => {
-      // 4K context: budgetTokens = max((4096 - 2500) / 2.5, 500) = max(638, 500) = 638
-      // budgetChars = 638 * 2.3 = 1467
-      // budgetLines = 1467 / 55 ≈ 26
-      // Need text exceeding 26 lines or 1467 chars
-      const text = makeLines(60, 'z'.repeat(55));
-      const plan = createTransactionChunkPlan(text, 4096);
-
-      expect(plan.chunkingUsed).toBe(true);
-      expect(plan.contextWindowTokens).toBe(4096);
-    });
-
-    it('sizes chunks using dynamic target line count', () => {
-      // 8K context, linear-coupled sizing (spec §6): per-line input ≈ 24, output ≈ 5,
-      // overhead 2500 → target ≈ 170 lines. 400 lines with overlap 12 → multiple chunks.
-      const text = makeLines(400, 'a'.repeat(60));
-      const plan = createTransactionChunkPlan(text, 8192);
-
-      expect(plan.chunkingUsed).toBe(true);
-      expect(plan.chunks.length).toBeGreaterThanOrEqual(2);
-    });
-
-    it('stays single-shot when dynamic thresholds are not exceeded', () => {
-      // 128K context: huge budget, text is tiny
+    it('stays single-shot when text fits the guard budget', () => {
+      // 128K context: huge budget, text is tiny.
       const text = makeLines(50);
-      const plan = createTransactionChunkPlan(text, 128000);
+      const plan = createTransactionChunkPlan(text, 128000, overhead('credit_card'));
 
       expect(plan.chunkingUsed).toBe(false);
       expect(plan.chunkTriggerReason).toBe('single_shot');
       expect(plan.contextWindowTokens).toBe(128000);
+    });
+
+    it('every chunk passes the overflow guard, across context windows and pass types', () => {
+      // Long-lined, char-heavy text — the shape that broke under line-based sizing. avg ~126
+      // chars/line is realistic for CC statements (date + merchant + city + amount + currency).
+      const longLine =
+        '2026-03-15 AMAZON SELLER SERVICES BANGALORE INR 2,499.00 DR Shopping ##'.padEnd(126, '.');
+      const text = Array.from({ length: 600 }, () => longLine).join('\n');
+
+      // Windows large enough to fit the CC prompt overhead (~4.2K tokens); 4096 cannot (see the
+      // model-too-small test below) so it is excluded from the guard-invariant matrix.
+      for (const ctx of [8192, 16384, 32768]) {
+        for (const type of ['credit_card', 'bank'] as const) {
+          const plan = createTransactionChunkPlan(text, ctx, overhead(type));
+          // Sanity: text this large must trigger chunking for any finite window.
+          expect(plan.chunkingUsed, `ctx=${ctx} type=${type}`).toBe(true);
+          expect(plan.chunks.length, `ctx=${ctx} type=${type}`).toBeGreaterThan(1);
+          // The invariant: no chunk the plan emits may overflow the guard.
+          for (const chunk of plan.chunks) {
+            expect(guardBudget(chunk.text, type, ctx), `ctx=${ctx} type=${type} chunk=${chunk.index}`).not.toBe(0);
+          }
+        }
+      }
+    });
+
+    it('when the window is too small for the CC prompt overhead, the guard rejects even empty input', () => {
+      // CC transactions overhead (~4.2K tokens) exceeds a 4096-token window: this is a genuine
+      // model-too-small failure, NOT a chunker bug — no split can make a 4.2K-template fit a 4K
+      // window. The guard returns 0 on empty raw text, and the plan emits a single best-effort chunk.
+      expect(guardBudget('', 'credit_card', 4096)).toBe(0);
+      const plan = createTransactionChunkPlan('x'.repeat(600), 4096, overhead('credit_card'));
+      expect(plan.chunkingUsed).toBe(false); // maxChars <= 0 → single best-effort chunk
+      // Bank overhead is smaller, so 4096 still leaves room — different pass, different outcome.
+      expect(guardBudget('', 'bank', 4096)).toBeGreaterThan(0);
+    });
+
+    it('regression: CC pass at 16K that previously hard-failed now chunks and passes the guard', () => {
+      // The exact failure mode: 200 lines × ~126 chars = ~25.2K chars. Under the old line-based
+      // chunker this produced ONE chunk (target 428 lines > 200) of 25.2K chars, which the guard
+      // rejected with "Input text exceeds the model's context window (16384 tokens)". The guard
+      // budget for CC is lower than bank (the template is ~4K tokens vs ~2.2K), so CC is the
+      // harder case — exercising it directly is the meaningful regression guard.
+      const longLine =
+        '2026-03-15 AMAZON SELLER SERVICES BANGALORE INR 2,499.00 DR Shopping ##'.padEnd(126, '.');
+      const text = Array.from({ length: 200 }, () => longLine).join('\n');
+
+      const plan = createTransactionChunkPlan(text, 16384, overhead('credit_card'));
+
+      expect(plan.chunkingUsed).toBe(true);
+      expect(plan.chunks.length).toBeGreaterThan(1); // no longer one giant chunk
+      for (const chunk of plan.chunks) {
+        expect(guardBudget(chunk.text, 'credit_card', 16384)).not.toBe(0);
+      }
+    });
+
+    it('CC overhead is larger than bank, so CC gets a tighter chunk budget', () => {
+      // Documents WHY the regression hit CC and not bank on the same input: the CC transactions
+      // template (~4K tokens) is substantially bigger than bank (~2.2K), so for identical text
+      // the CC plan fits fewer chars per chunk. Same text, identical ctx, CC chunks more.
+      const longLine =
+        '2026-03-15 AMAZON SELLER SERVICES BANGALORE INR 2,499.00 DR Shopping ##'.padEnd(126, '.');
+      const text = Array.from({ length: 400 }, () => longLine).join('\n');
+      const cc = createTransactionChunkPlan(text, 16384, overhead('credit_card'));
+      const bank = createTransactionChunkPlan(text, 16384, overhead('bank'));
+      expect(cc.chunks.length).toBeGreaterThan(bank.chunks.length);
     });
   });
 });
@@ -557,5 +602,55 @@ describe('getDroppedTransactionCount', () => {
 
   it('returns 0 for non-array truthy value', () => {
     expect(getDroppedTransactionCount({ droppedTransactions: 'oops' })).toBe(0);
+  });
+});
+
+describe('createTransactionChunkPlan calibrated output budget', () => {
+  afterEach(() => {
+    useSettingsStore.setState({
+      llmModel: null,
+      calibrationByModel: {},
+    });
+  });
+
+  it('reserves output room that covers the calibrated per-line output cost', () => {
+    useSettingsStore.setState({
+      llmProvider: 'ollama',
+      llmModel: 'qwen3-4b',
+      calibrationByModel: {
+        'ollama|qwen3-4b': { inputCharsPerToken: 2.3, outputTokensPerInputLine: 98 },
+      },
+    });
+    // Many lines, each short, so chunking actually splits.
+    const lines = Array.from({ length: 2000 }, (_, i) => `01 MAR MERCHANT ${i} 100.00 DR`);
+    const text = lines.join('\n');
+    // A CC-style overhead large enough that chunking engages.
+    const overhead = 'X'.repeat(16000);
+    const plan = createTransactionChunkPlan(text, 16384, overhead);
+    expect(plan.chunkingUsed).toBe(true);
+    expect(plan.chunks.length).toBeGreaterThan(1);
+    // The linear-coupled invariant the chunker honors via calculateMaxItems: each chunk's
+    // input (overhead + chunk text) PLUS its reserved output (lineCount * calibrated
+    // output/line) must fit the window. This is the real guard — not output alone. Under the
+    // old OUTPUT_TOKENS_PER_LINE=5 the chunker would pack ~465 lines/chunk and this sum would
+    // blow past the window (~59K), failing here; the calibrated 98 keeps it under.
+    for (const c of plan.chunks) {
+      const input = estimateTokens(`${overhead}\n${c.text}`);
+      const output = c.lineCount * getOutputTokensPerInputLine();
+      expect(input + output).toBeLessThan(16384);
+    }
+  });
+
+  it('falls back to DEFAULT_OUTPUT_TOKENS_PER_LINE (not 5) when uncached', () => {
+    // With no calibration, output/line is 90, not the old 5 → chunks are far smaller than the
+    // broken path would have produced.
+    const lines = Array.from({ length: 2000 }, (_, i) => `01 MAR MERCHANT ${i} 100.00 DR`);
+    const text = lines.join('\n');
+    const overhead = 'X'.repeat(16000);
+    const plan = createTransactionChunkPlan(text, 16384, overhead);
+    expect(plan.chunkingUsed).toBe(true);
+    // The old OUTPUT_TOKENS_PER_LINE=5 would allow ~465 lines/chunk; 90 allows far fewer.
+    const maxLinesPerChunk = Math.max(...plan.chunks.map(c => c.lineCount));
+    expect(maxLinesPerChunk).toBeLessThan(200);
   });
 });

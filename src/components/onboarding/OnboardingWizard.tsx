@@ -16,6 +16,7 @@ import { useSettingsStore } from '@/lib/store/settingsStore';
 import { LLMProvider, ModelInfo } from '@/lib/llm/types';
 import { Currency } from '@/types';
 import { cn } from '@/lib/utils';
+import { ensureModelCalibrated } from '@/lib/llm/calibrationProbe';
 
 export type ConnectionStatus = 'disconnected' | 'connecting' | 'connected' | 'failed';
 
@@ -71,6 +72,8 @@ export function OnboardingWizard({ open, onOpenChange }: OnboardingWizardProps) 
     error: null,
   });
 
+  const [isCalibrating, setIsCalibrating] = useState(false);
+
   const handleStep1Complete = useCallback((provider: LLMProvider, serverUrl: string, models: string[], modelInfos: ModelInfo[]) => {
     setState((prev) => ({
       ...prev,
@@ -91,14 +94,34 @@ export function OnboardingWizard({ open, onOpenChange }: OnboardingWizardProps) 
     setCurrentStep(3);
   }, [setCurrentStep, state.modelInfos]);
 
-  const handleStep3Complete = useCallback((currency: Currency) => {
+  const handleStep3Complete = useCallback(async (currency: Currency) => {
     const settings = useSettingsStore.getState();
-    // Order matters: setLLMProvider clears llmModel internally,
-    // so setLLMModel must come AFTER setLLMProvider.
+    // Order matters twice over:
+    //  - setLLMProvider clears llmModel internally, so setLLMModel must come
+    //    AFTER setLLMProvider.
+    //  - setLLMModel also clears the cached calibration ratios (a model switch
+    //    invalidates them), so calibration MUST run AFTER setLLMModel — running
+    //    it earlier would have its just-written ratios wiped by the next line.
     settings.setLLMServerUrl(state.serverUrl);
     settings.setLLMProvider(state.provider!);
     settings.setLLMModel(state.model || null);
     settings.setCurrency(currency);
+
+    // Proactively calibrate so the user's first import isn't surprised by a
+    // ~180s probe cost. ensureModelCalibrated never throws — on failure it
+    // leaves the cache empty and the import path falls back to defaults. The
+    // await is intentional: closing the wizard first would let an import race
+    // ahead and trigger a second concurrent probe via the import-start backstop.
+    setIsCalibrating(true);
+    try {
+      await ensureModelCalibrated({
+        provider: state.provider!,
+        baseUrl: state.serverUrl,
+        model: state.model,
+      });
+    } finally {
+      setIsCalibrating(false);
+    }
 
     markOnboardingComplete();
     onOpenChange(false);
@@ -139,6 +162,10 @@ export function OnboardingWizard({ open, onOpenChange }: OnboardingWizardProps) 
             />
           ))}
         </div>
+
+        {isCalibrating && (
+          <p className="text-sm text-muted-foreground pb-2">Optimizing for your model…</p>
+        )}
 
         <div className="py-2">
           {currentStep === 1 && (

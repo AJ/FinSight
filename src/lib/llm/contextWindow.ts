@@ -1,6 +1,6 @@
 import type { LLMProvider, FailureKind } from './types';
 import { getClient } from './index';
-import { useSettingsStore } from '@/lib/store/settingsStore';
+import { useSettingsStore, calibrationKey } from '@/lib/store/settingsStore';
 
 export interface ContextWindowInfo {
   /**
@@ -49,12 +49,44 @@ const OUTPUT_BUFFER_RATIO = 0.10;
 export const CHARS_PER_TOKEN = 2.3;
 
 /**
+ * Fallback output cost per input line when no calibration is cached (probe never ran or
+ * failed). Empirically measured ~90 for transaction JSON. This MUST be far larger than the
+ * old hardcoded 5 — 5 was the truncation bug. Even the uncalibrated path must reserve enough
+ * output room for the model to finish.
+ */
+export const DEFAULT_OUTPUT_TOKENS_PER_LINE = 90;
+
+/**
+ * Calibrated chars-per-token for INPUT text, read from the model's last calibration probe.
+ * Falls back to CHARS_PER_TOKEN (2.3) when uncalibrated. Every input-side token estimate
+ * (prompt sizing, chunker per-line input) reads this, so calibration is applied uniformly.
+ */
+export function getInputCharsPerToken(): number {
+  const s = useSettingsStore.getState();
+  const key = calibrationKey(s.llmProvider, s.llmModel);
+  const cached = key ? s.calibrationByModel?.[key]?.inputCharsPerToken : undefined;
+  return cached !== undefined && cached > 0 ? cached : CHARS_PER_TOKEN;
+}
+
+/**
+ * Calibrated output tokens the model emits per input line of statement text, read from the
+ * last calibration probe. Folds in both the tokenizer rate and this model's JSON verbosity.
+ * Falls back to DEFAULT_OUTPUT_TOKENS_PER_LINE when uncalibrated.
+ */
+export function getOutputTokensPerInputLine(): number {
+  const s = useSettingsStore.getState();
+  const key = calibrationKey(s.llmProvider, s.llmModel);
+  const cached = key ? s.calibrationByModel?.[key]?.outputTokensPerInputLine : undefined;
+  return cached !== undefined && cached > 0 ? cached : DEFAULT_OUTPUT_TOKENS_PER_LINE;
+}
+
+/**
  * Estimate token count from character count using the measured CHARS_PER_TOKEN ratio.
  * Heuristic — not a real tokenizer. Shared across all token-budget code so the ratio
  * lives in one place.
  */
 export function estimateTokens(text: string): number {
-  return Math.ceil(text.length / CHARS_PER_TOKEN);
+  return Math.ceil(text.length / getInputCharsPerToken());
 }
 
 // Fundamental rule (spec §6): i + o ≤ C. The three functions below are the closed-form

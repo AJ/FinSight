@@ -2,6 +2,7 @@ import { processStatement } from "./pipeline";
 import { parseCSV } from "./csvParser";
 import { parseXLS } from "./xlsParser";
 import { extractTextFromPDF } from "./documentExtraction";
+import { ensureModelCalibrated } from "@/lib/llm/calibrationProbe";
 import type {
   ExtractStatementBundleFromFileInput,
   ExtractStatementBundleFromRawTextInput,
@@ -38,7 +39,18 @@ export async function extractStatementBundleFromFile(
     }
 
     input.onProgress?.("Extracting text from document...");
-    const rawText = await extractTextFromPDF(input.file, input.password);
+
+    // Run the calibration probe alongside PDF text extraction. The two share no resource —
+    // pdfjs-dist is local CPU/memory work, the probe hits the network model — so concurrency is
+    // free. But the probe dominates wall-clock: it asks the model to extract a ~40-line sample
+    // (~3,900 completion tokens), which takes ~65-195s on local 1-4B hardware (180s timeout),
+    // while PDF text extraction is only ~1-3s. The import blocks until both finish because the
+    // transactions pass reads the cached ratios to size its chunks. On cache hit the probe is a
+    // no-op, so already-calibrated imports pay nothing.
+    const pdfPromise = extractTextFromPDF(input.file, input.password);
+    const calibratePromise = ensureModelCalibrated(input.llmConfig, input.signal);
+
+    const [rawText] = await Promise.all([pdfPromise, calibratePromise]);
 
     if (!rawText.trim()) {
       throw new Error(

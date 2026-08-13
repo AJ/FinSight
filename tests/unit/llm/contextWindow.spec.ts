@@ -11,11 +11,17 @@ import {
 } from '@/lib/llm/contextWindow';
 import type { ModelInfo } from '@/lib/llm/types';
 
-// Mock settings store
+// Mock settings store. calibrationKey is a pure helper used by the accessors, so pull the
+// real module in and override only useSettingsStore (whose state each test shapes via
+// mockGetState).
 const mockGetState = vi.fn();
-vi.mock('@/lib/store/settingsStore', () => ({
-  useSettingsStore: { getState: () => mockGetState() },
-}));
+vi.mock('@/lib/store/settingsStore', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/store/settingsStore')>();
+  return {
+    ...actual,
+    useSettingsStore: { getState: () => mockGetState() },
+  };
+});
 
 // Mock LLM client
 const mockListModels = vi.fn();

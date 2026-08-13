@@ -1,22 +1,15 @@
 import type { ExtractedTransaction } from '@/types/extractedTransaction';
 import { debugLog } from '@/lib/utils/debug';
-import { CHARS_PER_TOKEN, calculateMaxItems } from '@/lib/llm/contextWindow';
+import { calculateMaxItems, estimateTokens, getInputCharsPerToken, getOutputTokensPerInputLine } from '@/lib/llm/contextWindow';
 
+// Static (guard-skipped) path: used when the context window is unknown, so there is no
+// overflow budget to honor — chunking here is purely for LLM attention/friendliness.
 const CHUNK_TRIGGER_CHAR_THRESHOLD = 12000;
 const CHUNK_TRIGGER_LINE_THRESHOLD = 250;
 const CHUNK_TARGET_LINE_COUNT = 180;
+// Overlap (both paths): consecutive chunks re-include this many tail lines so a transaction
+// split across a boundary is captured by both and de-duplicated by mergeChunkTransactions.
 const CHUNK_OVERLAP_LINE_COUNT = 12;
-
-// Linear-coupled sizing (spec §6) — the "item" is a line: each input line yields input tokens
-// (its chars) and output tokens (the extracted JSON it produces). Per-line estimates are
-// starting values (spec §13) — calibrate live.
-const AVG_CHARS_PER_LINE = 55;
-const INPUT_TOKENS_PER_LINE = AVG_CHARS_PER_LINE / CHARS_PER_TOKEN; // ≈ 24
-const OUTPUT_TOKENS_PER_LINE = 5; // extracted-JSON tokens per input line (~15/txn ÷ ~3 lines/txn)
-// Fixed (non-variable) input for a transactions chunk: the system prompt + transactions
-// template instructions, measured ~2500 tokens for cc_transactions via token-budget
-// instrumentation. Passed to calculateMaxItems as the F in i + o ≤ C.
-const TRANSACTIONS_PROMPT_OVERHEAD_TOKENS = 2500;
 
 export interface TransactionChunkPlan {
   chunkingUsed: boolean;
@@ -58,37 +51,83 @@ export interface MergedChunkTransactions {
   conflictsResolved: number;
 }
 
-export function createTransactionChunkPlan(normalizedText: string, contextWindowTokens?: number): TransactionChunkPlan {
+/**
+ * Plan how to split `normalizedText` into chunks for transaction extraction.
+ *
+ * Two regimes:
+ *  - **Guard-aligned** (preferred): when `contextWindowTokens` AND `overheadText` are both
+ *    supplied, chunks are sized in CHARACTERS against the same budget the pre-flight overflow
+ *    guard enforces (`maxVariableInputChars`, the inverse of `calculateMaxOutputTokens`).
+ *    Every chunk this regime emits is guaranteed to pass the guard — there is no parallel
+ *    estimate to drift out of sync. `overheadText` is the fixed prompt prefix the guard sees
+ *    minus the variable text (system prompt + transactions template with `{RAW_TEXT}` removed).
+ *  - **Static** (guard skipped): when the context window is unknown, there is no overflow
+ *    budget to honor, so chunking uses fixed char/line thresholds purely for LLM attention.
+ *
+ * When `contextWindowTokens` is provided, `overheadText` MUST be provided too — otherwise the
+ * guard is active but the chunker cannot size against it, so the call falls back to the static
+ * regime (which may not satisfy the guard). The sole production caller (pipeline.ts) always
+ * passes both.
+ */
+export function createTransactionChunkPlan(
+  normalizedText: string,
+  contextWindowTokens?: number,
+  overheadText?: string,
+): TransactionChunkPlan {
   const lines = normalizedText.split('\n');
   const normalizedTextLength = normalizedText.length;
   const normalizedLineCount = lines.length;
 
-  let charThreshold: number;
-  let lineThreshold: number;
-  let targetLineCount: number;
+  const guardAligned = !!contextWindowTokens && overheadText !== undefined;
 
-  if (contextWindowTokens) {
-    // Linear-coupled sizing (spec §6): each line adds input (its chars) and output (the
-    // extracted JSON it yields). Max lines that fit, given the measured prompt overhead.
+  if (guardAligned) {
+    // Measure the REAL average chars/line from this statement's text, instead of assuming a
+    // fixed width. The overflow guard measures actual characters, so the per-chunk budget must
+    // too — a line-based budget keyed off an assumed chars/line drifts from the guard whenever
+    // real lines are longer (which they routinely are: merchant + city + amount + currency).
+    const avgCharsPerLine = normalizedLineCount > 0 ? normalizedTextLength / normalizedLineCount : 0;
+    const inputTokensPerLine = avgCharsPerLine / getInputCharsPerToken();
+
+    // Linear-coupled budget (i + o ≤ C): real per-pass overhead + per-line input + per-line
+    // output. This reserves output room (the guard returns 0 not only on input overflow but
+    // also when input leaves no generation room), which a pure input budget misses.
+    const overheadTokens = estimateTokens(overheadText!);
     const maxLines = calculateMaxItems(
       contextWindowTokens,
-      TRANSACTIONS_PROMPT_OVERHEAD_TOKENS,
-      INPUT_TOKENS_PER_LINE,
-      OUTPUT_TOKENS_PER_LINE,
+      overheadTokens,
+      inputTokensPerLine,
+      getOutputTokensPerInputLine(),
     ) ?? 0;
-    const budgetLines = Math.max(maxLines, 1);
-    const budgetChars = Math.floor(budgetLines * AVG_CHARS_PER_LINE);
-    charThreshold = budgetChars;
-    lineThreshold = budgetLines;
-    targetLineCount = budgetLines;
-  } else {
-    charThreshold = CHUNK_TRIGGER_CHAR_THRESHOLD;
-    lineThreshold = CHUNK_TRIGGER_LINE_THRESHOLD;
-    targetLineCount = CHUNK_TARGET_LINE_COUNT;
+    const maxChars = Math.floor(maxLines * avgCharsPerLine);
+
+    // Overhead alone exceeds the window (e.g. CC template ≈ 4.2K tokens vs a 4K window): no
+    // split can help. Emit one chunk; the guard will surface it as model-too-small.
+    if (maxChars <= 0) {
+      return singleShotPlan(normalizedText, lines, normalizedTextLength, normalizedLineCount, contextWindowTokens);
+    }
+
+    // Whole text fits the guard's variable budget → one shot.
+    if (normalizedTextLength <= maxChars) {
+      return singleShotPlan(normalizedText, lines, normalizedTextLength, normalizedLineCount, contextWindowTokens);
+    }
+
+    // Char-budget chunking, snapped to line boundaries so transactions stay whole. Sizing by
+    // chars (not a fixed line count) keeps each chunk under the guard regardless of how line
+    // length varies within the statement. Overlap stays line-based for the dedup model.
+    const chunks = chunkByCharBudget(lines, maxChars);
+    return {
+      chunkingUsed: true,
+      chunkTriggerReason: 'char_threshold',
+      normalizedTextLength,
+      normalizedLineCount,
+      contextWindowTokens,
+      chunks: finalize(chunks),
+    };
   }
 
-  const exceedsCharThreshold = normalizedTextLength > charThreshold;
-  const exceedsLineThreshold = normalizedLineCount > lineThreshold;
+  // Static regime (guard skipped / window unknown).
+  const exceedsCharThreshold = normalizedTextLength > CHUNK_TRIGGER_CHAR_THRESHOLD;
+  const exceedsLineThreshold = normalizedLineCount > CHUNK_TRIGGER_LINE_THRESHOLD;
 
   let chunkTriggerReason: TransactionChunkPlan['chunkTriggerReason'] = 'single_shot';
   if (exceedsCharThreshold && exceedsLineThreshold) {
@@ -100,72 +139,128 @@ export function createTransactionChunkPlan(normalizedText: string, contextWindow
   }
 
   if (chunkTriggerReason === 'single_shot') {
-    return {
-      chunkingUsed: false,
-      chunkTriggerReason,
-      normalizedTextLength,
-      normalizedLineCount,
-      contextWindowTokens,
-      chunks: [
-        {
-          index: 0,
-          totalChunks: 1,
-          startLine: 0,
-          endLine: Math.max(lines.length - 1, 0),
-          lineCount: lines.length,
-          isFirst: true,
-          isLast: true,
-          overlapStartLine: null,
-          text: normalizedText,
-        },
-      ],
-    };
+    return singleShotPlan(normalizedText, lines, normalizedTextLength, normalizedLineCount, contextWindowTokens);
   }
 
-  const chunks: TransactionChunk[] = [];
-  let startLine = 0;
-
-  while (startLine < lines.length) {
-    const endExclusive = Math.min(startLine + targetLineCount, lines.length);
-    const chunkLines = lines.slice(startLine, endExclusive);
-    const overlapStartLine = startLine === 0 ? null : startLine;
-
-    chunks.push({
-      index: chunks.length,
-      totalChunks: 0,
-      startLine,
-      endLine: Math.max(endExclusive - 1, startLine),
-      lineCount: chunkLines.length,
-      isFirst: startLine === 0,
-      isLast: endExclusive >= lines.length,
-      overlapStartLine,
-      text: chunkLines.join('\n'),
-    });
-
-    if (endExclusive >= lines.length) {
-      break;
-    }
-
-    startLine = Math.max(endExclusive - CHUNK_OVERLAP_LINE_COUNT, startLine + 1);
-  }
-
-  const totalChunks = chunks.length;
-  const finalizedChunks = chunks.map((chunk, index) => ({
-    ...chunk,
-    index,
-    totalChunks,
-    isFirst: index === 0,
-    isLast: index === totalChunks - 1,
-  }));
-
+  const chunks = chunkByLineCount(lines, CHUNK_TARGET_LINE_COUNT);
   return {
     chunkingUsed: true,
     chunkTriggerReason,
     normalizedTextLength,
     normalizedLineCount,
     contextWindowTokens,
-    chunks: finalizedChunks,
+    chunks: finalize(chunks),
   };
+}
+
+// Cost of a line within a chunk: its chars + the '\n' that rejoins it to its neighbours.
+// (join uses one fewer separator than lines; counting one per line over-budgets by a single
+// char per chunk — the safe direction for a ceiling.)
+function lineCost(line: string): number {
+  return line.length + 1;
+}
+
+function singleShotPlan(
+  text: string,
+  lines: string[],
+  normalizedTextLength: number,
+  normalizedLineCount: number,
+  contextWindowTokens?: number,
+): TransactionChunkPlan {
+  return {
+    chunkingUsed: false,
+    chunkTriggerReason: 'single_shot',
+    normalizedTextLength,
+    normalizedLineCount,
+    contextWindowTokens,
+    chunks: [
+      {
+        index: 0,
+        totalChunks: 1,
+        startLine: 0,
+        endLine: Math.max(lines.length - 1, 0),
+        lineCount: lines.length,
+        isFirst: true,
+        isLast: true,
+        overlapStartLine: null,
+        text,
+      },
+    ],
+  };
+}
+
+/**
+ * Greedily accumulate lines into each chunk while the running char cost stays at or below
+ * `maxChars`. At least one line is always included — even a single line that alone exceeds
+ * the budget (unavoidable; the guard surfaces it as input-too-large). Consecutive chunks
+ * overlap by CHUNK_OVERLAP_LINE_COUNT lines.
+ */
+function chunkByCharBudget(lines: string[], maxChars: number): TransactionChunk[] {
+  const chunks: TransactionChunk[] = [];
+  let startLine = 0;
+
+  while (startLine < lines.length) {
+    let endExclusive = startLine + 1;
+    let used = lineCost(lines[startLine]);
+    while (endExclusive < lines.length && used + lineCost(lines[endExclusive]) <= maxChars) {
+      used += lineCost(lines[endExclusive]);
+      endExclusive++;
+    }
+
+    const chunkLines = lines.slice(startLine, endExclusive);
+    chunks.push(buildChunk(chunks.length, startLine, endExclusive, chunkLines));
+
+    if (endExclusive >= lines.length) break;
+    startLine = Math.max(endExclusive - CHUNK_OVERLAP_LINE_COUNT, startLine + 1);
+  }
+
+  return chunks;
+}
+
+function chunkByLineCount(lines: string[], targetLineCount: number): TransactionChunk[] {
+  const chunks: TransactionChunk[] = [];
+  let startLine = 0;
+
+  while (startLine < lines.length) {
+    const endExclusive = Math.min(startLine + targetLineCount, lines.length);
+    const chunkLines = lines.slice(startLine, endExclusive);
+    chunks.push(buildChunk(chunks.length, startLine, endExclusive, chunkLines));
+
+    if (endExclusive >= lines.length) break;
+    startLine = Math.max(endExclusive - CHUNK_OVERLAP_LINE_COUNT, startLine + 1);
+  }
+
+  return chunks;
+}
+
+function buildChunk(
+  index: number,
+  startLine: number,
+  endExclusive: number,
+  chunkLines: string[],
+): TransactionChunk {
+  return {
+    index,
+    totalChunks: 0,
+    startLine,
+    endLine: Math.max(endExclusive - 1, startLine),
+    lineCount: chunkLines.length,
+    isFirst: false,
+    isLast: false,
+    overlapStartLine: startLine === 0 ? null : startLine,
+    text: chunkLines.join('\n'),
+  };
+}
+
+function finalize(chunks: TransactionChunk[]): TransactionChunk[] {
+  const totalChunks = chunks.length;
+  return chunks.map((chunk, index) => ({
+    ...chunk,
+    index,
+    totalChunks,
+    isFirst: index === 0,
+    isLast: index === totalChunks - 1,
+  }));
 }
 
 function normalizeDescription(description: string | undefined): string {

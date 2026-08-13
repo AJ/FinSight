@@ -19,7 +19,7 @@ import { useSettingsStore } from '@/lib/store/settingsStore';
 import { useTransactionStore } from '@/lib/store/transactionStore';
 import { usePersistHydrated } from '@/lib/store/usePersistHydrated';
 import { buildChatContextForQuestion } from '@/lib/chat/contextBuilder';
-import { getContextWindowInfo, calculateMaxOutputTokens, calculateMaxInputTokens, CHARS_PER_TOKEN } from '@/lib/llm/contextWindow';
+import { getContextWindowInfo, calculateMaxOutputTokens, calculateMaxInputTokens, getInputCharsPerToken } from '@/lib/llm/contextWindow';
 import { CHAT_SYSTEM_PROMPT } from '@/lib/llm/prompts';
 import { ChatMessage } from '@/types';
 import { AbortManager } from '@/lib/utils/AbortManager';
@@ -191,7 +191,7 @@ export function ChatPanel() {
         // context. Sizes how many chars of transaction context fit alongside the system prompt,
         // recent history, the question, and the reserved output.
         const maxContextChars =
-          (calculateMaxInputTokens(contextWindow, fixedInput, 800) ?? 8000) * CHARS_PER_TOKEN;
+          (calculateMaxInputTokens(contextWindow, fixedInput, 800) ?? 8000) * getInputCharsPerToken();
         const statementContext = buildChatContextForQuestion(transactions, currency, text, {
           maxChars: maxContextChars,
         });

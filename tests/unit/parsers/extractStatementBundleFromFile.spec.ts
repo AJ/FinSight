@@ -4,6 +4,7 @@ import { extractTextFromPDF } from '@/lib/parsers/documentExtraction';
 import { parseCSV } from '@/lib/parsers/csvParser';
 import { parseXLS } from '@/lib/parsers/xlsParser';
 import { processStatement } from '@/lib/parsers/pipeline';
+import { ensureModelCalibrated } from '@/lib/llm/calibrationProbe';
 
 vi.mock('@/lib/parsers/documentExtraction', () => ({
   extractTextFromPDF: vi.fn(),
@@ -21,10 +22,15 @@ vi.mock('@/lib/parsers/pipeline', () => ({
   processStatement: vi.fn(),
 }));
 
+vi.mock('@/lib/llm/calibrationProbe', () => ({
+  ensureModelCalibrated: vi.fn(),
+}));
+
 const mockExtractText = vi.mocked(extractTextFromPDF);
 const mockParseCSV = vi.mocked(parseCSV);
 const mockParseXLS = vi.mocked(parseXLS);
 const mockProcessStatement = vi.mocked(processStatement);
+const mockEnsureCalibrated = vi.mocked(ensureModelCalibrated);
 
 const mockBundle: import('@/lib/parsers/contracts').ExtractionBundle = {
   statementType: 'bank' as const,
@@ -76,6 +82,17 @@ describe('extractStatementBundleFromFile', () => {
     expect(mockExtractText).toHaveBeenCalledOnce();
   });
 
+  it('runs the calibration probe on the PDF path so the chunker has real ratios', async () => {
+    mockExtractText.mockResolvedValueOnce('some bank text');
+    mockProcessStatement.mockResolvedValueOnce({ success: true, data: mockBundle, warnings: [], errors: [] });
+    await extractStatementBundleFromFile({
+      file: makeFile('stmt.pdf'), defaultCurrency: INR, llmConfig,
+    });
+    expect(mockEnsureCalibrated).toHaveBeenCalledOnce();
+    expect(mockEnsureCalibrated).toHaveBeenCalledWith(llmConfig, undefined);
+    expect(mockExtractText).toHaveBeenCalledOnce();
+  });
+
   it('delegates CSV to parseCSV', async () => {
     mockParseCSV.mockResolvedValueOnce(mockBundle);
     const result = await extractStatementBundleFromFile({
@@ -83,6 +100,8 @@ describe('extractStatementBundleFromFile', () => {
     });
     expect(result).toBe(mockBundle);
     expect(mockParseCSV).toHaveBeenCalledOnce();
+    // Calibration is PDF-only (CSV/XLS bypass the LLM chunker entirely).
+    expect(mockEnsureCalibrated).not.toHaveBeenCalled();
   });
 
   it('delegates XLS to parseXLS', async () => {

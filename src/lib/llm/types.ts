@@ -189,6 +189,7 @@ export interface LLMCallOptions {
 
 export interface LLMClient {
   generate(baseUrl: string, model: string, prompt: string, options: LLMCallOptions): Promise<string>;
+  generateWithUsage(baseUrl: string, model: string, prompt: string, options: LLMCallOptions): Promise<{ text: string; usage?: TokenUsage }>;
   chatStream(baseUrl: string, model: string, messages: { role: string; content: string }[], options: LLMCallOptions): AsyncIterable<ChatChunk>;
   listModels(baseUrl: string, selectedModel?: string): Promise<ModelInfo[]>;
   checkStatus(baseUrl: string, selectedModel?: string): Promise<StatusResult>;
