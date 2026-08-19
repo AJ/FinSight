@@ -31,6 +31,26 @@ describe('matchConcept', () => {
     expect(matchConcept('01-Jan-2026')).toBeNull();
     expect(matchConcept('5,000.00')).toBeNull();
   });
+
+  it('matches multi-word header cells by whole word', () => {
+    expect(matchConcept('TRANSACTION DESCRIPTION')).toBe('description');
+    expect(matchConcept('AMOUNT (IN ₹)')).toBe('amount');
+    expect(matchConcept('Statement Date')).toBe('date');
+    expect(matchConcept('Updated Balance')).toBe('balance'); // 'balance' IS a whole word here
+  });
+
+  it('does not match synonyms embedded inside other words or prefixes', () => {
+    expect(matchConcept('update')).toBeNull();      // 'date' inside 'update', no boundary
+    expect(matchConcept('CRN 123')).toBeNull();     // matched 'credit' today via the 'cr' prefix
+    expect(matchConcept('Transaction ID')).toBeNull();
+  });
+
+  it('matches synonyms with a plural or trailing-punctuated cell', () => {
+    expect(matchConcept('Dates')).toBe('date');
+    expect(matchConcept('Deposits')).toBe('credit');
+    expect(matchConcept('Debits')).toBe('debit');
+    expect(matchConcept('(Date)')).toBe('date');
+  });
 });
 
 describe('countDistinctConcepts', () => {

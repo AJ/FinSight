@@ -105,4 +105,43 @@ describe('Pipeline integration', () => {
     expect(output).toContain('Account: 12345');
     expect(output).not.toContain('||');
   });
+
+  it('reassembles wrapped rows into single columned rows through all stages', () => {
+    const items: RawTextItem[] = [
+      item('DATE & TIME', 10, 100, 1, 60),
+      item('TRANSACTION DESCRIPTION', 90, 100, 1, 200),
+      item('AMOUNT (IN ₹)', 340, 100, 1, 420),
+      // Row 1 — description wraps around the date+amount line
+      item('URBAN COMPANY LIMITED', 90, 84, 1, 180),
+      item('04/10/2025 00:00', 10, 78, 1, 60),
+      item('304.00', 340, 78, 1, 380),
+      item('GURUGRAM IN', 90, 72, 1, 140),
+      // Row 2 — unwrapped
+      item('05/10/2025 00:00', 10, 60, 1, 60),
+      item('SWIGGY ORDER', 90, 60, 1, 150),
+      item('499.00', 340, 60, 1, 380),
+    ];
+
+    const lines = groupIntoLines(items);
+    const { tableRegions } = detectTableRegions(lines);
+    expect(tableRegions).toHaveLength(1);
+
+    const schemas = buildColumnSchemas(lines, tableRegions);
+    const assigned = assignColumns(lines, tableRegions, schemas);
+    const { rows } = buildTransactionRows(assigned, schemas);
+    const output = formatOutput({ rows, proseRegions: [], allLines: lines, schemas });
+
+    // header + 2 transactions — the wrapped row must be ONE row
+    expect(rows).toHaveLength(3);
+    const wrapped = rows.find(r =>
+      r.columnValues.some(v => v.includes('URBAN COMPANY LIMITED')),
+    );
+    expect(wrapped).toBeDefined();
+    expect(
+      wrapped!.columnValues.some(v => v.includes('GURUGRAM IN')),
+      'the wrapped second description line must be merged into the same row',
+    ).toBe(true);
+    expect(output).toContain('||');
+    expect(output).toContain('04/10/2025 00:00');
+  });
 });

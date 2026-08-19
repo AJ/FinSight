@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseDate, extractDateFromText, detectDateOrder, excelSerialToDate } from '@/lib/parsers/dateParser';
+import { parseDate, extractDateFromText, detectDateOrder, excelSerialToDate, DATE_MONTH_SEP } from '@/lib/parsers/dateParser';
 
 describe('parseDate — standard formats', () => {
   it('parses ISO format YYYY-MM-DD', () => {
@@ -255,5 +255,16 @@ describe('parseDate — native fallback overflow protection', () => {
 
   it('rejects "2024-02-30" (ISO with overflow)', () => {
     expect(parseDate('2024-02-30')).toBeNull();
+  });
+});
+
+describe('DATE_MONTH_SEP', () => {
+  it('matches yearless day-month cells and rejects number shapes', () => {
+    expect(DATE_MONTH_SEP.test('01-Jan')).toBe(true);
+    expect(DATE_MONTH_SEP.test('04 Oct')).toBe(true);
+    expect(DATE_MONTH_SEP.test('01-Jan-2024')).toBe(true);
+    expect(DATE_MONTH_SEP.test('18.0')).toBe(false);
+    expect(DATE_MONTH_SEP.test('49,154.62')).toBe(false);
+    expect(DATE_MONTH_SEP.test('12.35')).toBe(false);
   });
 });

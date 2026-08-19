@@ -13,14 +13,21 @@ export const HEADER_CONCEPTS: HeaderConcept[] = [
   { name: 'reference', synonyms: ['ref', 'chq', 'cheque'] },
 ];
 
+function escapeForRegex(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 /**
  * For a given text item, determine which header concept it matches (if any).
- * Returns the concept name or null.
+ * Returns the concept name or null. A synonym matches when it appears as a
+ * whole word inside the cell, optionally pluralized — "TRANSACTION DESCRIPTION"
+ * matches "description", "Debits" matches "debit", while "update" does not
+ * contain the word "date" and "CRN 123" does not contain the word "cr".
  */
 export function matchConcept(text: string): string | null {
   const lower = text.toLowerCase().trim();
   for (const concept of HEADER_CONCEPTS) {
-    if (concept.synonyms.some(s => lower === s || lower.startsWith(s))) {
+    if (concept.synonyms.some(s => new RegExp(`\\b${escapeForRegex(s)}s?\\b`).test(lower))) {
       return concept.name;
     }
   }

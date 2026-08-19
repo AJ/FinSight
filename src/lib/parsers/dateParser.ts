@@ -320,7 +320,7 @@ export function excelSerialToDate(serial: number): Date | null {
 // "Does this text look like a date?" — single source of truth for the parser pipeline
 // (moved from datePatterns.ts, now deleted). Shared by rowBuilder and tableDetector.
 const DATE_DIGIT_SEP = /\d{1,2}[\/\-.]\d{1,2}/;
-const DATE_MONTH_SEP = /\d{1,2}[\/\-\s.](?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)/i;
+export const DATE_MONTH_SEP = /\d{1,2}[\/\-\s.](?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)/i;
 
 export function isDateLike(text: string): boolean {
   return DATE_DIGIT_SEP.test(text) || DATE_MONTH_SEP.test(text);
