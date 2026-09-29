@@ -66,14 +66,14 @@ describe('extractStatementBundleFromFile', () => {
   });
 
   it('throws when PDF has no extractable text', async () => {
-    mockExtractText.mockResolvedValueOnce('   ');
+    mockExtractText.mockResolvedValueOnce({ text: '   ', tables: [] });
     await expect(
       extractStatementBundleFromFile({ file: makeFile('stmt.pdf'), defaultCurrency: INR, llmConfig }),
     ).rejects.toThrow('No text found in file');
   });
 
   it('delegates PDF to pipeline via extractStatementBundleFromRawText', async () => {
-    mockExtractText.mockResolvedValueOnce('some bank text');
+    mockExtractText.mockResolvedValueOnce({ text: 'some bank text', tables: [] });
     mockProcessStatement.mockResolvedValueOnce({ success: true, data: mockBundle, warnings: [], errors: [] });
     const result = await extractStatementBundleFromFile({
       file: makeFile('stmt.pdf'), defaultCurrency: INR, llmConfig,
@@ -83,7 +83,7 @@ describe('extractStatementBundleFromFile', () => {
   });
 
   it('runs the calibration probe on the PDF path so the chunker has real ratios', async () => {
-    mockExtractText.mockResolvedValueOnce('some bank text');
+    mockExtractText.mockResolvedValueOnce({ text: 'some bank text', tables: [] });
     mockProcessStatement.mockResolvedValueOnce({ success: true, data: mockBundle, warnings: [], errors: [] });
     await extractStatementBundleFromFile({
       file: makeFile('stmt.pdf'), defaultCurrency: INR, llmConfig,
@@ -128,7 +128,7 @@ describe('extractStatementBundleFromFile', () => {
   });
 
   it('calls onProgress for PDF extraction stages', async () => {
-    mockExtractText.mockResolvedValueOnce('bank text');
+    mockExtractText.mockResolvedValueOnce({ text: 'bank text', tables: [] });
     mockProcessStatement.mockResolvedValueOnce({ success: true, data: mockBundle, warnings: [], errors: [] });
     const onProgress = vi.fn();
     await extractStatementBundleFromFile({

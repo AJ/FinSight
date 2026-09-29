@@ -3,7 +3,7 @@ import { detectTableRegions } from '@/lib/parsers/extraction/tableDetector';
 import type { Line, RawTextItem } from '@/lib/parsers/extraction/extractionTypes';
 
 function item(text: string, x: number, y: number, page: number = 1): RawTextItem {
-  return { text, x, right: x + text.length * 6, y, page };
+  return { text, x, right: x + text.length * 6, y, page, height: 9 };
 }
 
 function makeLines(itemGrid: RawTextItem[][]): Line[] {

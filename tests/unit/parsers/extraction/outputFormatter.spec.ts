@@ -13,6 +13,7 @@ function makeRow(values: string[], regionIndex: number = 0, y: number = 100, pag
           right: i * 100 + t.length * 6,
           y,
           page,
+          height: 9,
         })),
         page,
       },
@@ -34,6 +35,7 @@ function makeLine(texts: string[], y: number, page: number): Line {
       right: i * 100 + t.length * 6,
       y,
       page,
+      height: 9,
     })),
     page,
   };
@@ -131,8 +133,8 @@ describe('formatOutput', () => {
         line: {
           y: 60,
           items: [
-            { text: 'Statement', x: 0, right: 60, y: 60, page: 1 },
-            { text: 'generated', x: 70, right: 130, y: 60, page: 1 },
+            { text: 'Statement', x: 0, right: 60, y: 60, page: 1, height: 9 },
+            { text: 'generated', x: 70, right: 130, y: 60, page: 1, height: 9 },
           ],
           page: 1,
         },
@@ -161,7 +163,7 @@ describe('formatOutput', () => {
       {
         line: {
           y: 60,
-          items: [{ text: 'Footer', x: 0, right: 40, y: 60, page: 2 }],
+          items: [{ text: 'Footer', x: 0, right: 40, y: 60, page: 2, height: 9 }],
           page: 2,
         },
         assignments: [0],
@@ -173,5 +175,72 @@ describe('formatOutput', () => {
     const result = formatOutput({ rows, proseRegions: [], allLines: [], schemas: [], postTableLines });
     expect(result).toContain('--- PAGE BREAK ---');
     expect(result).toContain('Footer');
+  });
+});
+
+// ─── Row identity: row segments with line indexes ────────────────────────────
+
+import { formatOutputWithSegments } from '@/lib/parsers/extraction/outputFormatter';
+
+describe('formatOutputWithSegments — row segments', () => {
+  const headerRow = (values: string[], regionIndex: number, y: number): LogicalRow => {
+    const row = makeRow(values, regionIndex, y);
+    row.lines[0].isHeader = true;
+    return row;
+  };
+
+  it('reports the header line and each data-row line with their indexes in the emitted text', () => {
+    const rows = [
+      headerRow(['Date', 'Description', 'Amount'], 0, 300),
+      makeRow(['02/04/2025', 'AMAZON', '5000'], 0, 200),
+      makeRow(['05/04/2025', 'FLIPKART', '8000'], 0, 100),
+    ];
+    const { text, rowSegments } = formatOutputWithSegments({ rows, proseRegions: [], allLines: [], schemas: [] });
+
+    expect(text.split('\n')).toEqual([
+      'Date||Description||Amount',
+      '02/04/2025||AMAZON||5000',
+      '05/04/2025||FLIPKART||8000',
+    ]);
+    expect(rowSegments).toEqual([
+      { regionIndex: 0, lineIndex: 0, isHeader: true },
+      { regionIndex: 0, lineIndex: 1, isHeader: false },
+      { regionIndex: 0, lineIndex: 2, isHeader: false },
+    ]);
+  });
+
+  it('keeps line indexes correct when prose precedes rows', () => {
+    const proseRegion: ProseRegion = { startLineIndex: 0, endLineIndex: 1, page: 1 };
+    const allLines = [makeLine(['Intro prose line'], 400, 1), makeLine(['Footer'], 50, 1)];
+    const rows = [makeRow(['02/04/2025', 'AMAZON', '5000'], 0, 200)];
+    const { rowSegments } = formatOutputWithSegments({ rows, proseRegions: [proseRegion], allLines, schemas: [] });
+
+    // Prose renders first (y=400 above the row's y=200); the row lands on line 1.
+    expect(rowSegments).toEqual([{ regionIndex: 0, lineIndex: 1, isHeader: false }]);
+  });
+
+  it('accounts for the blank line inserted between differing table regions', () => {
+    const rows = [
+      makeRow(['02/04/2025', 'AMAZON', '5000'], 0, 300),
+      makeRow(['A', 'B'], 1, 200),
+    ];
+    const schemas = [
+      makeSchema(0, ['Date', 'Description', 'Amount']),
+      makeSchema(1, ['X']),  // differs from region 0's schema → blank line inserted
+    ];
+    const { text, rowSegments } = formatOutputWithSegments({ rows, proseRegions: [], allLines: [], schemas });
+
+    expect(text.split('\n')).toEqual(['02/04/2025||AMAZON||5000', '', 'A||B']);
+    expect(rowSegments).toEqual([
+      { regionIndex: 0, lineIndex: 0, isHeader: false },
+      { regionIndex: 1, lineIndex: 2, isHeader: false },
+    ]);
+  });
+
+  it('formatOutput (wrapper) returns just the text, unchanged', () => {
+    const rows = [makeRow(['02/04/2025', 'AMAZON', '5000'], 0, 100)];
+    const viaWrapper = formatOutput({ rows, proseRegions: [], allLines: [], schemas: [] });
+    const viaFull = formatOutputWithSegments({ rows, proseRegions: [], allLines: [], schemas: [] });
+    expect(viaWrapper).toBe(viaFull.text);
   });
 });

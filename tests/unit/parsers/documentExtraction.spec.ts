@@ -5,6 +5,18 @@ import {
   PDFPasswordError,
 } from '@/lib/parsers/documentExtraction';
 
+// The debug module's env gate evaluates at module load — after this file's
+// static imports, so stubbing DEBUG_LOGGING here is too late. The
+// measurement-summary test observes the pipeline's debug logging, so route
+// debug through an always-on passthrough (the log output IS the feature
+// under test; capturing it via console is the observation point).
+vi.mock('@/lib/utils/debug', () => ({
+  debugLog: (...args: unknown[]) => { console.log(...args); },
+  debugError: (...args: unknown[]) => { console.error(...args); },
+  debugWarn: (...args: unknown[]) => { console.warn(...args); },
+  default: { debugLog: (...args: unknown[]) => { console.log(...args); }, debugError: (...args: unknown[]) => { console.error(...args); }, debugWarn: (...args: unknown[]) => { console.warn(...args); } },
+}));
+
 // ── pdfjs-dist mock ───────────────────────────────────────────────────────────
 // pdfjs-dist requires DOMMatrix (canvas API) which jsdom doesn't provide.
 // This is a legitimate external boundary — pdfjs is a binary format parser
@@ -247,7 +259,7 @@ describe('extractTextFromPDF', () => {
     const { extractTextFromPDF } = await import('@/lib/parsers/documentExtraction');
     setupPdfMock(noisyPdfPages);
 
-    const text = await extractTextFromPDF(makePdfFile());
+    const { text } = await extractTextFromPDF(makePdfFile());
 
     // Header content
     expect(text).toContain('ACME BANK');
@@ -268,7 +280,7 @@ describe('extractTextFromPDF', () => {
     const { extractTextFromPDF } = await import('@/lib/parsers/documentExtraction');
     setupPdfMock(noisyPdfPages);
 
-    const text = await extractTextFromPDF(makePdfFile());
+    const { text } = await extractTextFromPDF(makePdfFile());
 
     const breaks = text.split('--- PAGE BREAK ---');
     expect(breaks.length).toBeGreaterThanOrEqual(2);
@@ -280,7 +292,7 @@ describe('extractTextFromPDF', () => {
     const { extractTextFromPDF } = await import('@/lib/parsers/documentExtraction');
     setupPdfMock(noisyPdfPages);
 
-    const text = await extractTextFromPDF(makePdfFile());
+    const { text } = await extractTextFromPDF(makePdfFile());
 
     // "Account No" and "IFSC" share y=740 — should be on the same output line
     const lines = text.split('\n');
@@ -292,7 +304,7 @@ describe('extractTextFromPDF', () => {
     const { extractTextFromPDF } = await import('@/lib/parsers/documentExtraction');
     setupPdfMock(noisyPdfPages);
 
-    const text = await extractTextFromPDF(makePdfFile());
+    const { text } = await extractTextFromPDF(makePdfFile());
 
     // Header row (Date, Description, Debit, Credit, Balance) triggers column detection
     // All lines use column-based formatting with || separator
@@ -303,7 +315,7 @@ describe('extractTextFromPDF', () => {
     const { extractTextFromPDF } = await import('@/lib/parsers/documentExtraction');
     setupPdfMock(noisyPdfPages);
 
-    const text = await extractTextFromPDF(makePdfFile());
+    const { text } = await extractTextFromPDF(makePdfFile());
 
     // The empty items at y=500 should not produce any output lines
     const lines = text.split('\n').filter(l => l.trim().length > 0);
@@ -315,7 +327,7 @@ describe('extractTextFromPDF', () => {
     const { extractTextFromPDF } = await import('@/lib/parsers/documentExtraction');
     setupPdfMock(noisyPdfPages);
 
-    const text = await extractTextFromPDF(makePdfFile());
+    const { text } = await extractTextFromPDF(makePdfFile());
 
     // "ACME BANK" (y=780) should appear before "Page 1 of 2" (y=40)
     const bankIdx = text.indexOf('ACME BANK');
@@ -334,7 +346,7 @@ describe('extractTextFromPDF', () => {
     const { extractTextFromPDF } = await import('@/lib/parsers/documentExtraction');
     setupPasswordPdfWithCorrectPassword();
 
-    const text = await extractTextFromPDF(makePdfFile(), 'my-password');
+    const { text } = await extractTextFromPDF(makePdfFile(), 'my-password');
 
     expect(text).toContain('Secret Content');
   });
@@ -368,7 +380,7 @@ describe('extractTextFromPDF', () => {
       ] }) }],
     ]);
 
-    const text = await extractTextFromPDF(makePdfFile());
+    const { text } = await extractTextFromPDF(makePdfFile());
 
     expect(text).toContain('Single Page Content');
     expect(text).toContain('More Text');
@@ -382,7 +394,7 @@ describe('extractTextFromPDF', () => {
       [{ getTextContent: () => Promise.resolve({ items: [] }) }],
     ]);
 
-    const text = await extractTextFromPDF(makePdfFile());
+    const { text } = await extractTextFromPDF(makePdfFile());
 
     // No text items → empty output (page breaks are only between content pages)
     expect(text).toBe('');
@@ -443,5 +455,44 @@ describe('extractTextFromTabular', () => {
 
     expect(text).toContain('Sheet: Sheet1');
     expect(text).toContain('Sheet: Sheet2');
+  });
+});
+
+// ── Measurement summary (row-content-hygiene spec Part E) ────────────────────
+// The content-free numbers log: per-region column extents, inter-column gaps,
+// dateless-line heights, row-gap rhythm. Numbers only — never item text.
+
+describe('measurement summary log', () => {
+  it('emits a STACKS entry per detected region, containing no statement text', async () => {
+    const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      const { extractTextFromPDF } = await import('@/lib/parsers/documentExtraction');
+      setupPdfMock(noisyPdfPages);
+
+      await extractTextFromPDF(makePdfFile());
+
+      const measureEntries = consoleSpy.mock.calls
+        .map((call) => call.map((a) => String(a)).join(' '))
+        .filter((s) => s.includes('STACKS region='));
+
+      // The noisy fixture's transaction table is detected, so at least one
+      // measurement entry exists.
+      expect(measureEntries.length).toBeGreaterThanOrEqual(1);
+
+      // Format sanity: stack groups, gap scales, and row rhythm are present.
+      expect(measureEntries[0]).toContain('groups=');
+      expect(measureEntries[0]).toContain('sameRowGaps=');
+      expect(measureEntries[0]).toContain('rowGaps=');
+      // The old header-bounds log is gone.
+      expect(measureEntries.join(' ')).not.toContain('cols=[L');
+
+      // Privacy invariant: no item text leaks into the measurement entry.
+      // The fixture's distinctive strings must not appear.
+      expect(measureEntries.join(' ')).not.toContain('SALARY CREDIT');
+      expect(measureEntries.join(' ')).not.toContain('FLIPKART');
+      expect(measureEntries.join(' ')).not.toContain('ZOMATO');
+    } finally {
+      consoleSpy.mockRestore();
+    }
   });
 });

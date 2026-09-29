@@ -2,6 +2,7 @@ import type { StatementFormat, Currency, Transaction } from "@/types";
 import type { StatementType } from "@/types/creditCard";
 import type { LLMRuntimeConfig } from "@/lib/llm/types";
 import type { BankSummary, CCSummary, Summary } from "./extractSummary";
+import type { StatementTableInfo } from "./extraction/extractionTypes";
 
 export interface BankVerificationInputs {
   kind: "bank";
@@ -72,6 +73,8 @@ export interface ExtractStatementBundleFromFileInput {
 
 export interface ExtractStatementBundleFromRawTextInput {
   rawText: string;
+  /** Geometry-located transaction tables (PDF path only). Line indexes are into `rawText`. */
+  tables?: StatementTableInfo[];
   defaultCurrency: Currency;
   fileName: string;
   format: StatementFormat;

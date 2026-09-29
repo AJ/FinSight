@@ -8,7 +8,7 @@ import { formatOutput } from '@/lib/parsers/extraction/outputFormatter';
 import type { RawTextItem } from '@/lib/parsers/extraction/extractionTypes';
 
 function item(text: string, x: number, y: number, page: number = 1, right?: number): RawTextItem {
-  return { text, x, right: right ?? x + text.length * 6, y, page };
+  return { text, x, right: right ?? x + text.length * 6, y, page, height: 9 };
 }
 
 describe('Pipeline integration', () => {
@@ -144,4 +144,5 @@ describe('Pipeline integration', () => {
     expect(output).toContain('||');
     expect(output).toContain('04/10/2025 00:00');
   });
+
 });

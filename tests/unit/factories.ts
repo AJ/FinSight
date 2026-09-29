@@ -38,6 +38,7 @@ interface MakeTransactionInput {
   originalCurrency?: string;
   originalAmount?: number;
   confidence?: number;
+  sourceLine?: number;
   // Overrides applied after construction (mutable fields)
   category?: Category;
   categoryConfidence?: number;
@@ -76,6 +77,7 @@ export function makeTransaction(input: MakeTransactionInput = {}): Transaction {
     originalCurrency: input.originalCurrency,
     originalAmount: input.originalAmount,
     confidence: input.confidence,
+    sourceLine: input.sourceLine,
   };
 
   const txn = Transaction.fromExtracted(
@@ -104,19 +106,17 @@ export function makeTransaction(input: MakeTransactionInput = {}): Transaction {
     Object.defineProperty(txn, 'date', { value: input.date, writable: true });
   }
 
-  // Default category: 'shopping' (Expense). fromExtracted() assigns 'other' (Excluded),
-  // which causes isExpense to return false and silently drops transactions from most
-  // analytics functions. Tests expect expense transactions by default.
+  // Default category: 'shopping' (fromExtracted assigns 'other', the extraction default);
+  // tests usually want a concrete spending category for assertions on budget/pie/grouping.
+  // Category does NOT affect metric roles — routing reads subtype+direction+source, and the
+  // factory already defaults subtype to 'purchase' for a debit, so a default txn counts as spend.
   txn.category = input.category ?? makeCategory('shopping');
   if (input.categoryConfidence !== undefined) txn.categoryConfidence = input.categoryConfidence;
   if (input.reviewReasons !== undefined) Object.defineProperty(txn, 'reviewReasons', { value: input.reviewReasons, writable: true });
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- readonly field override for test setup
-  if (input.categorizedBy !== undefined) txn.categorizedBy = input.categorizedBy as any;
+  if (input.categorizedBy !== undefined) txn.categorizedBy = input.categorizedBy;
   if (input.isAnomaly !== undefined) txn.isAnomaly = input.isAnomaly;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- readonly field override for test setup
-  if (input.anomalyTypes !== undefined) txn.anomalyTypes = input.anomalyTypes as any;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- readonly field override for test setup
-  if (input.anomalyDetails !== undefined) txn.anomalyDetails = input.anomalyDetails as any;
+  if (input.anomalyTypes !== undefined) txn.anomalyTypes = input.anomalyTypes;
+  if (input.anomalyDetails !== undefined) txn.anomalyDetails = input.anomalyDetails;
   if (input.anomalyDismissed !== undefined) txn.anomalyDismissed = input.anomalyDismissed;
   if (input.merchant !== undefined) Object.defineProperty(txn, 'merchant', { value: input.merchant, writable: true });
   if (input.sourceFileHash !== undefined) Object.defineProperty(txn, 'sourceFileHash', { value: input.sourceFileHash, writable: true });
@@ -155,6 +155,7 @@ interface MakeExtractedTransactionInput {
   originalCurrency?: string;
   originalAmount?: number;
   confidence?: number;
+  sourceLine?: number;
 }
 
 export function makeExtractedTransaction(input: MakeExtractedTransactionInput = {}): ExtractedTransaction {
@@ -169,6 +170,7 @@ export function makeExtractedTransaction(input: MakeExtractedTransactionInput = 
     originalCurrency: input.originalCurrency ?? undefined,
     originalAmount: input.originalAmount ?? undefined,
     confidence: input.confidence ?? 0.9,
+    sourceLine: input.sourceLine,
   };
 }
 

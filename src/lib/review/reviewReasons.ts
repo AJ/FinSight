@@ -56,6 +56,12 @@ export const REVIEW_REASONS = {
     hint: 'The subtype is a default, not extracted — pick the subtype and category',
     action: 'Set subtype',
   },
+  source_line_missing: {
+    severity: 'advisory',
+    label: 'Source line not reported',
+    hint: 'The extraction did not report which statement line this row came from',
+    action: 'Verify',
+  },
 } as const satisfies Record<string, ReviewReasonDef>;
 
 export type ReviewReason = keyof typeof REVIEW_REASONS;
@@ -114,6 +120,7 @@ export const DISPLAY_ORDER: readonly ReviewReason[] = [
   'invalid_subtype_category',
   'self_transfer_unresolved',
   'low_confidence',
+  'source_line_missing',
   'fingerprint_collision',
 ];
 

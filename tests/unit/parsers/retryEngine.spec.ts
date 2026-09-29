@@ -23,24 +23,86 @@ const RETRY_SCHEMA: JSONSchema = {
   additionalProperties: true,
 };
 
-function lmStudioResponse(content: string) {
+function lmStudioResponse(content: string, finishReason?: 'stop' | 'length') {
+  const choice: { message: { content: string }; finish_reason?: 'stop' | 'length' } = {
+    message: { content },
+  };
+  if (finishReason) choice.finish_reason = finishReason;
+  const body = {
+    choices: [choice],
+    usage: { prompt_tokens: 10, completion_tokens: 20 },
+  };
   return Promise.resolve({
     ok: true,
     status: 200,
-    json: () => Promise.resolve({
-      choices: [{ message: { content } }],
-      usage: { prompt_tokens: 10, completion_tokens: 20 },
-    }),
-    text: () => Promise.resolve(JSON.stringify({
-      choices: [{ message: { content } }],
-      usage: { prompt_tokens: 10, completion_tokens: 20 },
-    })),
+    json: () => Promise.resolve(body),
+    text: () => Promise.resolve(JSON.stringify(body)),
   });
 }
 
 describe('runWithRetry', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  it('stops after ONE attempt when the server reports finish_reason "length" (output truncated)', async () => {
+    // Truncation is a size problem — retrying the same prompt at the same size
+    // is doomed. The engine must report outputTruncated and not burn retries.
+    mockFetch.mockResolvedValue(lmStudioResponse('{"key": "val', 'length'));
+    const validateFn = vi.fn().mockReturnValue({
+      valid: true, errors: [], warnings: [], data: { key: 'x' },
+    } as ValidationResult<{ key: string }>);
+
+    const result = await runWithRetry(
+      '{RAW_TEXT}',
+      'text',
+      validateFn,
+      { maxRetries: 3, stage: 'test', responseSchema: RETRY_SCHEMA, schemaName: 'test', llmConfig: { provider: 'lmstudio', baseUrl: 'http://localhost:1234', model: 'test' } },
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.outputTruncated).toBe(true);
+    expect(result.attempts).toBe(1);
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+    expect(result.errors[0]).toContain('truncated');
+  });
+
+  it('treats a length-capped response as truncated even when the JSON prefix parses (no silent salvage)', async () => {
+    // The adversarial case: the cut happened to land where the response still
+    // parses as valid JSON (a repaired prefix). It must NOT count as success —
+    // that is the silent-partial-import bug.
+    mockFetch.mockResolvedValue(lmStudioResponse('{"key": "salvaged"}', 'length'));
+    const validateFn = vi.fn().mockReturnValue({
+      valid: true, errors: [], warnings: [], data: { key: 'salvaged' },
+    } as ValidationResult<{ key: string }>);
+
+    const result = await runWithRetry(
+      '{RAW_TEXT}',
+      'text',
+      validateFn,
+      { maxRetries: 3, stage: 'test', responseSchema: RETRY_SCHEMA, schemaName: 'test', llmConfig: { provider: 'lmstudio', baseUrl: 'http://localhost:1234', model: 'test' } },
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.outputTruncated).toBe(true);
+    expect(validateFn).not.toHaveBeenCalled();
+  });
+
+  it('a normal (stop) response is not treated as truncated', async () => {
+    mockFetch.mockResolvedValue(lmStudioResponse('{"key": "value"}', 'stop'));
+    const validateFn = vi.fn().mockReturnValue({
+      valid: true, errors: [], warnings: [], data: { key: 'value' },
+    } as ValidationResult<{ key: string }>);
+
+    const result = await runWithRetry(
+      '{RAW_TEXT}',
+      'text',
+      validateFn,
+      { maxRetries: 3, stage: 'test', responseSchema: RETRY_SCHEMA, schemaName: 'test', llmConfig: { provider: 'lmstudio', baseUrl: 'http://localhost:1234', model: 'test' } },
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.outputTruncated).toBeUndefined();
   });
 
   it('succeeds on first attempt', async () => {

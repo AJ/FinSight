@@ -370,8 +370,11 @@ describe('mergeOutputs — chunk overlap amount conflicts', () => {
     expect(result.meta.warnings.some(w => w.includes('potential duplicate'))).toBe(false);
   });
 
-  it('chunk overlap amount conflict is resolved at chunk merge layer', () => {
-    // Full pipeline: chunk merge → mergeOutputs
+  it('keeps both transactions when chunk overlap extracts different amounts', () => {
+    // Full pipeline: chunk merge → mergeOutputs. Different amounts across chunks are now treated
+    // as distinct transactions (no conflict resolution), so both survive. The verification layer's
+    // near-duplicate check requires equal amounts, so the pair is NOT flagged — this is the
+    // accepted different-amount phantom residual.
     const chunk1Results = [
       makeTxn({ description: 'AMAZON RETAIL', amount: 1299, type: 'debit', date: '2024-01-15', confidence: 0.7 }),
     ];
@@ -379,17 +382,35 @@ describe('mergeOutputs — chunk overlap amount conflicts', () => {
       makeTxn({ description: 'AMAZON RETAIL', amount: 1399, type: 'debit', date: '2024-01-15', confidence: 0.9 }),
     ];
 
-    // Layer 1: mergeChunkTransactions resolves the amount conflict
+    // Layer 1: mergeChunkTransactions keeps both (different amounts → distinct signatures)
     const merged = mergeChunkTransactions([...chunk1Results, ...chunk2Results]);
-    expect(merged.transactions).toHaveLength(1);
-    expect(merged.conflictsResolved).toBe(1);
-    expect(merged.transactions[0].amount).toBe(1399); // higher confidence wins
-    expect(merged.transactions[0].confidence).toBe(0.9);
+    expect(merged.transactions).toHaveLength(2);
+    expect(merged.duplicatesRemoved).toBe(0);
 
-    // Layer 2: mergeOutputs sees a single clean transaction
+    // Layer 2: mergeOutputs sees two transactions; different amounts → not a near-duplicate →
+    // both kept, no potential-duplicate warning.
     const result = mergeOutputs('bank', null, { transactions: merged.transactions }, null, []);
-    expect(result.transactions).toHaveLength(1);
+    expect(result.transactions).toHaveLength(2);
     expect(result.meta.warnings.some(w => w.includes('potential duplicate'))).toBe(false);
+  });
+
+  it('flags same-amount chunk-overlap phantoms as potential duplicates (recovered by verification)', () => {
+    // Same row extracted with the SAME amount but diverging originalAmount: exact signatures
+    // differ, so chunk merge keeps both. The verification layer then catches them (equal amount,
+    // same date, identical description) and flags — not drops — the pair.
+    const chunk1Results = [
+      makeTxn({ description: 'AMAZON RETAIL', amount: 1299, type: 'debit', date: '2024-01-15', originalAmount: 0, confidence: 0.7 }),
+    ];
+    const chunk2Results = [
+      makeTxn({ description: 'AMAZON RETAIL', amount: 1299, type: 'debit', date: '2024-01-15', confidence: 0.9 }),
+    ];
+
+    const merged = mergeChunkTransactions([...chunk1Results, ...chunk2Results]);
+    expect(merged.transactions).toHaveLength(2);
+
+    const result = mergeOutputs('bank', null, { transactions: merged.transactions }, null, []);
+    expect(result.transactions).toHaveLength(2);
+    expect(result.meta.warnings.some(w => w.includes('potential duplicate'))).toBe(true);
   });
 
   it('identical overlap transactions are deduped at chunk level', () => {

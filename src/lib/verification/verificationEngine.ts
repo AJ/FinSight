@@ -37,6 +37,10 @@ export interface VerifiedTransaction extends Transaction {
     descriptionMatched: boolean
     contextMatched: boolean
     typeMatched: boolean
+    /** A recognized source cell disagrees; whole-row fallback cannot override it. */
+    sourceFieldsContradicted?: boolean
+    /** Soft line check (row-identity spec §8): the row's sourceLine holds its amount. */
+    lineMatched?: boolean
   }
 }
 
@@ -81,6 +85,13 @@ const AMOUNT_TOLERANCE = 1.0         // ₹1 for balance verification (handles s
 const MIN_CONFIDENCE_ACCEPT = 75     // 75% confidence threshold
 const CATEGORIZATION_TOLERANCE = 10  // ₹10 for categorization matches
 
+// Soft line-check bonus (row-identity spec §8): when a transaction carries its
+// source line number and that line holds the amount, add this much confidence
+// (capped at 100). Sized so weak-evidence rows with SOME corroboration cross 75
+// (71+12=83, 63+12=75) while bare amount-only (34→46) and
+// amount+structural-type (62→74) stay rejected.
+const SOURCE_LINE_BONUS = 12
+
 //
 // PUBLIC ENTRY
 //
@@ -121,6 +132,12 @@ export function verifyStatement(
     } else {
       result = verifyTransactionProgressive(tx, normalizedText, usedPositions, preferredOrder);
     }
+
+    // Soft line check (row-identity spec §8): additive bonus only, applied after
+    // the matching regime's verdict. The engine's internal normalize() preserves
+    // line structure and verifyStatement receives the same normalized text the
+    // line numbers were computed against, so sourceLine-1 is the exact line.
+    result = applySourceLineBonus(result, tx, normalizedText);
 
     debugLog('verification', `Transaction "${tx.description?.substring(0, 40)}" | amount=${tx.amount} type=${tx.type}`, {
       amountMatched: result.verification.amountMatched,
@@ -360,6 +377,55 @@ function scoreCandidate(
 }
 
 //
+// SOFT SOURCE-LINE CHECK (row-identity spec §8)
+//
+
+function lineHoldsStandaloneAmount(line: string, amountVariants: string[]): boolean {
+  for (const variant of amountVariants) {
+    let searchStart = 0;
+    while (searchStart < line.length) {
+      const idx = line.indexOf(variant, searchStart);
+      if (idx === -1) break;
+      searchStart = idx + Math.max(1, variant.length);
+      const before = idx > 0 ? line[idx - 1] : ' ';
+      const afterIdx = idx + variant.length;
+      const after = afterIdx < line.length ? line[afterIdx] : ' ';
+      // Same standalone-number rule as the progressive scan: "500" must not
+      // match inside "49500".
+      if (!/\d/.test(before) && !/\d/.test(after)) return true;
+    }
+  }
+  return false;
+}
+
+// Soft line check: when a transaction carries its source line number, look that
+// line up in the raw text; if the amount sits on it, add a confidence bonus.
+// Never subtracts — a miss is inconclusive (wrong echo, or a wrapped row whose
+// amount sits on a continuation line).
+function applySourceLineBonus(
+  result: VerifiedTransaction,
+  tx: Transaction,
+  normalizedText: string,
+): VerifiedTransaction {
+  if (result.verification.sourceFieldsContradicted) return result;
+  if (typeof tx.sourceLine !== 'number' || !Number.isFinite(tx.sourceLine)) return result;
+  const line = normalizedText.split('\n')[tx.sourceLine - 1];
+  if (line === undefined) return result;
+  if (!lineHoldsStandaloneAmount(line, generateAmountVariants(tx.amount))) {
+    debugLog('verification', `sourceLine ${tx.sourceLine} does not hold the amount — no line bonus (soft check)`);
+    return result;
+  }
+  const confidence = Math.min(100, result.confidence + SOURCE_LINE_BONUS);
+  // Rebuild on the Transaction prototype (same as makeVerifiedTransaction) — a
+  // plain spread would drop the class getters/methods.
+  return Object.assign(Object.create(Transaction.prototype), {
+    ...result,
+    confidence,
+    verification: { ...result.verification, lineMatched: true },
+  }) as VerifiedTransaction;
+}
+
+//
 // STRUCTURED ROW MATCHING
 //
 
@@ -390,6 +456,22 @@ function verifyTransactionStructured(
   if (typeMatched) confidence += 28;
   if (dateMatched) confidence += 23;
   if (descriptionMatched) confidence += 15;
+
+  const explicitDirection = ['debit', 'credit'].some(column =>
+    Math.abs(parseCellAmount(row.cells[column] ?? '') - tx.amount) < 0.01,
+  ) || /^\+|cr\s*$/i.test((row.cells['amount'] ?? '').trim());
+  const sourceFieldsContradicted =
+    (Boolean(row.cells['description']?.trim()) && !descriptionMatched)
+    || (explicitDirection && typeResult === false);
+  if (sourceFieldsContradicted) {
+    // Finding the amount elsewhere on the row cannot validate a value taken
+    // from the wrong cell, nor reverse explicit debit/credit column evidence.
+    usedRowIndices.add(row.rowIndex);
+    return makeVerifiedTransaction(tx, Math.min(confidence, MIN_CONFIDENCE_ACCEPT - 1), row.rowIndex, {
+      amountMatched, dateMatched, descriptionMatched, contextMatched: true, typeMatched,
+      sourceFieldsContradicted: true,
+    });
+  }
 
   if (confidence < MIN_CONFIDENCE_ACCEPT) {
     // Structured match found but confidence too low (e.g., ambiguous type).

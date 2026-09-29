@@ -40,6 +40,14 @@ export interface RetryResult<T> {
    * Set by the retry loop when calculateMaxOutputTokens returns 0 before a call is attempted.
    */
   contextOverflow?: boolean;
+  /**
+   * True when the server reported finish_reason "length": the model hit its
+   * output-token cap mid-generation. The response is truncated regardless of
+   * whether a JSON prefix could be salvaged, and retrying the same prompt at
+   * the same size is doomed — callers must shrink the work (split the chunk)
+   * or fail loudly. Set on the first truncated response; the loop stops there.
+   */
+  outputTruncated?: boolean;
 }
 
 export interface ValidationResult<T> {
@@ -144,6 +152,7 @@ export async function runWithRetry<T>(
   let lastValidationWarnings: string[] = [];
   let lastDebugInfo: unknown;
   let contextOverflow = false;
+  let outputTruncated = false;
   let attemptsMade = 0;
 
   const client = getClient(config.llmConfig.provider);
@@ -188,13 +197,25 @@ export async function runWithRetry<T>(
         break;
       }
 
-      const rawResponse = await client.generate(
+      const { text: rawResponse, finishReason } = await client.generateWithUsage(
         config.llmConfig.baseUrl,
         config.llmConfig.model,
         prompt,
         { stage: config.stage, maxOutputTokens, contextWindow: config.contextWindowTokens, responseFormat: 'json', responseSchema: config.responseSchema, schemaName: config.schemaName, systemPrompt: EXTRACTION_SYSTEM_PROMPT, signal: config.signal },
       );
       lastRawOutput = rawResponse;
+
+      // Output truncation (finish_reason "length"): the generation was cut at
+      // the cap. Retry-same-size is doomed, and a repaired JSON prefix must
+      // never count as success — that is the silent-partial-import bug. Stop
+      // immediately and let the caller shrink the work.
+      if (finishReason === 'length') {
+        outputTruncated = true;
+        errors.length = 0;
+        errors.push('Output truncated: the model hit its output-token cap before finishing the JSON');
+        debugLog(`[Retry Engine ${config.stage}] Output truncated at the token cap on attempt ${attempt} — stopping (retry-same-size is doomed)`);
+        break;
+      }
 
       let parsed: T;
       try {
@@ -218,13 +239,8 @@ export async function runWithRetry<T>(
           debugLog(config.stage, 'Raw LLM response:', rawResponse);
         }
       } catch (parseErr: unknown) {
-        // TODO(detect-and-shrink): a common cause of "Invalid JSON" here is output truncation —
-        // the model hit its maxOutputTokens cap mid-JSON. Calibration (per-model output ratio)
-        // prevents this in the common case, but a pathological statement can still overrun its
-        // chunk. The safety net: surface finish_reason from the adapter (currently debug-logged
-        // only, not returned in GenerateResult), and on "length" re-split the offending chunk
-        // smaller and re-extract. See docs/superpowers/specs/2026-08-12-token-ratio-calibration-design.md
-        // ("Out of scope — tracked as code TODOs").
+        // Truncation with finish_reason reported is caught above before parsing
+        // reaches here; this branch is a plain malformed-response retry.
         errors.length = 0;
         errors.push(`Invalid JSON: ${parseErr instanceof Error ? parseErr.message : 'Unknown error'}`);
         continue;
@@ -279,5 +295,6 @@ export async function runWithRetry<T>(
     attempts: attemptsMade,
     debugInfo: lastDebugInfo,
     contextOverflow,
+    outputTruncated,
   };
 }

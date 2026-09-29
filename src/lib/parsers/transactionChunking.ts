@@ -1,6 +1,6 @@
 import type { ExtractedTransaction } from '@/types/extractedTransaction';
 import { debugLog } from '@/lib/utils/debug';
-import { calculateMaxItems, estimateTokens, getInputCharsPerToken, getOutputTokensPerInputLine } from '@/lib/llm/contextWindow';
+import { calculateMaxItems, estimateTokens, fitsSingleShot, getInputCharsPerToken, getOutputTokensPerInputLine } from '@/lib/llm/contextWindow';
 
 // Static (guard-skipped) path: used when the context window is unknown, so there is no
 // overflow budget to honor — chunking here is purely for LLM attention/friendliness.
@@ -48,7 +48,6 @@ export interface ChunkRunDiagnostics {
 export interface MergedChunkTransactions {
   transactions: ExtractedTransaction[];
   duplicatesRemoved: number;
-  conflictsResolved: number;
 }
 
 /**
@@ -73,6 +72,7 @@ export function createTransactionChunkPlan(
   normalizedText: string,
   contextWindowTokens?: number,
   overheadText?: string,
+  transactionRowCount?: number,
 ): TransactionChunkPlan {
   const lines = normalizedText.split('\n');
   const normalizedTextLength = normalizedText.length;
@@ -92,6 +92,22 @@ export function createTransactionChunkPlan(
     // output. This reserves output room (the guard returns 0 not only on input overflow but
     // also when input leaves no generation room), which a pure input budget misses.
     const overheadTokens = estimateTokens(overheadText!);
+
+    // Single-shot row budget (spec 2026-08-28): only transaction rows
+    // produce output, so with a known row count the whole text fits when
+    // overhead + full input + per-row output stay inside the window. The
+    // per-line reserve below over-counts ~3x on statements where most lines
+    // (headers, footers, wrapped fragments) emit no output. Falls through to
+    // per-line chunking when even this accounting overflows, and is skipped
+    // entirely when the row count is unknown.
+    if (transactionRowCount !== undefined) {
+      const inputTokens = estimateTokens(normalizedText);
+      const outputTokens = transactionRowCount * getOutputTokensPerInputLine();
+      // Non-null: guardAligned guarantees contextWindowTokens is defined.
+      if (fitsSingleShot(contextWindowTokens!, overheadTokens, inputTokens, outputTokens)) {
+        return singleShotPlan(normalizedText, lines, normalizedTextLength, normalizedLineCount, contextWindowTokens);
+      }
+    }
     const maxLines = calculateMaxItems(
       contextWindowTokens,
       overheadTokens,
@@ -100,13 +116,24 @@ export function createTransactionChunkPlan(
     ) ?? 0;
     const maxChars = Math.floor(maxLines * avgCharsPerLine);
 
+    // Reserve room for one header line injected into later chunks AFTER sizing
+    // (row-identity spec §1/§3): any single line of this statement plus its
+    // joining newline and a little slack. Without the reserve, a chunk sized
+    // exactly to budget plus a header line can trip the pre-flight overflow
+    // guard — a hard import failure that would not otherwise happen.
+    const longestLine = lines.reduce((max, l) => Math.max(max, l.length), 0);
+    const headerReserve = longestLine + 2;
+    const reservedMaxChars = Math.max(maxChars - headerReserve, Math.floor(avgCharsPerLine) || 1);
+
     // Overhead alone exceeds the window (e.g. CC template ≈ 4.2K tokens vs a 4K window): no
     // split can help. Emit one chunk; the guard will surface it as model-too-small.
     if (maxChars <= 0) {
       return singleShotPlan(normalizedText, lines, normalizedTextLength, normalizedLineCount, contextWindowTokens);
     }
 
-    // Whole text fits the guard's variable budget → one shot.
+    // Whole text fits the guard's variable budget → one shot. (A single chunk is
+    // never injected — the whole text already contains the header — so the
+    // reserve does not apply here.)
     if (normalizedTextLength <= maxChars) {
       return singleShotPlan(normalizedText, lines, normalizedTextLength, normalizedLineCount, contextWindowTokens);
     }
@@ -114,7 +141,7 @@ export function createTransactionChunkPlan(
     // Char-budget chunking, snapped to line boundaries so transactions stay whole. Sizing by
     // chars (not a fixed line count) keeps each chunk under the guard regardless of how line
     // length varies within the statement. Overlap stays line-based for the dedup model.
-    const chunks = chunkByCharBudget(lines, maxChars);
+    const chunks = chunkByCharBudget(lines, reservedMaxChars);
     return {
       chunkingUsed: true,
       chunkTriggerReason: 'char_threshold',
@@ -282,80 +309,76 @@ function getConfidence(tx: ExtractedTransaction): number {
   return typeof tx.confidence === 'number' ? tx.confidence : -1;
 }
 
-function buildConflictKey(tx: ExtractedTransaction): string {
-  return [
-    tx.date ?? '',
-    tx.type ?? '',
-    normalizeDescription(tx.description),
-    tx.originalCurrency ?? '',
-  ].join('|');
-}
-
 export function mergeChunkTransactions(transactions: ExtractedTransaction[]): MergedChunkTransactions {
-  // Pass 1: Exact signature dedup
+  // Two collapse keys, in order of authority (row-identity spec §5/§6):
+  // 1. sourceLine — two rows echoing the SAME line number are two reads of one
+  //    statement row (chunk overlap), even when their fields disagree (the
+  //    overlap copy mis-reads columns). Collapse to the higher-confidence read.
+  //    Numbered rows NEVER enter signature dedup: identical fields on different
+  //    lines are genuinely distinct rows (same-day same-merchant purchases).
+  // 2. Exact signature (date|amount|type|description|originalCurrency|originalAmount) —
+  //    the fallback for rows where the model echoed no number. Same semantics as
+  //    before: keep the higher-confidence read, count the rest as duplicates.
+  const bySourceLine = new Map<number, ExtractedTransaction>();
   const bySignature = new Map<string, ExtractedTransaction>();
+  // Keep the first-seen position of every surviving row. The previous
+  // implementation returned the two maps one after the other, which moved
+  // every numberless row to the end of the statement whenever even one row
+  // had a sourceLine.
+  const order: Array<
+    | { kind: 'sourceLine'; key: number }
+    | { kind: 'signature'; key: string }
+  > = [];
   let duplicatesRemoved = 0;
 
-  for (const tx of transactions) {
-    const signature = buildTransactionSignature(tx);
-    const existing = bySignature.get(signature);
+  const better = (a: ExtractedTransaction, b: ExtractedTransaction): ExtractedTransaction =>
+    getConfidence(b) > getConfidence(a) ? b : a;
 
-    if (!existing) {
-      bySignature.set(signature, tx);
+  for (const tx of transactions) {
+    if (typeof tx.sourceLine === 'number' && Number.isFinite(tx.sourceLine)) {
+      const existing = bySourceLine.get(tx.sourceLine);
+      if (!existing) {
+        bySourceLine.set(tx.sourceLine, tx);
+        order.push({ kind: 'sourceLine', key: tx.sourceLine });
+        continue;
+      }
+      duplicatesRemoved++;
+      const kept = better(existing, tx);
+      const dropped = kept === existing ? tx : existing;
+      debugLog('chunkMerge', [
+        'Same sourceLine extracted twice (chunk overlap) — collapsed by line number',
+        `  Kept:    ${kept.date} | ${kept.description} | ${kept.amount} ${kept.type} | confidence ${getConfidence(kept)}`,
+        `  Dropped: ${dropped.date} | ${dropped.description} | ${dropped.amount} ${dropped.type} | confidence ${getConfidence(dropped)}`,
+      ].join('\n'));
+      bySourceLine.set(tx.sourceLine, kept);
       continue;
     }
 
+    const signature = buildTransactionSignature(tx);
+    const existing = bySignature.get(signature);
+    if (!existing) {
+      bySignature.set(signature, tx);
+      order.push({ kind: 'signature', key: signature });
+      continue;
+    }
     duplicatesRemoved++;
-    const kept = getConfidence(tx) > getConfidence(existing) ? tx : existing;
-    const dropped = kept === tx ? existing : tx;
+    const kept = better(existing, tx);
+    const dropped = kept === existing ? tx : existing;
     debugLog('chunkMerge', [
-      'Duplicate from chunk overlap: same transaction extracted by multiple chunks',
+      'Duplicate from chunk overlap: same transaction extracted by multiple chunks (signature match, no sourceLine)',
       `  Kept:    ${kept.date} | ${kept.description} | ${kept.amount} ${kept.type} | confidence ${getConfidence(kept)}`,
       `  Dropped: ${dropped.date} | ${dropped.description} | ${dropped.amount} ${dropped.type} | confidence ${getConfidence(dropped)}`,
     ].join('\n'));
-    if (getConfidence(tx) > getConfidence(existing)) {
-      bySignature.set(signature, tx);
-    }
-  }
-
-  // Pass 2: Conflict resolution for chunk overlap.
-  // Same date + type + description but different amount means the LLM
-  // extracted the same overlap-zone transaction inconsistently across chunks.
-  // Keep the higher-confidence extraction.
-  const byConflictKey = new Map<string, ExtractedTransaction[]>();
-  for (const tx of bySignature.values()) {
-    const key = buildConflictKey(tx);
-    const group = byConflictKey.get(key) ?? [];
-    group.push(tx);
-    byConflictKey.set(key, group);
-  }
-
-  const result: ExtractedTransaction[] = [];
-  let conflictsResolved = 0;
-
-  for (const group of byConflictKey.values()) {
-    if (group.length === 1) {
-      result.push(group[0]);
-      continue;
-    }
-
-    conflictsResolved += group.length - 1;
-    const winner = group.reduce((best, tx) =>
-      getConfidence(tx) > getConfidence(best) ? tx : best,
-    );
-    const losers = group.filter(tx => tx !== winner);
-    debugLog('chunkMerge', [
-      'Amount conflict from chunk overlap: same transaction extracted with different amounts',
-      `  Kept:    ${winner.date} | ${winner.description} | ${winner.amount} ${winner.type} | confidence ${getConfidence(winner)}`,
-      ...losers.map(t => `  Dropped: ${t.date} | ${t.description} | ${t.amount} ${t.type} | confidence ${getConfidence(t)}`),
-    ].join('\n'));
-    result.push(winner);
+    bySignature.set(signature, kept);
   }
 
   return {
-    transactions: result,
+    transactions: order.map((entry) =>
+      entry.kind === 'sourceLine'
+        ? bySourceLine.get(entry.key)!
+        : bySignature.get(entry.key)!,
+    ),
     duplicatesRemoved,
-    conflictsResolved,
   };
 }
 

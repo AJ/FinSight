@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { buildTransactionRows, splitMergedLines } from '@/lib/parsers/extraction/rowBuilder';
+import { formatOutput } from '@/lib/parsers/extraction/outputFormatter';
 import type { AssignedLine, ColumnSchema, ColumnDef } from '@/lib/parsers/extraction/extractionTypes';
 
 function makeAssignedLine(
@@ -18,6 +19,7 @@ function makeAssignedLine(
         right: i * 100 + t.length * 6,
         y,
         page,
+        height: 9,
       })),
       page,
     },
@@ -34,7 +36,7 @@ function makeSchema(numCols: number, dateColIdx: number = 0, regionIndex: number
       headerText: `Col${i}`,
       columnLeft: i * 100,
       columnRight: (i + 1) * 100,
-      type: 'unknown' as const,
+      type: (i === dateColIdx ? 'date' : i === dateColIdx + 1 ? 'description' : 'amount') as ColumnDef['type'],
     })),
     dateColumnIndex: dateColIdx,
     sourceRegionIndex: regionIndex,
@@ -175,7 +177,7 @@ describe('buildTransactionRows', () => {
   it('skips lines with empty assignments', () => {
     const lines = [
       makeAssignedLine(['01-Jan', 'Amazon', '500'], 100, 0),
-      { line: { y: 90, items: [{ text: 'orphan', x: 0, right: 30, y: 90, page: 1 }], page: 1 }, assignments: [], isHeader: false, regionIndex: 0 },
+      { line: { y: 90, items: [{ text: 'orphan', x: 0, right: 30, y: 90, page: 1, height: 9 }], page: 1 }, assignments: [], isHeader: false, regionIndex: 0 },
       makeAssignedLine(['02-Jan', 'Groceries', '200'], 80, 0),
     ];
     const schemas = [makeSchema(3, 0, 0)];
@@ -212,10 +214,10 @@ describe('buildTransactionRows', () => {
     const schemas = [makeSchema(3, 0, 0)];
 
     const { rows } = buildTransactionRows(lines, schemas);
-    // Second line merged into first because fallback checks col 0 (empty), not col 1 (date)
-    expect(rows).toHaveLength(1);
+    // Without column evidence, retain the second line rather than merging dates/amounts.
+    expect(rows).toHaveLength(2);
     expect(rows[0].columnValues[0]).toBe('01-Jan');
-    expect(rows[0].columnValues[1]).toBe('02-Jan');
+    expect(rows[1].columnValues[1]).toBe('02-Jan');
   });
 
   it('returns empty rows for empty input', () => {
@@ -308,6 +310,70 @@ function makeTypedSchema(
   };
 }
 
+describe('row assembly boundary regressions', () => {
+  it.each([false, true])('keeps a reference on its original page (new region: %s)', newRegion => {
+    const nextRegion = newRegion ? 1 : 0;
+    const lines = [
+      makeAssignedLine(['03/09/2025', 'IGST (Ref#', '15.32'], 100, 0),
+      makeAssignedLine(['', 'VT252470075017370000087)', ''], 91, 0),
+      makeAssignedLine(['Date', 'Description', 'Amount'], 700, nextRegion, true, 2),
+      makeAssignedLine(['04/09/2025', 'Next purchase', '20.00'], 680, nextRegion, false, 2),
+    ];
+    const result = buildTransactionRows(lines, [makeSchema(3), makeSchema(3, 0, 1)]);
+    expect(result.rows[0].columnValues[1]).toBe('IGST (Ref# VT252470075017370000087)');
+    const header = result.rows.find(row => row.lines.some(line => line.isHeader))!;
+    expect(header.columnValues).toEqual(['Date', 'Description', 'Amount']);
+    expect(header.lines).toHaveLength(1);
+    expect(header.lines[0].line.page).toBe(2);
+  });
+
+  it('preserves an offset separator independently even when it is in the description column', () => {
+    const lines = [
+      makeAssignedLine(['01-Jan', 'Merchant', '100'], 100, 0),
+      makeAssignedLine(['', 'Cardholder name', ''], 92, 0),
+    ];
+    lines[1].line.items[1].x = 150;
+    const result = buildTransactionRows(lines, [makeSchema(3)]);
+    expect(result.rows[0].columnValues[1]).toBe('Merchant');
+    expect(result.rows[1].columnValues[1]).toBe('Cardholder name');
+  });
+
+  it.each([1, 2])('keeps the final fee complete without absorbing subsequent tables (scale %s)', scale => {
+    // Geometry supplied in the diagnostic log; scaling guards against fixed coordinates.
+    const types: ColumnDef['type'][] = ['date', 'unknown', 'description', 'unknown', 'unknown', 'unknown', 'amount', 'unknown'];
+    const xs = [26, 114, 136, 355, 428, 525, 531, 567];
+    const schema: ColumnSchema = {
+      dateColumnIndex: 0, sourceRegionIndex: 3,
+      columns: types.map((type, index) => ({ index, type, headerText: '',
+        columnLeft: xs[index] * scale, columnRight: (xs[index] + 20) * scale })),
+    };
+    const physical = (y: number, cells: [string, number, number][]): AssignedLine => ({
+      line: { page: 3, y: y * scale, items: cells.map(([text, x]) => ({
+        text, x: x * scale, right: (x + 20) * scale, y: y * scale, page: 3, height: 9 * scale,
+      })) },
+      assignments: cells.map(cell => cell[2]), regionIndex: 3, isHeader: false,
+    });
+    const lines = [
+      physical(415, [['01/10/2025 14:19', 26, 0], ['EMI', 114, 1], ['SPACESHIP.COM', 136, 2], ['2,712.23', 530, 6]]),
+      physical(405, [['CONSOLIDATED FCY MARKUP FEE (Ref#', 136, 2]]),
+      physical(401, [['02/10/2025 00:00', 26, 0], ['C', 531, 6], ['700.79', 536, 6], ['l', 567, 7]]),
+      physical(396, [['VT252750075037470000024)', 136, 2]]),
+      physical(371, [['*Transaction time captured in IST Zone.', 20, 0]]),
+      physical(342, [['TRANSACTIONS', 196, 2], ['TOTAL AMOUNT', 349, 3]]),
+      physical(336, [['Eligible for', 54, 0], ['EMI', 107, 1], ['CONVERT TO EMI', 494, 6]]),
+      physical(330, [['6', 226, 2], ['C', 361, 3], ['39,723.70', 365, 3]]),
+    ];
+    const result = buildTransactionRows(lines, [schema]);
+    const fee = result.rows.find(row => row.columnValues[0] === '02/10/2025 00:00')!;
+    expect(fee.columnValues[2]).toBe('CONSOLIDATED FCY MARKUP FEE (Ref# VT252750075037470000024)');
+    expect(fee.columnValues[6]).toBe('C 700.79');
+    expect(fee.columnValues[1]).toBe('');
+    const output = formatOutput({ ...result, schemas: [schema], allLines: [], proseRegions: [] });
+    for (const line of lines) for (const item of line.line.items) expect(output).toContain(item.text);
+    expect(result.rows.flatMap(row => row.lines)).toHaveLength(lines.length);
+  });
+});
+
 describe('splitMergedLines', () => {
   it('splits a merged line with items from two rows', () => {
     // Line has items from row A (y=100) and row B (y=80), both in date column
@@ -316,10 +382,10 @@ describe('splitMergedLines', () => {
         line: {
           y: 100,
           items: [
-            { text: '01-Jan', x: 0, right: 40, y: 100, page: 1 },
-            { text: 'Amazon', x: 100, right: 150, y: 100, page: 1 },
-            { text: '02-Feb', x: 0, right: 40, y: 80, page: 1 },
-            { text: 'Groceries', x: 100, right: 160, y: 80, page: 1 },
+            { text: '01-Jan', x: 0, right: 40, y: 100, page: 1, height: 9 },
+            { text: 'Amazon', x: 100, right: 150, y: 100, page: 1, height: 9 },
+            { text: '02-Feb', x: 0, right: 40, y: 80, page: 1, height: 9 },
+            { text: 'Groceries', x: 100, right: 160, y: 80, page: 1, height: 9 },
           ],
           page: 1,
         },
@@ -360,8 +426,8 @@ describe('splitMergedLines', () => {
         line: {
           y: 120,
           items: [
-            { text: 'Date', x: 0, right: 30, y: 120, page: 1 },
-            { text: 'Description', x: 100, right: 170, y: 120, page: 1 },
+            { text: 'Date', x: 0, right: 30, y: 120, page: 1, height: 9 },
+            { text: 'Description', x: 100, right: 170, y: 120, page: 1, height: 9 },
           ],
           page: 1,
         },
@@ -396,12 +462,12 @@ describe('splitMergedLines', () => {
         line: {
           y: 200,
           items: [
-            { text: '01-Jan', x: 0, right: 40, y: 200, page: 1 },    // col 0 (date)
-            { text: '500', x: 100, right: 130, y: 200, page: 1 },     // col 1 (description)
-            { text: '34,183.35', x: 200, right: 260, y: 200, page: 1 }, // col 2 (balance)
-            { text: '02-Feb', x: 0, right: 40, y: 180, page: 1 },    // col 0 (date) — row B
-            { text: 'desc', x: 100, right: 130, y: 180, page: 1 },   // col 1 (description) — row B
-            { text: '30,784', x: 200, right: 260, y: 180, page: 1 },  // col 2 (balance) — row B
+            { text: '01-Jan', x: 0, right: 40, y: 200, page: 1, height: 9 },    // col 0 (date)
+            { text: '500', x: 100, right: 130, y: 200, page: 1, height: 9 },     // col 1 (description)
+            { text: '34,183.35', x: 200, right: 260, y: 200, page: 1, height: 9 }, // col 2 (balance)
+            { text: '02-Feb', x: 0, right: 40, y: 180, page: 1, height: 9 },    // col 0 (date) — row B
+            { text: 'desc', x: 100, right: 130, y: 180, page: 1, height: 9 },   // col 1 (description) — row B
+            { text: '30,784', x: 200, right: 260, y: 180, page: 1, height: 9 },  // col 2 (balance) — row B
           ],
           page: 1,
         },
@@ -429,10 +495,10 @@ describe('splitMergedLines', () => {
         line: {
           y: 100,
           items: [
-            { text: '01-Jan', x: 0, right: 40, y: 100.0, page: 1 },
-            { text: 'desc1', x: 100, right: 140, y: 100.3, page: 1 },
-            { text: '02-Feb', x: 0, right: 40, y: 100.5, page: 1 },
-            { text: 'desc2', x: 100, right: 140, y: 100.2, page: 1 },
+            { text: '01-Jan', x: 0, right: 40, y: 100.0, page: 1, height: 9 },
+            { text: 'desc1', x: 100, right: 140, y: 100.3, page: 1, height: 9 },
+            { text: '02-Feb', x: 0, right: 40, y: 100.5, page: 1, height: 9 },
+            { text: 'desc2', x: 100, right: 140, y: 100.2, page: 1, height: 9 },
           ],
           page: 1,
         },
@@ -500,11 +566,12 @@ describe('buildTransactionRows — isSummaryRow detection', () => {
     const schemas = [makeSchema(4, 0, 0)];
 
     const { rows } = buildTransactionRows(lines, schemas);
-    // All 3 lines produce 2 rows — continuation merges into row 1, table does NOT end
-    expect(rows).toHaveLength(2);
+    // The table continues, but extra amounts must not concatenate with existing amounts.
+    expect(rows).toHaveLength(3);
     expect(rows[0].columnValues[1]).toContain('Transaction');
-    expect(rows[0].columnValues[1]).toContain('continued');
-    expect(rows[1].columnValues[1]).toBe('Next Txn');
+    expect(rows[0].columnValues[2]).toBe('500');
+    expect(rows.some(row => row.columnValues[1] === 'continued')).toBe(true);
+    expect(rows.some(row => row.columnValues[1] === 'Next Txn')).toBe(true);
   });
 
   it('does not classify a line with only one numeric value as a summary row', () => {
@@ -517,8 +584,9 @@ describe('buildTransactionRows — isSummaryRow detection', () => {
     const schemas = [makeSchema(4, 0, 0)];
 
     const { rows } = buildTransactionRows(lines, schemas);
-    // Single-amount line is not a summary — it's a continuation
-    expect(rows).toHaveLength(2);
+    // Not a summary, but also not evidence that two amounts should be concatenated.
+    expect(rows).toHaveLength(3);
+    expect(rows[0].columnValues[2]).toBe('100');
   });
 });
 
@@ -788,3 +856,29 @@ describe('buildTransactionRows — Total marker and exact-match', () => {
   });
 });
 
+
+// ─── Uniform cell counts (spec Part 2) ────────────────────────────────────────
+
+describe('buildTransactionRows — uniform cell counts', () => {
+  it('pads every row of a region to one uniform cell count when one row uses the overflow slot', () => {
+    // Region with 2 schema columns; the third line carries an overflow item
+    // (assigned column 2). All rows — header included — must produce 3 cells.
+    const lines: AssignedLine[] = [
+      { line: { y: 100, page: 1, items: [{ text: 'Date', x: 10, right: 40, y: 100, page: 1, height: 9 }, { text: 'Desc', x: 60, right: 150, y: 100, page: 1, height: 9 }] }, assignments: [0, 1], isHeader: true, regionIndex: 0 },
+      { line: { y: 80, page: 1, items: [{ text: '01-Jan', x: 10, right: 40, y: 80, page: 1, height: 9 }, { text: 'X', x: 60, right: 90, y: 80, page: 1, height: 9 }] }, assignments: [0, 1], isHeader: false, regionIndex: 0 },
+      { line: { y: 60, page: 1, items: [{ text: '02-Jan', x: 10, right: 40, y: 60, page: 1, height: 9 }, { text: 'Y', x: 60, right: 90, y: 60, page: 1, height: 9 }, { text: 'EMI', x: 48, right: 55, y: 60, page: 1, height: 9 }] }, assignments: [0, 1, 2], isHeader: false, regionIndex: 0 },
+    ];
+    const schemas: ColumnSchema[] = [{
+      columns: [
+        { index: 0, headerText: 'Date', columnLeft: 10, columnRight: 40, type: 'date' },
+        { index: 1, headerText: 'Desc', columnLeft: 60, columnRight: 150, type: 'description' },
+      ],
+      dateColumnIndex: 0,
+      sourceRegionIndex: 0,
+    }];
+    const { rows } = buildTransactionRows(lines, schemas);
+    expect(rows.every(r => r.columnValues.length === 3)).toBe(true);
+    expect(rows[2].columnValues[2]).toBe('EMI');
+    expect(rows[1].columnValues[2]).toBe('');
+  });
+});

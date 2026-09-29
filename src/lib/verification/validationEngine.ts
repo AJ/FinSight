@@ -316,6 +316,11 @@ export function validateTransactions(data: unknown): ValidationResult<Transactio
       transactions: validTxns,
       openingBalance: coerceNullableNumber((normalized as Record<string, unknown>).openingBalance),
       closingBalance: coerceNullableNumber((normalized as Record<string, unknown>).closingBalance),
+      // Header side-channel (row-identity spec §3): the transactions pass reads the
+      // echoed header line from this field. String or null — anything else is dropped.
+      tableHeader: typeof (normalized as Record<string, unknown>).tableHeader === 'string'
+        ? (normalized as Record<string, unknown>).tableHeader as string
+        : null,
     }
   };
 }

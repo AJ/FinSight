@@ -3,6 +3,7 @@ import { attachVerificationToExtractionBundle } from "@/lib/services/statementVe
 import { enrichImportedTransactions } from "@/lib/services/transactionEnrichmentService";
 import { reviewSessionRepository } from "@/lib/review/reviewSessionRepository";
 import { applyVerificationReviewReasons } from "@/lib/review/applyVerificationReviewReasons";
+import { stampMissingSourceLines } from "@/lib/review/stampMissingSourceLines";
 import { debugLog } from "@/lib/utils/debug";
 import type { Currency } from "@/types";
 import type { LLMProvider } from "@/lib/llm/types";
@@ -66,12 +67,15 @@ export async function runPreReviewPipeline(
     verifiedBundle.verificationReport,
   );
 
+  // Advisory flag for PDF rows that never got a line number (row-identity spec §6).
+  const stamped = stampMissingSourceLines(reviewed, verifiedBundle.format);
+
   // Log unresolved-transfer transactions for observability. The self_transfer_unresolved
   // reason is stamped deterministically by the classification pass when subtype = self_transfer.
-  const unresolvedTransferCount = reviewed.filter((t) => t.reviewReasons.includes('self_transfer_unresolved')).length;
+  const unresolvedTransferCount = stamped.filter((t) => t.reviewReasons.includes('self_transfer_unresolved')).length;
   if (unresolvedTransferCount > 0) {
     debugLog('Suspense', `${unresolvedTransferCount} transaction(s) flagged as unresolved transfer`);
-    for (const txn of reviewed) {
+    for (const txn of stamped) {
       if (txn.reviewReasons.includes('self_transfer_unresolved')) {
         debugLog('Suspense', 'Flagged transaction', {
           description: txn.description?.substring(0, 80),
@@ -84,7 +88,7 @@ export async function runPreReviewPipeline(
   }
 
   const reviewSessionPayload: ReviewSessionPayload = {
-    transactions: reviewed,
+    transactions: stamped,
     currency: verifiedBundle.currency ?? input.defaultCurrency,
     format: verifiedBundle.format,
     statementType: verifiedBundle.statementType,

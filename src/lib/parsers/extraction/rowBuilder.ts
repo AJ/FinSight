@@ -84,9 +84,9 @@ function deriveXBounds(schema: ColumnSchema): { startX: number; endX: number } {
   return { startX, endX };
 }
 
-function buildValues(line: AssignedLine): string[] {
+function buildValues(line: AssignedLine, count: number): string[] {
   const values: string[] = [];
-  const numCols = Math.max(...line.assignments, 0) + 1;
+  const numCols = Math.max(count, Math.max(...line.assignments, 0) + 1);
   for (let i = 0; i < numCols; i++) values.push('');
   for (let i = 0; i < line.line.items.length; i++) {
     const colIdx = line.assignments[i];
@@ -140,6 +140,36 @@ export interface BuildTransactionRowsResult {
   postTableLines: AssignedLine[];
 }
 
+/** Attach only nearby text aligned with a narrative cell, never arbitrary
+ * dateless rows. Uncertain lines remain separate in the model input. */
+function canAttachContinuation(row: LogicalRow, line: AssignedLine, schema: ColumnSchema | undefined): boolean {
+  if (!schema || line.isHeader || row.regionIndex !== line.regionIndex
+    || row.lines.some(l => l.isHeader || l.line.page !== line.line.page)) return false;
+  const items = line.line.items.filter(item => item.text.trim());
+  const heights = [...items, ...row.lines.flatMap(l => l.line.items)]
+    .map(item => item.height).filter(height => height > 0).sort((a, b) => a - b);
+  // Missing geometry is not evidence that two physical lines belong together.
+  if (!items.length || !heights.length) return false;
+  const height = heights[Math.floor(heights.length / 2)];
+  const gap = Math.min(...row.lines.map(l => Math.abs(l.line.y - line.line.y)));
+  // Allow normal/double-spaced wrapping, measured in the document's font size.
+  if (gap > height * 2.5) return false;
+
+  const occupied = new Set(line.assignments.filter((_, i) => line.line.items[i].text.trim()));
+  return [...occupied].every(col => {
+    const column = schema.columns[col];
+    if (!column || (column.type !== 'description' && column.type !== 'reference')) return false;
+    const starts = row.lines.flatMap(l => l.line.items
+      .filter((other, j) => l.assignments[j] === col && other.text.trim())
+      .map(other => other.x));
+    // An above-anchor description may be the first text in this cell.
+    const left = starts.length ? Math.min(...starts) : column.columnLeft;
+    const lineLeft = Math.min(...line.line.items
+      .filter((item, i) => line.assignments[i] === col && item.text.trim()).map(item => item.x));
+    return Math.abs(lineLeft - left) <= (schema.snapTolerance ?? height);
+  });
+}
+
 export function buildTransactionRows(
   lines: AssignedLine[],
   schemas: ColumnSchema[],
@@ -151,11 +181,28 @@ export function buildTransactionRows(
   const regionMeta = new Map<number, TableRegionMeta>();
   const postTableLines: AssignedLine[] = [];
 
+  // Uniform cell count per region: every row of a region renders the same
+  // number of cells (schema columns plus the overflow slot when any line in
+  // the region used it), so header and data rows stay cell-aligned.
+  const regionColCount = new Map<number, number>();
+  for (const line of lines) {
+    if (line.assignments.length === 0) continue;
+    const schema = getSchemaForRegion(schemas, line.regionIndex);
+    const base = schema ? schema.columns.length : 0;
+    const needed = Math.max(base, ...line.assignments.map(a => a + 1));
+    regionColCount.set(line.regionIndex, Math.max(regionColCount.get(line.regionIndex) ?? base, needed));
+  }
+
   function flushToRow(row: LogicalRow | null): void {
+    let connected = true;
     for (const { line: cl, values: cv } of pendingContinuations) {
-      if (!row) continue;
-      row.lines.push(cl);
-      appendToRow(row, cv);
+      if (connected && row && canAttachContinuation(row, cl, getSchemaForRegion(schemas, cl.regionIndex))) {
+        row.lines.push(cl);
+        appendToRow(row, cv);
+      } else {
+        connected = false;
+        rows.push({ lines: [cl], columnValues: cv, regionIndex: cl.regionIndex });
+      }
     }
     pendingContinuations = [];
   }
@@ -194,9 +241,26 @@ export function buildTransactionRows(
     // Track which pages this region spans
     if (meta) meta.pages.add(line.line.page);
 
-    const values = buildValues(line);
+    const values = buildValues(line, regionColCount.get(line.regionIndex) ?? 0);
     const schema = getSchemaForRegion(schemas, line.regionIndex);
     const dateColIdx = schema?.dateColumnIndex ?? 0;
+
+    // Page coordinates and column indexes are local to their region. Resolve
+    // the old row before seeing a new header/layout, without a cross-page midpoint.
+    // currentRow is loop-carried state; retain its declared type at this boundary.
+    const previous: AssignedLine | undefined = (currentRow as LogicalRow | null)?.lines[0]
+      ?? pendingContinuations[0]?.line;
+    if (previous && (previous.regionIndex !== line.regionIndex
+      || previous.line.page !== line.line.page)) {
+      flushToRow(currentRow);
+      currentRow = null;
+    }
+    if (line.isHeader) {
+      flushToRow(currentRow);
+      rows.push({ lines: [line], columnValues: values, regionIndex: line.regionIndex });
+      currentRow = null;
+      continue;
+    }
 
     // Noise/summary detection: exact keyword match OR structural (no date + ≥2 amounts)
     const noiseType = classifyNoiseRow(values);
@@ -211,8 +275,8 @@ export function buildTransactionRows(
     // balance" row. End the table here so the heading, its prose, and the
     // summary table route to postTableLines instead of being merged into the
     // last transaction by a midpoint computed against the distant totals row.
-    // Pending continuations are above the heading → table-side wrapped
-    // narration, so flush them into the last transaction.
+    // Resolve pending wrapping with the same alignment/proximity checks used
+    // at other boundaries; being above a heading alone does not prove ownership.
     if (isSectionHeading(values)) {
       flushToRow(currentRow);
       if (meta) {
@@ -226,32 +290,23 @@ export function buildTransactionRows(
     if (noiseType === 'closing' || isSummaryRow(values, dateColIdx)) {
       // Closing/summary rows appear after the last transaction. Preserve them as
       // post-table prose, but do not let them become continuations of the last row.
-      //
-      // === CONTINUATION-MERGE FIX (closing/summary flush) ===
-      // This used to call flushToRow(currentRow), which merged EVERY pending
-      // continuation into the last transaction with no spatial check. Any post-table
-      // line lacking a date-column value (summary text, footer, disclaimer, marketing,
-      // a statement-period label, etc.) got glued onto the last transaction's
-      // description. Now we reuse the same midpoint boundary as the new-anchor path:
-      // the closing row supplies the next boundary Y, and continuations BELOW the
-      // midpoint (closer to the closing row = post-table) go to postTableLines
-      // instead of the last transaction. Above the midpoint = genuine narration.
+      // The midpoint limits candidates; alignment and proximity must still agree.
       if (pendingContinuations.length > 0) {
         if (currentRow) {
           const midpoint = (currentAnchorY + line.line.y) / 2;
           for (const cont of pendingContinuations) {
-            if (cont.line.line.y > midpoint) {
+            if (cont.line.line.y > midpoint && canAttachContinuation(currentRow, cont.line, schema)) {
               currentRow.lines.push(cont.line);
               appendToRow(currentRow, cont.values);
             } else {
               postTableLines.push(cont.line);
             }
           }
+        } else {
+          flushToRow(null);
         }
-        // No currentRow yet → drop pre-table continuations (matches prior flushToRow(null)).
         pendingContinuations = [];
       }
-      // === END CONTINUATION-MERGE FIX (closing/summary flush) ===
       if (meta) {
         meta.endY = line.line.y;
         meta.ended = true;
@@ -261,9 +316,14 @@ export function buildTransactionRows(
     }
 
     const hasDate = values[dateColIdx] && isDateLike(values[dateColIdx]);
-    const isNewRegion = currentRow != null && currentRow.regionIndex !== line.regionIndex;
 
-    if (hasDate || !currentRow || isNewRegion) {
+    if (!hasDate && !currentRow) {
+      pendingContinuations.push({ line, values });
+      continue;
+    }
+    if (hasDate && meta) meta.endY = line.line.y;
+
+    if (hasDate) {
       // Resolve pending continuations using midpoint boundary
       if (pendingContinuations.length > 0 && currentRow) {
         const prevAnchorY = currentAnchorY;
@@ -284,8 +344,12 @@ export function buildTransactionRows(
 
         // Append prev-row continuations
         for (const { line: cl, values: cv } of forPrevRow) {
-          currentRow.lines.push(cl);
-          appendToRow(currentRow, cv);
+          if (canAttachContinuation(currentRow, cl, schema)) {
+            currentRow.lines.push(cl);
+            appendToRow(currentRow, cv);
+          } else {
+            rows.push({ lines: [cl], columnValues: cv, regionIndex: cl.regionIndex });
+          }
         }
 
         // Create new row
@@ -299,14 +363,28 @@ export function buildTransactionRows(
         // (forNextRow is FIFO = top-to-bottom; reverse so highest-y prepended last = first in output)
         for (let ri = forNextRow.length - 1; ri >= 0; ri--) {
           const { line: cl, values: cv } = forNextRow[ri];
-          currentRow.lines.unshift(cl);
-          prependToRow(currentRow, cv);
+          if (canAttachContinuation(currentRow, cl, schema)) {
+            currentRow.lines.unshift(cl);
+            prependToRow(currentRow, cv);
+          } else {
+            rows.push({ lines: [cl], columnValues: cv, regionIndex: cl.regionIndex });
+          }
         }
       } else {
-        pendingContinuations = [];
         currentAnchorY = line.line.y;
         currentRow = { lines: [line], columnValues: values, regionIndex: line.regionIndex };
         rows.push(currentRow);
+        // The first transaction can have its description above its date/amount.
+        // A header is never used as the preceding anchor for these lines.
+        for (const cont of [...pendingContinuations].reverse()) {
+          if (canAttachContinuation(currentRow, cont.line, schema)) {
+            currentRow.lines.unshift(cont.line);
+            prependToRow(currentRow, cont.values);
+          } else {
+            rows.push({ lines: [cont.line], columnValues: cont.values, regionIndex: cont.line.regionIndex });
+          }
+        }
+        pendingContinuations = [];
         if (meta && !meta.started) meta.startY = line.line.y;
         if (meta) meta.started = true;
       }
@@ -316,27 +394,8 @@ export function buildTransactionRows(
     }
   }
 
-  // Flush remaining continuations to last row (only when loop ended without region ended).
-  // NOTE: a blanket "send all trailing continuations to postTableLines" was tried and
-  // rejected — it cannot distinguish post-table noise from a legitimate wrapped narration
-  // (a 2nd description line with no date), so it broke real multi-line narrations
-  // (see 'merges continuation lines without a date into the previous transaction').
-  // The correct fix needs Y-gap/proximity detection to tell the two apart.
+  // Keep nearby aligned wrapping; preserve the rest as independent physical rows.
   flushToRow(currentRow);
-
-  // For regions that never hit a closing marker, set endY to the last anchor's y
-  for (const [, meta] of regionMeta) {
-    if (meta.endY === null && meta.started) {
-      meta.endY = currentAnchorY;
-    }
-  }
-
-  // For regions that never hit a closing marker, set endY to the last anchor's y
-  for (const [, meta] of regionMeta) {
-    if (meta.endY === null && meta.started) {
-      meta.endY = currentAnchorY;
-    }
-  }
 
   return { rows, regionMeta, postTableLines };
 }

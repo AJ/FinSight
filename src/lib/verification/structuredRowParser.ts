@@ -1,4 +1,5 @@
 import Papa from 'papaparse';
+import { matchConcept } from '@/lib/parsers/extraction/headerSynonyms';
 
 //
 // TYPES
@@ -37,7 +38,9 @@ function normalizeColumnName(raw: string): string | null {
   for (const { canonical, pattern } of HEADER_PATTERNS) {
     if (pattern.test(trimmed)) return canonical;
   }
-  return null;
+  // Use the same vocabulary as PDF column detection for compound headings.
+  const concept = matchConcept(trimmed);
+  return concept === 'reference' ? 'ref' : concept;
 }
 
 //
@@ -158,16 +161,22 @@ export function parseStructuredRows(rawText: string): StructuredParseResult | nu
 
   if (dataRows.length < 1) return null;
 
-  const rows: StructuredRow[] = dataRows.map((cells, idx) => {
-    const cellMap: Record<string, string> = {};
-    for (let ci = 0; ci < canonicalHeaders.length; ci++) {
-      cellMap[canonicalHeaders[ci]] = (cells[ci] ?? '').trim();
+  const rows: StructuredRow[] = [];
+  let activeHeaders = canonicalHeaders;
+  dataRows.forEach((cells, idx) => {
+    if (isHeaderRow(cells)) {
+      activeHeaders = cells.map(c => normalizeColumnName(c) ?? c.trim().toLowerCase());
+      return;
     }
-    return {
+    const cellMap: Record<string, string> = {};
+    for (let ci = 0; ci < activeHeaders.length; ci++) {
+      cellMap[activeHeaders[ci]] = (cells[ci] ?? '').trim();
+    }
+    rows.push({
       rowIndex: idx,
       cells: cellMap,
       raw: cells.join(detected.delimiter === '||' ? '||' : detected.delimiter),
-    };
+    });
   });
 
   return { headers: canonicalHeaders, rows, delimiter: detected.delimiter };

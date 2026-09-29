@@ -22,7 +22,7 @@ const MIN_ANCHORS_WITH_AMOUNT = 0.5;
 /** A line that holds a date: a complete date (extractDateFromText validates the
  * calendar and year), or a yearless day-month cell like "01-Jan". Number shapes
  * (decimals, rates, references) match neither predicate. */
-function isAnchorLine(line: Line): boolean {
+export function isAnchorLine(line: Line): boolean {
   return line.items.some(
     item => extractDateFromText(item.text) !== null || DATE_MONTH_SEP.test(item.text),
   );

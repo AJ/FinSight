@@ -4,6 +4,43 @@ import { validateCCCrossSection, validateBankCrossSection } from '@/lib/verifica
 import type { ExtractedTransaction } from '@/types/extractedTransaction';
 import type { CCSummary, BankSummary } from '@/lib/parsers/extractSummary';
 import { makeTransaction } from '@tests/unit/factories';
+import { SourceType } from '@/models/SourceType';
+
+describe('verification of an annotation beside a merchant cell', () => {
+  const lines = Array<string>(69).fill('');
+  lines[45] = 'DATE & TIME||TRANSACTION DESCRIPTION||REWARDS||||||AMOUNT||PI';
+  lines[46] = '03/09/2025 00:00||Earlier merchant||||C||||8.53||l';
+  lines[60] = 'DATE & TIME||||TRANSACTION DESCRIPTION||REWARDS||||||||AMOUNT||PI';
+  lines[68] = '12/09/2025 21:04||EMI||SwiggyBengaluru||||C||||||14,897.00||l';
+  const text = lines.join('\n');
+
+  it('rejects EMI from the unnamed cell even when date, amount and source line match', () => {
+    const tx = makeTransaction({ description: 'EMI', date: '2025-09-12', amount: 14897,
+      type: 'debit', sourceLine: 69, sourceType: SourceType.CreditCard });
+    const result = verifyStatement(text, [tx], { kind: 'credit_card' });
+    expect(result.verified).toHaveLength(0);
+    expect(result.rejected).toHaveLength(1);
+    expect(result.rejected[0].confidence).toBeLessThan(75);
+    expect(result.rejected[0].verification).toMatchObject({ amountMatched: true,
+      dateMatched: true, descriptionMatched: false, sourceFieldsContradicted: true });
+    expect(result.rejected[0].description).toBe('EMI'); // Flag, never silently replace.
+  });
+
+  it('verifies Swiggy from the current header rather than the earlier layout', () => {
+    const tx = makeTransaction({ description: 'SwiggyBengaluru', date: '2025-09-12', amount: 14897,
+      type: 'debit', sourceLine: 69, sourceType: SourceType.CreditCard });
+    const result = verifyStatement(text, [tx], { kind: 'credit_card' });
+    expect(result.rejected).toHaveLength(0);
+    expect(result.verified).toHaveLength(1);
+    expect(result.verified[0].verification.descriptionMatched).toBe(true);
+  });
+
+  it('does not prohibit EMI when it is actually in the description cell', () => {
+    const raw = 'Date||Description||Amount\n12/09/2025||EMI||14897.00';
+    const tx = makeTransaction({ description: 'EMI', date: '2025-09-12', amount: 14897, type: 'debit' });
+    expect(verifyStatement(raw, [tx], { kind: 'credit_card' }).verified).toHaveLength(1);
+  });
+});
 
 describe('verifyStatement — bank verification', () => {
   const rawText = `
@@ -526,16 +563,16 @@ describe('verifyStatement — structured row matching', () => {
     expect(result.reconciliation.passed).toBe(true);
   });
 
-  it('falls back to progressive when structured type contradicts column position', () => {
+  it('does not override contradictory debit/credit columns with whole-row fallback', () => {
     // 1299.00 is in the Debit column but transaction is typed as credit
     const txns = [
       makeTransaction({ description: 'AMAZON INDIA PURCHASE', amount: 1299, type: 'credit', date: '2024-01-01' }),
     ];
     const result = verifyStatement(columnarRawText, txns, { kind: 'bank', openingBalance: 50000, closingBalance: 98351 });
-    // Structured: amount(34) + date(23) + desc(15) = 72 < 75 → falls back
-    // Progressive: amount(34) + none_type(14) + date(23) + desc(15) = 86 ≥ 75 → verified
-    expect(result.verified.length).toBe(1);
-    expect(result.verified[0].verification.typeMatched).toBe(false);
+    expect(result.verified).toHaveLength(0);
+    expect(result.rejected).toHaveLength(1);
+    expect(result.rejected[0].verification.typeMatched).toBe(false);
+    expect(result.rejected[0].verification.sourceFieldsContradicted).toBe(true);
   });
 
   it('falls back to progressive when type is ambiguous (both debit and credit columns)', () => {
@@ -763,5 +800,67 @@ describe('verifyStatement — date-order detection is threaded to matching', () 
     );
     const matched = dmyDefault.verified.find((t) => t.id === mar11.id)?.verification.dateMatched;
     expect(matched).not.toBe(true);
+  });
+});
+
+// ─── Row identity: sourceLine soft check ─────────────────────────────────────
+
+describe('verifyStatement — sourceLine soft check', () => {
+  const rawText = [
+    'Statement of Account',          // line 1
+    '',                              // line 2
+    '01/01/2024 Amazon 100.00',      // line 3 — holds the amount
+    '',                              // line 4
+    '01/02/2024 Other Store 50.00',  // line 5 — does NOT hold 100.00
+  ].join('\n');
+
+  const meta = { kind: 'bank' as const };
+
+  it('adds +12 confidence and sets lineMatched when the source line holds the amount', () => {
+    const withLine = makeTransaction({ description: 'Amazon', amount: 100, type: 'debit', date: '2024-01-01', sourceLine: 3 });
+    const withoutLine = makeTransaction({ description: 'Amazon', amount: 100, type: 'debit', date: '2024-01-01' });
+
+    const a = verifyStatement(rawText, [withLine], meta);
+    const b = verifyStatement(rawText, [withoutLine], meta);
+
+    const va = a.verified[0] ?? a.rejected[0];
+    const vb = b.verified[0] ?? b.rejected[0];
+    expect(va.confidence).toBe(vb.confidence + 12);
+    expect(va.verification.lineMatched).toBe(true);
+    expect(vb.verification.lineMatched).toBeUndefined();
+  });
+
+  it('adds nothing when the source line does not hold the amount (soft — no penalty)', () => {
+    const wrongLine = makeTransaction({ description: 'Amazon', amount: 100, type: 'debit', date: '2024-01-01', sourceLine: 5 });
+    const noLine = makeTransaction({ description: 'Amazon', amount: 100, type: 'debit', date: '2024-01-01' });
+
+    const a = verifyStatement(rawText, [wrongLine], meta);
+    const b = verifyStatement(rawText, [noLine], meta);
+
+    const va = a.verified[0] ?? a.rejected[0];
+    const vb = b.verified[0] ?? b.rejected[0];
+    expect(va.confidence).toBe(vb.confidence);
+    expect(va.verification.lineMatched).toBeUndefined();
+  });
+
+  it('rescues a below-threshold row whose source line confirms the amount', () => {
+    // Description matches nothing in the text → baseline confidence 71 (34+14+23)
+    // < 75 → rejected. With the source line holding the amount: 71+12=83 → verified.
+    const weak = makeTransaction({ description: 'Xyzzy Unmatched', amount: 100, type: 'debit', date: '2024-01-01' });
+    const weakWithLine = makeTransaction({ description: 'Xyzzy Unmatched', amount: 100, type: 'debit', date: '2024-01-01', sourceLine: 3 });
+
+    const withoutLine = verifyStatement(rawText, [weak], meta);
+    const withLine = verifyStatement(rawText, [weakWithLine], meta);
+
+    expect(withoutLine.rejected).toHaveLength(1);
+    expect(withLine.verified).toHaveLength(1);
+    expect(withLine.verified[0].confidence).toBe(83);
+  });
+
+  it('ignores an out-of-range sourceLine', () => {
+    const tx = makeTransaction({ description: 'Amazon', amount: 100, type: 'debit', date: '2024-01-01', sourceLine: 999 });
+    const report = verifyStatement(rawText, [tx], meta);
+    const v = report.verified[0] ?? report.rejected[0];
+    expect(v.verification.lineMatched).toBeUndefined();
   });
 });

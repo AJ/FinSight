@@ -17,4 +17,12 @@ export interface ExtractedTransaction {
   originalCurrency?: string;
   originalAmount?: number;
   confidence?: number;
+  /**
+   * 1-based line number of the statement line this row was extracted from
+   * (the `N||` prefix the transactions pass adds to every line). The row's
+   * identity for chunk-overlap collapse and the verification line check.
+   * Undefined when the model did not echo a number, and always undefined
+   * for CSV/XLS imports (deterministic parsers, no chunking).
+   */
+  sourceLine?: number;
 }

@@ -3,6 +3,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { processStatement } from '@/lib/parsers/pipeline';
 import { ManualTypeSelectionError } from '@/lib/parsers/typeDetection';
 import type { LLMRuntimeConfig } from '@/lib/llm/types';
+import { formatCreditCardTransactionInput } from '@/lib/parsers/lineNumbering';
 
 // Mock fetch — the only external boundary (LLM HTTP calls go through here)
 const mockFetch = vi.fn();
@@ -35,6 +36,12 @@ const defaultOptions = {
 
 // ── Mock Response Helpers ──────────────────────────────────────────────────────
 
+// The prompt sent in fetch call N (Ollama generate posts { prompt } as JSON body).
+function fetchPrompt(callIndex: number): string {
+  const body = JSON.parse(mockFetch.mock.calls[callIndex][1].body as string);
+  return body.prompt as string;
+}
+
 function ollamaJson(llmOutput: string) {
   return Promise.resolve({
     ok: true,
@@ -45,6 +52,24 @@ function ollamaJson(llmOutput: string) {
       eval_count: 20,
     }),
     text: () => Promise.resolve(JSON.stringify({ response: llmOutput })),
+  });
+}
+
+// Ollama wire shape for a generation cut by the num_predict cap: done_reason
+// "length". The response body is whatever partial JSON the model managed.
+function ollamaTruncated(llmOutput: string) {
+  const body = {
+    response: llmOutput,
+    prompt_eval_count: 10,
+    eval_count: 20,
+    done: true,
+    done_reason: 'length',
+  };
+  return Promise.resolve({
+    ok: true,
+    status: 200,
+    json: () => Promise.resolve(body),
+    text: () => Promise.resolve(JSON.stringify(body)),
   });
 }
 
@@ -759,11 +784,11 @@ describe('processStatement — error path coverage', () => {
     expect(result.warnings.length).toBeGreaterThan(0);
   });
 
-  it('warns about chunk overlap amount conflicts', async () => {
+  it('keeps both transactions when chunk overlap extracts different amounts', async () => {
     const longLine = 'Transaction data line with sufficient content to build up character count for threshold testing';
     const longText = Array.from({ length: 250 }, (_, i) => `${longLine} #${i + 1}`).join('\n');
 
-    // Same transaction extracted with different amounts across chunks
+    // Same date/type/description, different amounts across chunks → distinct transactions, both kept
     const chunk1Txns = [
       { date: '2024-01-15', description: 'Amazon Purchase', amount: 100, type: 'debit', confidence: 0.9 },
     ];
@@ -782,11 +807,9 @@ describe('processStatement — error path coverage', () => {
     });
 
     expect(result.success).toBe(true);
-    // mergeChunkTransactions detects same date/type/description with different amounts → conflict resolved
-    expect(result.warnings.some(w => w.includes('Chunk overlap: resolved 1 amount conflict'))).toBe(true);
-    // Higher-confidence extraction (amount 100, confidence 0.9) should win
-    expect(result.data?.transactions).toHaveLength(1);
-    expect(result.data?.transactions[0].amount).toBe(100);
+    // No conflict is "resolved" (dropped) anymore — both extractions survive.
+    expect(result.warnings.some(w => w.includes('Chunk overlap: resolved'))).toBe(false);
+    expect(result.data?.transactions).toHaveLength(2);
   });
 });
 
@@ -811,5 +834,402 @@ describe('processStatement — type detection bankName forwarding', () => {
     // bankName is forwarded internally to prompt builders (verified by successful extraction)
     expect(result.data?.statementType).toBe('bank');
     expect(result.data?.transactions).toHaveLength(1);
+  });
+});
+
+// ─── Row identity: numbering, geometry injection, echo, collapse ─────────────
+
+import type { StatementTableInfo } from '@/lib/parsers/extraction/extractionTypes';
+
+describe('processStatement — line numbering and header echo', () => {
+  it('retains geometry through currency rewrites before aligning CC headers', async () => {
+    const headers = [['Date', 'Description', 'Amount'], ['Date', '', 'Description', 'Amount']];
+    const source = ['INR statement', '', '', headers[0].join('||'),
+      '2025-09-11||Foreign USD 30.54||C 700.79', headers[1].join('||'),
+      '2025-09-12||EMI||SwiggyBengaluru||14897.00', 'Rewards points 0'].join('\n');
+    const tables: StatementTableInfo[] = headers.map((header, index) => ({
+      headerLineIndex: 3 + index * 2, dataRowLineIndexes: [4 + index * 2],
+      columns: header.map(headerText => ({ headerText, type: 'unknown' })),
+    }));
+    setupCCFetch([{ date: '2025-09-12', description: 'SwiggyBengaluru', amount: 14897, type: 'debit', sourceLine: 6 }]);
+    const result = await processStatement(source, { ...defaultOptions, statementType: 'credit_card' }, tables);
+    expect(result.success).toBe(true);
+    expect(fetchPrompt(1)).toContain('3||[1] "Date"||[2] ""||[3] "Description"||[4] "Amount"');
+    expect(fetchPrompt(1)).toContain('4||[1] "2025-09-11"||[2] ""||[3] "Foreign $30.54"||[4] "700.79"');
+    expect(fetchPrompt(1)).toContain('6||[1] "2025-09-12"||[2] "EMI"||[3] "SwiggyBengaluru"');
+    expect(result.data?.verificationInputs?.rawText.split('\n')[5]).toBe('2025-09-12||EMI||SwiggyBengaluru||14897.00');
+    expect(mockFetch).toHaveBeenCalledTimes(3);
+  });
+
+  it('aligns repeated CC tables in one request, without altering stored or verification text', async () => {
+    const headers = [['Date', 'Description', 'Amount'], ['Date', '', 'Description', 'Amount']];
+    const source = [headers[0].join('||'), '2025-09-11||Merchant||10.00',
+      headers[1].join('||'), '2025-09-12||EMI||SwiggyBengaluru||14897.00', 'Rewards points 0'].join('\n');
+    const tables: StatementTableInfo[] = headers.map((header, index) => ({
+      headerLineIndex: index * 2, dataRowLineIndexes: [index * 2 + 1],
+      columns: header.map(headerText => ({ headerText, type: 'unknown' })),
+    }));
+    setupCCFetch([{ date: '2025-09-12', description: 'SwiggyBengaluru', amount: 14897, type: 'debit', sourceLine: 4 }]);
+    const result = await processStatement(source, { ...defaultOptions, statementType: 'credit_card' }, tables);
+    expect(result.success).toBe(true);
+    expect(mockFetch).toHaveBeenCalledTimes(3); // Summary, one extraction, rewards.
+    expect(fetchPrompt(1)).toContain(formatCreditCardTransactionInput(source, tables));
+    expect(fetchPrompt(1)).toContain('2||[1] "2025-09-11"||[2] ""||[3] "Merchant"');
+    expect(result.data?.rawText).toBe(source);
+    expect(result.data?.verificationInputs?.rawText).toBe(source);
+    expect(result.data?.transactions[0].sourceLine).toBe(4);
+  });
+
+  it('indexes CC cells only for transactions, preserving the source for other passes', async () => {
+    const source = 'Date||||Description||Amount\n2025-09-12||EMI||SwiggyBengaluru||14897.00\nRewards points 0';
+    setupCCFetch([{ date: '2025-09-12', description: 'SwiggyBengaluru', amount: 14897, type: 'debit', sourceLine: 2 }]);
+    const result = await processStatement(source, { ...defaultOptions, statementType: 'credit_card' });
+    expect(result.success).toBe(true);
+    expect(fetchPrompt(1)).toContain(formatCreditCardTransactionInput(source));
+    expect(fetchPrompt(0)).toContain(source);
+    expect(fetchPrompt(0)).not.toContain('[1] "Date"');
+    expect(fetchPrompt(2)).toContain(source);
+    expect(result.data?.rawText).toBe(source);
+    expect(result.data?.verificationInputs?.rawText).toBe(source);
+    expect(result.data?.transactions[0].sourceLine).toBe(2);
+  });
+
+  it('leaves the bank request cell representation unchanged', async () => {
+    setupBankFetch();
+    const source = 'Date||Description||Debit||Credit\n2025-09-12||Merchant||100||';
+    await processStatement(source, { ...defaultOptions, statementType: 'bank' });
+    expect(fetchPrompt(1)).toContain('1||Date||Description||Debit||Credit');
+    expect(fetchPrompt(1)).not.toContain('[1] "Date"');
+  });
+
+  it.each(['geometry', 'echo'] as const)('injects an indexed CC header through the %s path', async mode => {
+    const header = 'Date||||Description||Amount';
+    const source = [header, ...Array.from({ length: 299 }, (_, i) => `2025-09-12||EMI||Merchant ${i}||100.00`), 'Rewards points 0'].join('\n');
+    const indexedHeader = formatCreditCardTransactionInput(header);
+    mockFetch
+      .mockResolvedValueOnce(ollamaJson(ccSummaryJson()))
+      .mockResolvedValueOnce(ollamaJson(JSON.stringify({ transactions: [{ date: '2025-09-12', description: 'Merchant 1', amount: 100, type: 'debit' }], tableHeader: indexedHeader })))
+      .mockResolvedValueOnce(ollamaJson(transactionsJson()))
+      .mockResolvedValueOnce(ollamaJson(JSON.stringify({ rewards: [] })));
+    const tables = mode === 'geometry'
+      ? [{ headerLineIndex: 0, dataRowLineIndexes: Array.from({ length: 299 }, (_, i) => i + 1), columns: [] }]
+      : undefined;
+    const result = await processStatement(source, { ...defaultOptions, statementType: 'credit_card' }, tables);
+    expect(result.success).toBe(true);
+    expect(fetchPrompt(2)).toContain(indexedHeader + '\n169||[1]');
+  });
+
+  it('numbers every line of the transactions input (single-shot path)', async () => {
+    setupBankFetch();
+
+    const result = await processStatement('Bank statement text\nwith two lines', {
+      ...defaultOptions,
+      statementType: 'bank',
+    });
+
+    expect(result.success).toBe(true);
+    const prompt = fetchPrompt(1); // call 0 = summary, call 1 = transactions
+    expect(prompt).toContain('\n1||Bank statement text');
+    expect(prompt).toContain('\n2||with two lines');
+  });
+
+  it('collapses two reads of the same sourceLine across chunks (phantom duplicate dies)', async () => {
+    const longLine = 'Transaction data line with sufficient content to build up character count for threshold testing';
+    const longText = Array.from({ length: 250 }, (_, i) => `${longLine} #${i + 1}`).join('\n');
+
+    // Both chunks "extract" the same statement row (sourceLine 5) with
+    // disagreeing fields — the overlap mis-read (INR vs USD).
+    const chunk1Txns = [
+      { date: '2024-01-15', description: 'AMAZON', amount: 99.99, type: 'debit', sourceLine: 5, confidence: 0.9 },
+    ];
+    const chunk2Txns = [
+      { date: '2024-01-15', description: 'AMAZON', amount: 99.99, type: 'debit', sourceLine: 5, originalCurrency: 'USD', originalAmount: 99.99, confidence: 0.6 },
+    ];
+
+    mockFetch
+      .mockResolvedValueOnce(ollamaJson(bankSummaryJson()))
+      .mockResolvedValueOnce(ollamaJson(transactionsJson(chunk1Txns)))
+      .mockResolvedValueOnce(ollamaJson(transactionsJson(chunk2Txns)));
+
+    const result = await processStatement(longText, { ...defaultOptions, statementType: 'bank' });
+
+    expect(result.success).toBe(true);
+    expect(result.data?.transactions).toHaveLength(1);
+    expect(result.data?.transactions[0].sourceLine).toBe(5);
+  });
+
+  it('injects a verified echoed header into the next chunk', async () => {
+    const longLine = 'Transaction data line with sufficient content to build up character count for threshold testing';
+    const longText = Array.from({ length: 250 }, (_, i) => `${longLine} #${i + 1}`).join('\n');
+    const headerLine = '1||' + longLine + ' #1';
+
+    const chunk1 = [
+      { date: '2024-01-15', description: 'First', amount: 10, type: 'debit' },
+    ];
+    const chunk2 = [
+      { date: '2024-01-20', description: 'Second', amount: 20, type: 'debit' },
+    ];
+
+    mockFetch
+      .mockResolvedValueOnce(ollamaJson(bankSummaryJson()))
+      .mockResolvedValueOnce(ollamaJson(JSON.stringify({ transactions: chunk1, tableHeader: headerLine })))
+      .mockResolvedValueOnce(ollamaJson(transactionsJson(chunk2)));
+
+    const result = await processStatement(longText, { ...defaultOptions, statementType: 'bank' });
+
+    expect(result.success).toBe(true);
+    // Chunk 2's prompt embeds `header + '\n' + chunk 2 text`. Static chunking
+    // (180-line target, 12-line overlap) puts chunk 2's first line at number 169.
+    expect(fetchPrompt(2)).toContain(headerLine + '\n169||');
+    // Chunk 1 got no injection — its text starts with line 1, not the header.
+    expect(fetchPrompt(1)).not.toContain(headerLine + '\n1||');
+  });
+
+  it('does not inject a garbled echo', async () => {
+    const longLine = 'Transaction data line with sufficient content to build up character count for threshold testing';
+    const longText = Array.from({ length: 250 }, (_, i) => `${longLine} #${i + 1}`).join('\n');
+
+    const chunk1 = [{ date: '2024-01-15', description: 'First', amount: 10, type: 'debit' }];
+    const chunk2 = [{ date: '2024-01-20', description: 'Second', amount: 20, type: 'debit' }];
+
+    mockFetch
+      .mockResolvedValueOnce(ollamaJson(bankSummaryJson()))
+      .mockResolvedValueOnce(ollamaJson(JSON.stringify({ transactions: chunk1, tableHeader: '999||NOT A REAL LINE' })))
+      .mockResolvedValueOnce(ollamaJson(transactionsJson(chunk2)));
+
+    const result = await processStatement(longText, { ...defaultOptions, statementType: 'bank' });
+
+    expect(result.success).toBe(true);
+    expect(fetchPrompt(2).includes('999||NOT A REAL LINE')).toBe(false);
+  });
+});
+
+describe('processStatement — geometry header injection', () => {
+  it('injects the geometry header line into a chunk that covers table rows but not the header', async () => {
+    // 300 lines → static chunking (2 chunks, 180-line target). The table header
+    // sits on line 3 (0-based index 2), rows below it.
+    const longText = [
+      'Statement of Account',
+      '',
+      'Date||Description||Amount',
+      ...Array.from({ length: 297 }, (_, i) => `02/04/2025||Merchant ${i + 1}||${(i + 1) * 10}`),
+    ].join('\n');
+
+    const tables: StatementTableInfo[] = [
+      {
+        headerLineIndex: 2,
+        dataRowLineIndexes: Array.from({ length: 297 }, (_, i) => 3 + i),
+        columns: [
+          { headerText: 'Date', type: 'date' },
+          { headerText: 'Description', type: 'description' },
+          { headerText: 'Amount', type: 'amount' },
+        ],
+      },
+    ];
+
+    mockFetch
+      .mockResolvedValueOnce(ollamaJson(bankSummaryJson()))
+      .mockResolvedValueOnce(ollamaJson(transactionsJson()))
+      .mockResolvedValueOnce(ollamaJson(transactionsJson()));
+
+    const result = await processStatement(longText, { ...defaultOptions, statementType: 'bank' }, tables);
+
+    expect(result.success).toBe(true);
+    // Call 0 = summary, calls 1..2 = chunks. Chunk 2 (call 2) covers rows but not
+    // the header line, so its text is prefixed with the numbered header line,
+    // immediately followed by chunk 2's own first line (number 169).
+    const chunk2Prompt = fetchPrompt(2);
+    expect(chunk2Prompt).toContain('3||Date||Description||Amount\n169||');
+    // Chunk 1 contains the header naturally — no injection (its first line is 1).
+    expect(fetchPrompt(1)).not.toContain('3||Date||Description||Amount\n1||');
+  });
+
+  it('skips injection when the table cannot be mapped (unmappable row indexes)', async () => {
+    const longText = Array.from({ length: 300 }, (_, i) => `Line ${i + 1} content here`).join('\n');
+    const tables: StatementTableInfo[] = [
+      { headerLineIndex: 5, dataRowLineIndexes: [99999], columns: [] },
+    ];
+
+    mockFetch
+      .mockResolvedValueOnce(ollamaJson(bankSummaryJson()))
+      .mockResolvedValueOnce(ollamaJson(transactionsJson()))
+      .mockResolvedValueOnce(ollamaJson(transactionsJson()));
+
+    const result = await processStatement(longText, { ...defaultOptions, statementType: 'bank' }, tables);
+
+    expect(result.success).toBe(true);
+    expect(fetchPrompt(2).startsWith('6||')).toBe(false);
+  });
+});
+
+describe('processStatement — truncation detect-and-shrink', () => {
+  // 300 lines → static chunking, 2 chunks (180-line target). Call order:
+  // 0 = summary, then chunk calls in order.
+  function longText(): string {
+    return [
+      'Statement of Account',
+      '',
+      'Date||Description||Amount',
+      ...Array.from({ length: 297 }, (_, i) => `02/04/2025||Merchant ${i + 1}||${(i + 1) * 10}.00`),
+    ].join('\n');
+  }
+
+  it('splits a truncated chunk in half and re-extracts both halves', async () => {
+    const lowerRows = [
+      { date: '2025-04-02', description: 'Merchant 1', amount: 10, type: 'debit' },
+      { date: '2025-04-03', description: 'Merchant 2', amount: 20, type: 'debit' },
+    ];
+    const upperRows = [
+      { date: '2025-04-04', description: 'Merchant 3', amount: 30, type: 'debit' },
+      { date: '2025-04-05', description: 'Merchant 4', amount: 40, type: 'debit' },
+    ];
+    const chunk2Rows = [
+      { date: '2025-04-20', description: 'Merchant 200', amount: 2000, type: 'debit' },
+    ];
+    mockFetch
+      .mockResolvedValueOnce(ollamaJson(bankSummaryJson()))
+      // Chunk 1 truncates at the output cap (cut mid-JSON, done_reason length).
+      .mockResolvedValueOnce(ollamaTruncated('{"transactions":[{"date":"2025-04-02"'))
+      // The two halves succeed.
+      .mockResolvedValueOnce(ollamaJson(transactionsJson(lowerRows)))
+      .mockResolvedValueOnce(ollamaJson(transactionsJson(upperRows)))
+      // Chunk 2 succeeds normally.
+      .mockResolvedValueOnce(ollamaJson(transactionsJson(chunk2Rows)));
+
+    const result = await processStatement(longText(), { ...defaultOptions, statementType: 'bank' });
+
+    expect(result.success).toBe(true);
+    expect(result.errors).toEqual([]);
+    // One summary + truncated chunk1 + its two halves + chunk2 = 5 calls.
+    // Exactly one attempt on the truncated call (no blind retries).
+    expect(mockFetch).toHaveBeenCalledTimes(5);
+    const descriptions = result.data?.transactions.map((t: { description: string }) => t.description) ?? [];
+    for (const row of [...lowerRows, ...upperRows, ...chunk2Rows]) {
+      expect(descriptions, `row "${row.description}" recovered after split`).toContain(row.description);
+    }
+    // Negative: the truncated first attempt was NOT salvaged as rows — the
+    // recovered set comes from the halves only, and no error was swallowed.
+    expect(result.data?.transactions).toHaveLength(5);
+  });
+
+  it('a truncated single shot falls back to the text split in half', async () => {
+    // Small statement (single-shot territory), > 24 lines so the fallback split applies.
+    const text = [
+      'Statement of Account',
+      'Date||Description||Amount',
+      ...Array.from({ length: 28 }, (_, i) => `02/04/2025||Merchant ${i + 1}||${(i + 1) * 10}.00`),
+    ].join('\n');
+    const half1Rows = [{ date: '2025-04-02', description: 'Merchant 1', amount: 10, type: 'debit' }];
+    const half2Rows = [{ date: '2025-04-03', description: 'Merchant 2', amount: 20, type: 'debit' }];
+    mockFetch
+      .mockResolvedValueOnce(ollamaJson(bankSummaryJson()))
+      // Single shot truncates.
+      .mockResolvedValueOnce(ollamaTruncated('{"transactions":[{"date"'))
+      // Both halves succeed.
+      .mockResolvedValueOnce(ollamaJson(transactionsJson(half1Rows)))
+      .mockResolvedValueOnce(ollamaJson(transactionsJson(half2Rows)));
+
+    const result = await processStatement(text, { ...defaultOptions, statementType: 'bank' });
+
+    expect(result.success).toBe(true);
+    expect(result.errors).toEqual([]);
+    expect(mockFetch).toHaveBeenCalledTimes(4);
+    // The fallback prompts are halves, not the whole text again.
+    const half1 = fetchPrompt(2);
+    const half2 = fetchPrompt(3);
+    expect(half1).not.toEqual(half2);
+    expect(half1.length + half2.length).toBeLessThan(half1.length * 2 + 1000); // sanity: two smaller pieces
+    const descriptions = result.data?.transactions.map((t: { description: string }) => t.description) ?? [];
+    expect(descriptions).toContain('Merchant 1');
+    expect(descriptions).toContain('Merchant 2');
+  });
+
+  it('a truncated chunk at the shrink floor fails loudly instead of silently dropping rows', async () => {
+    // 28-line statement: the fallback split halves are ≤ 24 lines → at the
+    // floor on their first truncation. Every transactions call truncates.
+    const text = [
+      'Statement of Account',
+      'Date||Description||Amount',
+      ...Array.from({ length: 28 }, (_, i) => `02/04/2025||Merchant ${i + 1}||${(i + 1) * 10}.00`),
+    ].join('\n');
+    mockFetch
+      .mockResolvedValue(ollamaTruncated('{"transactions":[{"date"'));
+
+    const result = await processStatement(text, { ...defaultOptions, statementType: 'bank' });
+
+    // Loud failure with a named truncation error — never a silent partial.
+    expect(result.success).toBe(false);
+    expect(result.errors.join(' ')).toContain('truncated');
+  });
+});
+
+// ─── Chunker row budget (spec 2026-08-28) ─────────────────────────────────────
+
+describe('processStatement — single-shot row budget', () => {
+  it('prefers detected table rows over date anchors for the single-shot budget', async () => {
+    mockGetContextWindowInfo.mockResolvedValue({
+      contextLength: 16384,
+      source: 'settings_cache',
+      provider: 'ollama',
+      modelId: 'llama3',
+    });
+    mockFetch.mockImplementation(async (_url: unknown, init: unknown) => {
+      const prompt = JSON.parse((init as { body: string }).body).prompt as string;
+      if (prompt.includes('extract ONLY summary-level fields')) return ollamaJson(bankSummaryJson());
+      return ollamaJson(transactionsJson());
+    });
+
+    // The 39 detector-confirmed data rows fit. The other date-bearing lines
+    // model statement metadata/narration: counting all anchors instead would
+    // conservatively split this statement, so one call proves table precedence.
+    const rows = Array.from({ length: 39 }, (_, i) => `02/04/2025||Merchant ${i + 1}||${(i + 1) * 10}.00`);
+    const datedProse = Array.from({ length: 200 }, (_, i) => `01/${String((i % 12) + 1).padStart(2, '0')}/2025 note ${i}`);
+    const lines = ['Statement of Account', '', ...rows, ...datedProse];
+    const tables: StatementTableInfo[] = [{
+      headerLineIndex: 0,
+      dataRowLineIndexes: Array.from({ length: 39 }, (_, i) => i + 2),
+      columns: [],
+    }];
+
+    const result = await processStatement(lines.join('\n'), { ...defaultOptions, statementType: 'bank' }, tables);
+
+    expect(result.success).toBe(true);
+    const transactionsCalls = mockFetch.mock.calls.filter(([, init]) =>
+      (JSON.parse((init as { body: string }).body).prompt as string).includes('extract ALL individual transactions'),
+    );
+    expect(transactionsCalls).toHaveLength(1);
+  });
+
+  it('single-shots a prose-heavy statement whose transaction rows fit the window', async () => {
+    // 39 transaction rows scattered among 200 narration lines: the per-line
+    // reserve chunks this (~96 lines/chunk), the anchor-counted row budget
+    // fits it (input ~5.5K + overhead ~4.6K + 39 rows × 90 × 1.1 ≈ 3.9K ≈
+    // 14K ≤ 16384). The transactions stage must run exactly ONCE.
+    mockGetContextWindowInfo.mockResolvedValue({
+      contextLength: 16384,
+      source: 'settings_cache',
+      provider: 'ollama',
+      modelId: 'llama3',
+    });
+    mockFetch.mockImplementation(async (_url: unknown, init: unknown) => {
+      const body = JSON.parse((init as { body: string }).body);
+      const prompt = body.prompt as string;
+      if (prompt.includes('extract ONLY summary-level fields')) return ollamaJson(bankSummaryJson());
+      return ollamaJson(transactionsJson());
+    });
+
+    const rows = Array.from({ length: 39 }, (_, i) => `02/04/2025||Merchant ${i + 1}||${(i + 1) * 10}.00`);
+    const prose = Array.from({ length: 200 }, (_, i) => `Narration line ${i} with account summary context text.`);
+    const lines: string[] = ['Statement of Account', ''];
+    for (let i = 0; i < rows.length; i++) lines.push(prose[i], rows[i]);
+    lines.push(...prose.slice(rows.length));
+
+    const result = await processStatement(lines.join('\n'), { ...defaultOptions, statementType: 'bank' });
+
+    expect(result.success).toBe(true);
+    const transactionsCalls = mockFetch.mock.calls.filter(([, init]) =>
+      (JSON.parse((init as { body: string }).body).prompt as string).includes('extract ALL individual transactions'),
+    );
+    expect(transactionsCalls.length).toBe(1);
   });
 });

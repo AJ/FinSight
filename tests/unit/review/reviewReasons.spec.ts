@@ -7,13 +7,14 @@ import {
 } from '@/lib/review/reviewReasons';
 
 describe('review-reason severity table (spec §6)', () => {
-  it('has exactly the 7 spec reasons', () => {
+  it('has exactly the 8 spec reasons', () => {
     expect(Object.keys(REVIEW_REASONS).sort()).toEqual([
       'fingerprint_collision',
       'invalid_subtype_category',
       'low_confidence',
       'missing_or_invalid_field',
       'self_transfer_unresolved',
+      'source_line_missing',
       'subtype_direction_mismatch',
       'subtype_inferred',
     ]);
@@ -118,13 +119,27 @@ describe('review-reason list helpers (spec §6.4)', () => {
     ]);
   });
 
-  it('DISPLAY_ORDER lists all 7 reasons with hard before advisory', () => {
-    expect(DISPLAY_ORDER).toHaveLength(7);
+  it('DISPLAY_ORDER lists all 8 reasons with hard before advisory', () => {
+    expect(DISPLAY_ORDER).toHaveLength(8);
     const firstAdvisory = DISPLAY_ORDER.findIndex((r) => !HARD_REASONS.has(r));
     // Every hard reason precedes the first advisory in the spec's order.
     for (let i = 0; i < firstAdvisory; i++) {
       expect(HARD_REASONS.has(DISPLAY_ORDER[i])).toBe(true);
     }
     expect([...DISPLAY_ORDER].sort()).toEqual(Object.keys(REVIEW_REASONS).sort());
+  });
+});
+
+describe('source_line_missing', () => {
+  it('is registered as advisory', () => {
+    expect(REVIEW_REASONS.source_line_missing.severity).toBe('advisory');
+  });
+
+  it('is not blocking', () => {
+    expect(isBlocking('source_line_missing')).toBe(false);
+  });
+
+  it('appears in DISPLAY_ORDER', () => {
+    expect(DISPLAY_ORDER).toContain('source_line_missing');
   });
 });

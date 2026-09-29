@@ -296,6 +296,8 @@ Some purchase,100`;
     });
 
     expect(result.transactions[0].reviewReasons).toContain('subtype_inferred');
+    // CSV rows never carry a sourceLine — the PDF-gated stamp must not fire.
+    expect(result.transactions[0].reviewReasons).not.toContain('source_line_missing');
   });
 
   it('creates sourceMetadata object even without sourceFileHash', async () => {

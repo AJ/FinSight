@@ -18,6 +18,11 @@ export interface TransactionsOutput {
   // and for error/middle-chunk outputs.
   openingBalance?: number | null;
   closingBalance?: number | null;
+  // Side-channel: the transaction table's header line, copied exactly (including
+  // its leading line number) by the model in the first chunk that sees it. Used
+  // to inject the header into later chunks on the fallback path (no table
+  // geometry). Null when no header row was visible in the chunk.
+  tableHeader?: string | null;
   _debug?: {
     totalCount: number;
     droppedTransactions: Array<{
@@ -41,6 +46,6 @@ export function buildTransactionsPrompt(
     : BANK_TRANSACTIONS_PROMPT;
 
   return promptTemplate
-    .replace('{RAW_TEXT}', normalizedText)
-    .replace('{BANK_CONTEXT}', bankContext);
+    .replace('{BANK_CONTEXT}', () => bankContext)
+    .replace('{RAW_TEXT}', () => normalizedText);
 }

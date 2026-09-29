@@ -8,7 +8,7 @@ import { AnomalyDetails } from './AnomalyDetails';
 import { Currency } from '@/types';
 import { ExtractedTransaction } from '@/types/extractedTransaction';
 import { getCurrencyByCode } from '@/lib/currencyFormatter';
-import { roleOf, ROLE, defaultSubtype } from '@/lib/classification/subtypeCategories';
+import { defaultSubtype } from '@/lib/classification/subtypeCategories';
 import type { ReviewReason } from '@/lib/review/reviewReasons';
 import { REVIEW_REASONS } from '@/lib/review/reviewReasons';
 
@@ -50,7 +50,7 @@ const EXTRACTED_SUBTYPE_MAP: Record<string, TransactionSubType> = {
 };
 
 // Canonical subtype set — used to reject non-canonical strings (e.g. an LLM-emitted
-// "emi") before they reach roleOf, which throws on unknown values via assertNever.
+// "emi") before they reach the routing role table, which throws on unknown subtypes.
 const CANONICAL_SUB_TYPES: ReadonlySet<string> = new Set(TRANSACTION_SUB_TYPES);
 
 function isCanonicalSubType(value: string): value is TransactionSubType {
@@ -61,8 +61,8 @@ function isCanonicalSubType(value: string): value is TransactionSubType {
 // translated via EXTRACTED_SUBTYPE_MAP; canonical values pass through unchanged;
 // anything else (a hallucinated string like "emi") returns undefined so the caller
 // falls back to a direction default instead of carrying a value that would crash
-// roleOf. This is the parse-don't-cast boundary the `as TransactionSubType` casts in
-// fromExtracted/fromJSON previously skipped.
+// the role-table lookup in routing.ts. This is the parse-don't-cast boundary the
+// `as TransactionSubType` casts in fromExtracted/fromJSON previously skipped.
 function normalizeSubType(raw: string | undefined): TransactionSubType | undefined {
   if (!raw) return undefined;
   const mapped = EXTRACTED_SUBTYPE_MAP[raw] ?? raw;
@@ -124,6 +124,7 @@ export interface TransactionJSON {
   llmConfidence?: number;           // EXTRACTION confidence (TODO: rename to extractionConfidence — name predates the rework)
   verificationConfidence?: number;  // Our verification confidence (0.0-1.0)
   sourceFileHash?: string;          // SHA-256 hash of the source file for duplicate detection
+  sourceLine?: number;              // 1-based statement line this row was extracted from
 }
 
 /**
@@ -159,9 +160,10 @@ export class Transaction {
     public anomalyDismissed?: boolean,
     // Transaction sub-type — the authoritative classifier (spec §4). Genuinely undefined
     // between extraction and the classification pass; classification guarantees a value
-    // before return (defaultSubtype as its failure-path fallback). roleOf tolerates
-    // undefined (returns role-unknown), so an unclassified transaction is safe. The
-    // optional typing is now honest — not a ts(1016) workaround (thread #1).
+    // before return (defaultSubtype as its failure-path fallback). rolesOf tolerates
+    // undefined (returns an empty role set), so an unclassified transaction is safely
+    // excluded from metrics. The optional typing is now honest — not a ts(1016)
+    // workaround (thread #1).
     public readonly transactionSubType?: TransactionSubType,
     // LLM's suggested category (used as initial category, can be overridden)
     public readonly suggestedCategory?: string,
@@ -180,6 +182,10 @@ export class Transaction {
     // ALL its reasons at once (hard + advisory can coexist). Empty = clean. Hard reasons are
     // staging-only and resolved before commit; advisories persist (§6.4).
     public readonly reviewReasons: ReviewReason[] = [],
+    // Statement line this row was extracted from (row-identity spec §2/§7): the
+    // chunk-overlap collapse key and the verification line-check locator. Undefined
+    // for CSV/XLS rows and PDF rows where the model did not echo a number.
+    public readonly sourceLine?: number,
   ) {}
 
   // Direction getters (from TransactionType)
@@ -188,18 +194,6 @@ export class Transaction {
   }
   get isDebit(): boolean {
     return this.type === TransactionType.Debit;
-  }
-
-  // Economic role getters — derived from transactionSubType (NOT the category).
-  // Spec §3.2: category is never read to determine role.
-  get isIncome(): boolean {
-    return roleOf(this.transactionSubType, this.type) === ROLE.INCOME;
-  }
-  get isExpense(): boolean {
-    return roleOf(this.transactionSubType, this.type) === ROLE.SPENDING;
-  }
-  get isExcluded(): boolean {
-    return roleOf(this.transactionSubType, this.type) === ROLE.EXCLUDED;
   }
 
   // Signed amount for calculations (negative for debits)
@@ -240,6 +234,7 @@ export class Transaction {
       llmConfidence: this.llmConfidence,
       verificationConfidence: this.verificationConfidence,
       sourceFileHash: this.sourceFileHash,
+      sourceLine: this.sourceLine,
     };
   }
 
@@ -263,7 +258,8 @@ export class Transaction {
     // pre-classification row (which has no subtype by design, D1), so every row read 0 and got
     // flagged subtype_inferred.
     // Persisted data can also carry a non-canonical subtype (a raw LLM string that
-    // was never mapped); normalizeSubType rejects those so roleOf can't crash.
+    // was never mapped); normalizeSubType rejects those so the routing role table
+    // can't throw.
     const mappedSubType = normalizeSubType(json.transactionSubType);
     const fallback = defaultSubtype(json.type === 'credit' ? TransactionType.Credit : TransactionType.Debit);
     const inferred = {
@@ -307,6 +303,7 @@ export class Transaction {
       // removed — e.g. math_reconciliation_failure, which became statement-level. Without
       // this filter, REVIEW_REASONS[r] is undefined downstream and the review row crashes.
       (json.reviewReasons ?? []).filter((r) => r in REVIEW_REASONS),
+      json.sourceLine,
     );
   }
   /**
@@ -365,7 +362,10 @@ export class Transaction {
         undefined, // transactionSubType — set by the classification pass (subtype authority)
         undefined, // suggestedCategory
         extracted.confidence, // extraction confidence (llmConfidence); preserved through the pipeline
-        undefined // verificationConfidence
+        undefined, // verificationConfidence
+        undefined, // sourceFileHash — stamped by the post-review pipeline
+        [], // reviewReasons — stamped by the review pipeline
+        extracted.sourceLine // statement line (row identity)
       );
    }
 }

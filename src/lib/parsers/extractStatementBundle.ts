@@ -19,7 +19,7 @@ export async function extractStatementBundleFromRawText(
     statementType: input.statementType ?? undefined,
     signal: input.signal,
     llmConfig: input.llmConfig,
-  });
+  }, input.tables);
 
   if (!pipelineResult.success || !pipelineResult.data) {
     throw new Error(`Pipeline failed: ${pipelineResult.errors.join(", ")}`);
@@ -50,7 +50,7 @@ export async function extractStatementBundleFromFile(
     const pdfPromise = extractTextFromPDF(input.file, input.password);
     const calibratePromise = ensureModelCalibrated(input.llmConfig, input.signal);
 
-    const [rawText] = await Promise.all([pdfPromise, calibratePromise]);
+    const [{ text: rawText, tables }] = await Promise.all([pdfPromise, calibratePromise]);
 
     if (!rawText.trim()) {
       throw new Error(
@@ -61,6 +61,7 @@ export async function extractStatementBundleFromFile(
     input.onProgress?.("Parsing statement...");
     return extractStatementBundleFromRawText({
       rawText,
+      tables,
       defaultCurrency: input.defaultCurrency,
       fileName: input.file.name,
       format: "pdf",

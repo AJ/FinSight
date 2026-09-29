@@ -13,7 +13,7 @@ import type { ExtractedTransaction } from '@/types/extractedTransaction';
 import { Transaction as CanonicalTransaction } from '@/models/Transaction';
 import { SourceType } from '@/types';
 import type { Currency, StatementFormat, Transaction } from '@/types';
-import { normalizeStatementText } from './normalization';
+import { normalizeStatementText, normalizeStatementWithLineMap } from './normalization';
 import { detectStatementType, ManualTypeSelectionError } from './typeDetection';
 import { buildSummaryPrompt } from './extractSummary';
 import { buildTransactionsPrompt } from './extractTransactions';
@@ -40,7 +40,12 @@ import {
   getDroppedTransactionCount,
   mergeChunkTransactions,
   type ChunkRunDiagnostics,
+  type TransactionChunk,
 } from './transactionChunking';
+import { numberStatementLines, formatCreditCardTransactionInput } from './lineNumbering';
+import { geometryHeaderForChunk, verifiedEchoHeader } from './chunkHeaderInjection';
+import type { StatementTableInfo } from './extraction/extractionTypes';
+import { extractDateFromText, DATE_MONTH_SEP } from './dateParser';
 
 const CONFIDENCE_THRESHOLD = 0.8;
 const MAX_RETRIES = 3;
@@ -78,12 +83,15 @@ function buildFailedChunks(diagnostics: ChunkRunDiagnostics[]): string[] | undef
 export async function processStatement(
   rawText: string,
   options: ProcessOptions,
+  tables?: StatementTableInfo[],
 ): Promise<PipelineResult> {
   const warnings: string[] = [];
   const errors: string[] = [];
 
   try {
-    const normalized = normalizeStatementText(rawText);
+    const mapped = tables?.length ? normalizeStatementWithLineMap(rawText) : null;
+    const normalized = mapped?.text ?? normalizeStatementText(rawText);
+    const translatedTables = translateTables(mapped?.lineMap ?? [], tables);
 
     const contextInfo = await getContextWindowInfo({
       provider: options.llmConfig.provider,
@@ -112,10 +120,10 @@ export async function processStatement(
     }
 
     if (resolvedStatementType === 'credit_card') {
-      return await processCreditCard(normalized, bankName || null, options, contextWindowTokens);
+      return await processCreditCard(normalized, bankName || null, options, contextWindowTokens, translatedTables);
     }
 
-    return await processBank(normalized, bankName || null, options, contextWindowTokens);
+    return await processBank(normalized, bankName || null, options, contextWindowTokens, translatedTables);
   } catch (e: unknown) {
     // Manual type selection is a recoverable outcome, not a pipeline failure —
     // propagate it unwrapped so the upload UI can re-prompt for the type.
@@ -135,6 +143,7 @@ async function processCreditCard(
   bankName: string | null,
   options: ProcessOptions,
   contextWindowTokens?: number,
+  tables: StatementTableInfo[] = [],
 ): Promise<PipelineResult> {
   const warnings: string[] = [];
   const errors: string[] = [];
@@ -180,6 +189,7 @@ async function processCreditCard(
     options.llmConfig,
     options.signal,
     contextWindowTokens,
+    tables,
   );
   warnings.push(...transactionsResult.warnings);
 
@@ -248,6 +258,7 @@ async function processBank(
   bankName: string | null,
   options: ProcessOptions,
   contextWindowTokens?: number,
+  tables: StatementTableInfo[] = [],
 ): Promise<PipelineResult> {
   const warnings: string[] = [];
   const errors: string[] = [];
@@ -288,6 +299,7 @@ async function processBank(
     options.llmConfig,
     options.signal,
     contextWindowTokens,
+    tables,
   );
   warnings.push(...transactionsResult.warnings);
 
@@ -381,6 +393,23 @@ async function processBank(
   };
 }
 
+/** Below this many lines a truncated chunk is not split further — the failure
+ * is recorded loudly instead (a chunk this small truncating means the model
+ * cannot finish even a handful of rows; smaller is not meaningfully safer). */
+const MIN_SHRINK_LINES = 24;
+
+/** Split a chunk in half at its line midpoint, keeping line-number metadata
+ * continuous. Returns null when the chunk is at the shrink floor. */
+function splitChunkInHalf(chunk: TransactionChunk): [TransactionChunk, TransactionChunk] | null {
+  if (chunk.lineCount <= MIN_SHRINK_LINES) return null;
+  const lines = chunk.text.split('\n');
+  const mid = Math.ceil(lines.length / 2);
+  return [
+    { ...chunk, endLine: chunk.startLine + mid - 1, lineCount: mid, isLast: false, text: lines.slice(0, mid).join('\n') },
+    { ...chunk, startLine: chunk.startLine + mid, overlapStartLine: null, isFirst: false, lineCount: lines.length - mid, text: lines.slice(mid).join('\n') },
+  ];
+}
+
 async function runTransactionExtraction(
   normalizedText: string,
   statementType: 'credit_card' | 'bank',
@@ -388,6 +417,7 @@ async function runTransactionExtraction(
   llmConfig: LLMRuntimeConfig,
   signal?: AbortSignal,
   contextWindowTokens?: number,
+  tables: StatementTableInfo[] = [],
 ) {
   const stage = statementType === 'credit_card' ? 'cc_transactions' : 'bank_transactions';
   const responseSchema = statementType === 'credit_card' ? CC_TRANSACTIONS_SCHEMA : BANK_TRANSACTIONS_SCHEMA;
@@ -399,13 +429,52 @@ async function runTransactionExtraction(
   const overheadText = contextWindowTokens
     ? `${EXTRACTION_SYSTEM_PROMPT}\n\n${buildTransactionsPrompt('', statementType, bankName)}`
     : undefined;
-  const chunkPlan = createTransactionChunkPlan(normalizedText, contextWindowTokens, overheadText);
+  // Row identity (spec §2): number a LOCAL copy — only this pass ever sees
+  // numbered text. Type detection, summary, rewards, and verification all
+  // receive the original string.
+  const numberedText = statementType === 'credit_card'
+    ? formatCreditCardTransactionInput(normalizedText, tables)
+    : numberStatementLines(normalizedText);
+  const numberedLines = numberedText.split('\n');
 
-  if (!chunkPlan.chunkingUsed) {
-    const transactionsPrompt = buildTransactionsPrompt(normalizedText, statementType, bankName);
-    return runWithRetry(
+  // A transaction row emits output; supporting prose normally does not. Prefer
+  // the exact rows from the geometry detector, then use date-bearing lines when
+  // geometry could not identify a table. An unknown count deliberately retains
+  // the chunker's conservative per-line budget.
+  const tableRowCount = tables.reduce((count, table) => count + table.dataRowLineIndexes.length, 0);
+  const anchorRowCount = numberedLines.filter(
+    line => extractDateFromText(line) !== null || DATE_MONTH_SEP.test(line),
+  ).length;
+  const transactionRowCount = tableRowCount > 0 ? tableRowCount : anchorRowCount > 0 ? anchorRowCount : undefined;
+  const chunkPlan = createTransactionChunkPlan(
+    numberedText,
+    contextWindowTokens,
+    overheadText,
+    transactionRowCount,
+  );
+
+  // Full input dump for local-capture diagnostics (privacy: copy from the
+  // browser console into a LOCAL file only). Emitted in slices: the user's
+  // browser silently dropped the single full-statement entry while smaller
+  // entries rendered fine, and the earlier partial capture was cut at ~7KB
+  // the same way. ~60 lines per part keeps each entry chunk-dump-sized,
+  // which demonstrably survives.
+  {
+    const dumpLines = numberedText.split('\n');
+    const PART_SIZE = 60;
+    const parts = Math.max(1, Math.ceil(dumpLines.length / PART_SIZE));
+    for (let p = 0; p < parts; p++) {
+      const slice = dumpLines.slice(p * PART_SIZE, (p + 1) * PART_SIZE).join('\n');
+      debugLog(stage, `TRANSACTIONS-INPUT-DUMP part ${p + 1} of ${parts} (chunkingUsed=${chunkPlan.chunkingUsed}, totalChunks=${chunkPlan.chunks.length}):\n${slice}`);
+    }
+  }
+
+  let plan = chunkPlan;
+  if (!plan.chunkingUsed) {
+    const transactionsPrompt = buildTransactionsPrompt(numberedText, statementType, bankName);
+    const singleShot = await runWithRetry(
       transactionsPrompt,
-      normalizedText,
+      numberedText,
       validateTransactions,
       {
         maxRetries: MAX_RETRIES,
@@ -423,14 +492,26 @@ async function runTransactionExtraction(
         },
       },
     );
+    if (!(singleShot.success === false && singleShot.outputTruncated)) {
+      return singleShot;
+    }
+    // Output truncation on the single shot: retrying the same size is doomed.
+    // Fall back to the chunk loop starting from the text split in half (or
+    // whole when at the floor); chunks that still truncate are split further
+    // by the shrink loop.
+    debugLog(stage, 'Single-shot extraction truncated at the output cap — falling back to chunked extraction');
+    const halves = splitChunkInHalf(plan.chunks[0]);
+    if (halves) {
+      plan = { ...plan, chunkingUsed: true, chunks: halves };
+    }
   }
 
   debugLog(stage, 'Adaptive chunking enabled', {
-    reason: chunkPlan.chunkTriggerReason,
-    normalizedTextLength: chunkPlan.normalizedTextLength,
-    normalizedLineCount: chunkPlan.normalizedLineCount,
-    contextWindowTokens: chunkPlan.contextWindowTokens,
-    totalChunks: chunkPlan.chunks.length,
+    reason: plan.chunkTriggerReason,
+    normalizedTextLength: plan.normalizedTextLength,
+    normalizedLineCount: plan.normalizedLineCount,
+    contextWindowTokens: plan.contextWindowTokens,
+    totalChunks: plan.chunks.length,
   });
 
   const diagnostics: ChunkRunDiagnostics[] = [];
@@ -444,11 +525,36 @@ async function runTransactionExtraction(
   let successfulChunks = 0;
   let contextOverflow = false;
 
-  for (const chunk of chunkPlan.chunks) {
-    const transactionsPrompt = buildTransactionsPrompt(chunk.text, statementType, bankName);
+  // First verified echoed header (fallback path, spec §3): once a chunk returns
+  // a header line that verbatim-matches one of its own lines, every LATER chunk
+  // that doesn't already contain that line gets it prepended.
+  let echoHeader: string | null = null;
+
+  // Detect-and-shrink work queue: a chunk whose output truncated (the model hit
+  // its output-token cap) is split in half and both halves re-extracted. Below
+  // the floor the failure is recorded loudly — never a silent partial import.
+  const work: TransactionChunk[] = [...plan.chunks];
+
+  for (let w = 0; w < work.length; w++) {
+    const chunk = work[w];
+    // Header injection (spec §3), one mechanism for both sources: geometry
+    // header when the table was detected and this chunk covers its rows; else
+    // the first verified echo. The header keeps its own line number, so the
+    // model sees a repeat of an earlier line, not a new row.
+    let header: string | null = geometryHeaderForChunk(chunk, tables, numberedLines);
+    if (!header && echoHeader !== null) {
+      const echoIdx = Number.parseInt(echoHeader, 10) - 1;
+      const chunkContainsEcho =
+        Number.isInteger(echoIdx) && echoIdx >= chunk.startLine && echoIdx <= chunk.endLine;
+      if (!chunkContainsEcho) header = echoHeader;
+    }
+    const chunkText = header !== null ? `${header}\n${chunk.text}` : chunk.text;
+    debugLog(stage, `TRANSACTIONS-CHUNK-DUMP (chunk ${w + 1} of ${work.length}):\n${chunkText}`);
+
+    const transactionsPrompt = buildTransactionsPrompt(chunkText, statementType, bankName);
     const chunkResult = await runWithRetry(
       transactionsPrompt,
-      chunk.text,
+      chunkText,
       validateTransactions,
       {
         maxRetries: MAX_RETRIES,
@@ -468,6 +574,34 @@ async function runTransactionExtraction(
     );
 
     totalAttempts += chunkResult.attempts;
+
+    // Truncated output: split this chunk in half and re-extract both halves.
+    // The failed attempt is not recorded as a chunk failure — the halves carry
+    // the content. At/below the floor, fall through to the loud failure path.
+    if (!chunkResult.success && chunkResult.outputTruncated) {
+      const halves = splitChunkInHalf(chunk);
+      if (halves) {
+        work.splice(w + 1, 0, halves[0], halves[1]);
+        debugLog(stage, `Chunk output truncated (${chunk.lineCount} lines) — split into halves of ${halves[0].lineCount} and ${halves[1].lineCount} lines`);
+        continue;
+      }
+      transactionErrors.push(`Chunk ${chunk.index + 1} output truncated at the minimum chunk size (${chunk.lineCount} lines) — its rows were NOT extracted`);
+    }
+
+    // Capture the first verified echo header (spec §3). A garbled echo is
+    // logged and ignored — no injection, current behavior. When both sources
+    // exist, geometry wins and a disagreement is logged for observability.
+    if (echoHeader === null) {
+      const echoed = chunkResult.data?.tableHeader ?? null;
+      echoHeader = verifiedEchoHeader(echoed, chunk.text);
+      if (echoed !== null && echoHeader === null) {
+        debugLog(stage, 'Echoed tableHeader failed the verbatim whole-line check — not injecting', { echoed });
+      }
+      if (echoHeader !== null && header !== null && echoHeader.trim() !== header.trim()) {
+        debugLog(stage, 'Geometry header and echoed header disagree — using geometry', { geometry: header, echoed: echoHeader });
+      }
+    }
+
     const extractedTransactions = chunkResult.data?.transactions ?? [];
     const droppedTransactionCount = getDroppedTransactionCount(chunkResult.debugInfo);
     chunkOutputs.push(chunkResult.success ? chunkResult.data ?? null : null);
@@ -519,16 +653,16 @@ async function runTransactionExtraction(
 
   debugLog(stage, 'Chunked extraction summary', {
     chunkingUsed: true,
-    chunkTriggerReason: chunkPlan.chunkTriggerReason,
-    normalizedTextLength: chunkPlan.normalizedTextLength,
-    normalizedLineCount: chunkPlan.normalizedLineCount,
-    totalChunks: chunkPlan.chunks.length,
+    chunkTriggerReason: plan.chunkTriggerReason,
+    normalizedTextLength: plan.normalizedTextLength,
+    normalizedLineCount: plan.normalizedLineCount,
+    totalChunks: plan.chunks.length,
+    extractionCalls: work.length,
     totalAttempts,
     successfulChunks,
     extractedBeforeDedupe: allTransactions.length,
     extractedAfterDedupe: mergedTransactions.transactions.length,
     duplicatesRemoved: mergedTransactions.duplicatesRemoved,
-    conflictsResolved: mergedTransactions.conflictsResolved,
     diagnostics,
   });
 
@@ -547,12 +681,6 @@ async function runTransactionExtraction(
     mergedWarnings.push(...mergedValidation.errors);
   }
 
-  if (mergedTransactions.conflictsResolved > 0) {
-    mergedWarnings.push(
-      `Chunk overlap: resolved ${mergedTransactions.conflictsResolved} amount conflict(s) — same transaction extracted with different amounts across chunks, kept higher-confidence extraction`,
-    );
-  }
-
   return {
     success: !contextOverflow && (hasUsableData || mergedErrors.length === 0),
     data: dataWithBalances,
@@ -569,7 +697,6 @@ async function runTransactionExtraction(
       extractedBeforeDedupe: allTransactions.length,
       extractedAfterDedupe: mergedTransactions.transactions.length,
       duplicatesRemoved: mergedTransactions.duplicatesRemoved,
-      conflictsResolved: mergedTransactions.conflictsResolved,
       diagnostics,
     },
   };
@@ -661,15 +788,16 @@ function buildExtractionBundle(input: {
     input.statementType === 'credit_card' ? SourceType.CreditCard : SourceType.Bank;
 
   const validatedTransactions = validationResult.data.transactions;
-  const withReasoning = validatedTransactions.filter((t) => t.reasoning);
-  if (withReasoning.length > 0) {
-    debugLog('[extraction] Transaction reasoning:', withReasoning.map((t) => ({
-      description: t.description.substring(0, 50),
+  for (const t of validatedTransactions) {
+    debugLog('extraction', `Transaction result: ${JSON.stringify({
+      sourceLine: t.sourceLine,
+      date: t.date,
+      description: t.description,
       type: t.type,
       subType: t.transactionSubType,
       amount: t.amount,
       reasoning: t.reasoning,
-    })));
+    })}`);
   }
 
   const transactions = toCanonicalTransactions(
@@ -705,4 +833,22 @@ function buildExtractionBundle(input: {
       failedChunks: input.extracted.meta.failedChunks,
     },
   };
+}
+
+function translateTables(
+  lineMap: Array<number | null>,
+  tables?: StatementTableInfo[],
+): StatementTableInfo[] {
+  if (!tables || tables.length === 0) return [];
+  const translated: StatementTableInfo[] = [];
+  for (const table of tables) {
+    const headerLineIndex = lineMap[table.headerLineIndex];
+    const dataRowLineIndexes = table.dataRowLineIndexes.map(index => lineMap[index])
+      .filter((m): m is number => typeof m === 'number');
+    if (headerLineIndex === null || headerLineIndex === undefined || dataRowLineIndexes.length === 0) {
+      continue; // unusable table — skip; other tables may still map
+    }
+    translated.push({ headerLineIndex, dataRowLineIndexes, columns: table.columns });
+  }
+  return translated;
 }

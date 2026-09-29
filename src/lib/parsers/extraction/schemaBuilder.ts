@@ -1,21 +1,7 @@
 import type { Line, TableRegion, ColumnSchema, ColumnDef } from './extractionTypes';
-import { COLUMN_BUFFER_PX } from './extractionTypes';
-import { countDistinctConcepts, matchConcept } from './headerSynonyms';
-
-function schemasMatchByConcepts(schema: ColumnSchema, headerLine: Line): boolean {
-  if (schema.columns.length !== headerLine.items.length) return false;
-  const { concepts: existingConcepts } = countDistinctConcepts(
-    schema.columns.map(c => c.headerText),
-  );
-  const { concepts: newConcepts } = countDistinctConcepts(
-    headerLine.items.map(i => i.text),
-  );
-  if (existingConcepts.size !== newConcepts.size) return false;
-  for (const [idx, concept] of existingConcepts) {
-    if (newConcepts.get(idx) !== concept) return false;
-  }
-  return true;
-}
+import { detectColumnStacks } from './stackDetector';
+import { isAnchorLine } from './tableDetector';
+import { debugLog } from '@/lib/utils/debug';
 
 export function buildColumnSchemas(
   lines: Line[],
@@ -27,51 +13,43 @@ export function buildColumnSchemas(
     const region = regions[ri];
     const headerLine = lines[region.startLineIndex];
 
-    // If no header line exists for this region, attempt schema inheritance
+    // No header line: inherit the previous region's schema (unchanged rule).
     if (!headerLine || !headerLine.items.length) {
       if (schemas.length > 0) {
-        schemas.push({
-          ...schemas[schemas.length - 1],
-          sourceRegionIndex: ri,
-        });
+        schemas.push({ ...schemas[schemas.length - 1], sourceRegionIndex: ri });
       }
-      // No previous schema exists — region has no schema, falls through as prose
       continue;
     }
 
-    const { concepts } = countDistinctConcepts(headerLine.items.map(i => i.text));
-
-    let dateColumnIndex = 0;
-    for (const [idx, concept] of concepts) {
-      if (concept === 'date') {
-        dateColumnIndex = idx;
-        break;
-      }
+    const anchorRows: Line[] = [];
+    for (let i = region.startLineIndex + 1; i < region.endLineIndex; i++) {
+      if (lines[i] && isAnchorLine(lines[i])) anchorRows.push(lines[i]);
+    }
+    const detection = detectColumnStacks(headerLine, anchorRows);
+    // Loud detection failure (spec Part 1): two headers in one stack group
+    // means data items bridge a named-column gap — never silently patched.
+    if (detection.twoHeaderCollision) {
+      debugLog('schema_builder', `Region ${ri}: two header items in one stack group — data bridges a named-column gap`);
     }
 
-    // Check if this matches a previous schema by concepts (not raw text)
-    const matchingSchema = schemas.find(s => schemasMatchByConcepts(s, headerLine));
-
-    if (matchingSchema) {
-      schemas.push({
-        ...matchingSchema,
-        sourceRegionIndex: ri,
-      });
-    } else {
-      const columns: ColumnDef[] = headerLine.items.map((item, i) => ({
-        index: i,
-        headerText: item.text,
-        columnLeft: item.x - COLUMN_BUFFER_PX,
-        columnRight: item.right + COLUMN_BUFFER_PX,
-        type: (matchConcept(item.text) ?? 'unknown') as ColumnDef['type'],
-      }));
-
-      schemas.push({
-        columns,
-        dateColumnIndex,
-        sourceRegionIndex: ri,
-      });
-    }
+    // Repeated headers identify roles, not physical coordinates. Keep this
+    // region's detected bounds and tolerance; logical column alignment happens
+    // later, after items have been assigned using their own table's geometry.
+    const columns: ColumnDef[] = detection.stacks.map((st, i) => ({
+      index: i,
+      headerText: st.headerText ?? '',
+      columnLeft: st.left,
+      columnRight: st.right,
+      type: (st.concept ?? 'unknown') as ColumnDef['type'],
+    }));
+    // The date column is the leftmost date-typed column (first-match rule).
+    const dateIdx = columns.findIndex(c => c.type === 'date');
+    schemas.push({
+      columns,
+      dateColumnIndex: dateIdx >= 0 ? dateIdx : 0,
+      sourceRegionIndex: ri,
+      snapTolerance: detection.tolerance,
+    });
   }
 
   return schemas;

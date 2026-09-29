@@ -77,6 +77,7 @@ export async function extractTextItems(
               right: Math.round(x + (ti.width ?? 0)),
               y: Math.round(ti.transform![5]),
               page: i,
+              height: Math.round(Math.abs(ti.transform![3] ?? 0) * 10) / 10,
             });
           }
         }

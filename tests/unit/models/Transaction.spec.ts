@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { Transaction, TransactionType, Category, SourceType, CategorizedBy } from '@/types';
 import { formatSubType, TRANSACTION_SUB_TYPES } from '@/models/Transaction';
-import { makeTransaction } from '@tests/unit/factories';
+import { rolesOf } from '@/lib/analytics';
 import '@/lib/categorization/categories';
 
 function makeCategory(id: string, budgetable = true): Category {
@@ -205,8 +205,10 @@ describe('Transaction.fromJSON', () => {
 
 // H9: a non-canonical subtype string (e.g. an LLM-emitted "emi" that isn't in
 // EXTRACTED_SUBTYPE_MAP) used to pass through fromJSON/fromExtracted verbatim and
-// crash roleOf via assertNever when any getter (isIncome/isExpense/isExcluded) ran.
-describe('Transaction — non-canonical subtype must not crash', () => {
+// crash the role-table lookup. normalizeSubType now rejects non-canonical values so
+// the routing layer never sees one; these tests pin that boundary at the Transaction
+// construction sites (routing.spec.ts covers rolesOf itself).
+describe('Transaction — non-canonical subtype must not crash rolesOf', () => {
   const inrCurrency = { code: 'INR', symbol: '₹', name: 'Indian Rupee' };
 
   it('fromJSON with a non-canonical persisted subtype falls back to a direction default', () => {
@@ -223,22 +225,23 @@ describe('Transaction — non-canonical subtype must not crash', () => {
     // Resolved to the canonical debit default, never the raw 'emi'.
     expect(TRANSACTION_SUB_TYPES).toContain(txn.transactionSubType);
     expect(txn.transactionSubType).toBe('purchase');
-    // The getter that previously threw via assertNever must now be safe.
-    expect(() => txn.isExpense).not.toThrow();
-    expect(txn.isExpense).toBe(true);
+    // The role-table lookup that previously threw must resolve cleanly to the default's roles.
+    expect(() => rolesOf(txn)).not.toThrow();
+    expect(rolesOf(txn)).toEqual(expect.arrayContaining(['outflow', 'spend']));
   });
 
   it('fromExtracted ignores a non-canonical subtype — no crash, no subtype assigned (D1)', () => {
     // D1: extraction does not touch subtype at all, so a hallucinated string like "emi" is
-    // simply not carried. roleOf tolerates undefined (returns undefined → role-unknown), so
-    // isExpense does not throw. Classification assigns the real subtype later.
+    // simply not carried. rolesOf tolerates undefined (returns []), so it does not throw.
+    // Classification assigns the real subtype later.
     const txn = Transaction.fromExtracted({
       date: '2024-01-15', description: 'Loan EMI', amount: 5000, type: 'debit',
       balance: null, localCurrency: 'INR', transactionSubType: 'emi', confidence: 0.9,
     }, inrCurrency, SourceType.Bank);
 
     expect(txn.transactionSubType).toBeUndefined();
-    expect(() => txn.isExpense).not.toThrow();
+    expect(() => rolesOf(txn)).not.toThrow();
+    expect(rolesOf(txn)).toEqual([]);
   });
 });
 
@@ -338,21 +341,6 @@ describe('Transaction getters', () => {
     const txn = new Transaction('1', new Date(), 'T', 100, TransactionType.Debit, makeCategory('food'));
     expect(txn.isDebit).toBe(true);
     expect(txn.isCredit).toBe(false);
-  });
-
-  it('isIncome is derived from subtype (income credit)', () => {
-    const txn = makeTransaction({ type: 'credit', transactionSubType: 'income', category: makeCategory('salary', false) });
-    expect(txn.isIncome).toBe(true);
-  });
-
-  it('isExpense is derived from subtype (purchase debit)', () => {
-    const txn = makeTransaction({ type: 'debit', transactionSubType: 'purchase' });
-    expect(txn.isExpense).toBe(true);
-  });
-
-  it('isExcluded is derived from subtype (self_transfer)', () => {
-    const txn = makeTransaction({ type: 'debit', transactionSubType: 'self_transfer', category: makeCategory('transfer', false) });
-    expect(txn.isExcluded).toBe(true);
   });
 });
 
@@ -523,5 +511,48 @@ describe('TRANSACTION_SUB_TYPES', () => {
     expect(TRANSACTION_SUB_TYPES).toContain('bank_charge');
     expect(TRANSACTION_SUB_TYPES).toContain('self_transfer');
     expect(TRANSACTION_SUB_TYPES).toContain('rewards');
+  });
+});
+
+describe('Transaction.sourceLine', () => {
+  const INR = { code: 'INR', symbol: '₹', name: 'Indian Rupee' };
+
+  it('fromExtracted carries sourceLine through', () => {
+    const txn = Transaction.fromExtracted(
+      { date: '2024-01-15', description: 'Amazon', amount: 100, type: 'debit', sourceLine: 42 },
+      INR,
+      SourceType.Bank,
+    );
+    expect(txn.sourceLine).toBe(42);
+  });
+
+  it('fromExtracted leaves sourceLine undefined when the model echoed nothing', () => {
+    const txn = Transaction.fromExtracted(
+      { date: '2024-01-15', description: 'Amazon', amount: 100, type: 'debit' },
+      INR,
+      SourceType.Bank,
+    );
+    expect(txn.sourceLine).toBeUndefined();
+  });
+
+  it('survives the toJSON/fromJSON round-trip', () => {
+    const txn = Transaction.fromExtracted(
+      { date: '2024-01-15', description: 'Amazon', amount: 100, type: 'debit', sourceLine: 7 },
+      INR,
+      SourceType.Bank,
+    );
+    const restored = Transaction.fromJSON(txn.toJSON());
+    expect(restored.sourceLine).toBe(7);
+  });
+
+  it('fromJSON tolerates a missing sourceLine (older persisted data)', () => {
+    const txn = Transaction.fromExtracted(
+      { date: '2024-01-15', description: 'Amazon', amount: 100, type: 'debit' },
+      INR,
+      SourceType.Bank,
+    );
+    const json = txn.toJSON();
+    delete (json as unknown as Record<string, unknown>).sourceLine;
+    expect(Transaction.fromJSON(json).sourceLine).toBeUndefined();
   });
 });

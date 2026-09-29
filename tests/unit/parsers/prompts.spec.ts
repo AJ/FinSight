@@ -1,4 +1,6 @@
 import { describe, it, expect } from 'vitest';
+import { buildTransactionsPrompt } from '@/lib/parsers/extractTransactions';
+import { formatCreditCardTransactionInput } from '@/lib/parsers/lineNumbering';
 import {
   TYPE_DETECTION_PROMPT,
   CC_SUMMARY_PROMPT,
@@ -15,6 +17,17 @@ import {
 } from '@/lib/parsers/prompts';
 
 describe('prompt templates', () => {
+  it('builds a request that preserves empty columns and requires the local header', () => {
+    const input = formatCreditCardTransactionInput('DATE & TIME||||TRANSACTION DESCRIPTION||REWARDS||||||||AMOUNT||PI\n'
+      + '12/09/2025 21:04||EMI||SwiggyBengaluru||||C||||||14,897.00||l');
+    const prompt = buildTransactionsPrompt(input, 'credit_card');
+    expect(prompt).toContain(input);
+    expect(prompt).toContain('most recent preceding table header');
+    expect(prompt).toContain('Empty cells and unnamed header cells retain their numbers');
+    expect(prompt).toContain('do not include the [N] label or JSON quotation marks');
+    expect(prompt).not.toContain('identify the column headers from the first row');
+    // This checks request construction, not a live model's adherence to the rule.
+  });
   const prompts = [
     TYPE_DETECTION_PROMPT,
     CC_SUMMARY_PROMPT,

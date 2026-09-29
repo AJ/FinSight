@@ -13,6 +13,34 @@
 
 import { PDFCurrencyNormalizer } from '@/lib/utils/pdfCurrencyNormalizer';
 
+/** Geometry rows already have physical boundaries. Clean their contents without
+ * joining rows, and record provenance while removing blank runs. Currency context
+ * is still detected from the whole document, not guessed separately per row. */
+export function normalizeStatementWithLineMap(raw: string): {
+  text: string;
+  lineMap: Array<number | null>;
+} {
+  const sourceLines = raw.split('\n');
+  const cleaned = sourceLines.map(line => removeNonPrintable(normalizeUnicode(line.replace(/\r$/, ''))));
+  const detector = new PDFCurrencyNormalizer({ applyLakhPatternAlways: true });
+  const { currency } = detector.normalize(cleaned.join('\n'));
+  const normalizer = new PDFCurrencyNormalizer({ forceCurrency: currency, applyLakhPatternAlways: true });
+  const output: string[] = [];
+  const lineMap: Array<number | null> = sourceLines.map(() => null);
+  for (let index = 0; index < cleaned.length; index++) {
+    const line = fixBrokenNumbers(normalizer.normalize(cleaned[index]).text
+      .replace(/(?<!\|)\|(?!\|)/g, ' ').replace(/[ \t]+/g, ' ').trim()).trim();
+    if (!line) {
+      if (output.length && output[output.length - 1] !== '') output.push('');
+      continue;
+    }
+    lineMap[index] = output.length;
+    output.push(line);
+  }
+  if (output[output.length - 1] === '') output.pop();
+  return { text: output.join('\n'), lineMap };
+}
+
 export function normalizeStatementText(raw: string): string {
   let text = raw;
 

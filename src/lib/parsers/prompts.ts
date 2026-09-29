@@ -280,9 +280,11 @@ Return ONLY valid JSON. No explanation. No extra text. No markdown.
       "isInternationalTransaction": boolean,
       "originalCurrency": "USD" (omit if domestic),
       "originalAmount": number (omit if domestic),
-      "confidence": 0.0 to 1.0 (optional - your confidence in this extraction)
+      "confidence": 0.0 to 1.0 (optional - your confidence in this extraction),
+      "sourceLine": number (the line number this transaction's line starts with)
     }
   ],
+  "tableHeader": "the transaction table's header line copied exactly (including its leading line number), or null if no header row is visible",
   "_debug": {
     "totalCount": number,
     "droppedTransactions": [
@@ -316,7 +318,7 @@ RULE 2 — NUMBER FORMATTING
 - Output as plain decimal without commas
 
 RULE 3 — COLUMN STRUCTURE
-The input text may contain || separators that divide it into explicitly labeled columns. When present, identify the column headers from the first row. When || is not present, infer column boundaries from text alignment, spacing, or repeated patterns across rows. In either case, each column is strictly independent — map each column to at most one output field. Do not merge content from one column into another. Columns that don't map to any output field should be discarded entirely.
+Table cells are written as [N] followed by JSON-quoted text. N is the cell position, not part of its value. Match each [N] cell to the same [N] in the most recent preceding table header. Empty cells and unnamed header cells retain their numbers. Extract only the quoted contents of the matching cell; do not include the [N] label or JSON quotation marks in output values. Never substitute a value from another cell or merge different cells. For lines without cell labels, use the original text structure. The leading line number before the first || identifies the source line, not a cell.
 
 RULE 4 - Keyword-based extraction:
 - Keywords MAY support classification but MUST NOT override transaction context or type.
@@ -347,6 +349,8 @@ IMPORTANT:
 - Cashback is ALWAYS a credit
 - If amount has "+" prefix or "CR" → type = "credit"
 - If amount has "-" prefix or "DR" → type = "debit"
+- The amount's sign may be written with or without a space after it: "+ 304.00" and "+304.00" are both credits; "- 29.00" and "-29.00" are both debits
+- When a rewards column is present, its sign (+10 / -10) describes POINTS, never money. Determine type ONLY from the sign on the amount in the AMOUNT column. Example: "-10||+ 304.00" → credit refund (points went down, money came back). Example: "+ 10||304.00" → debit purchase
 - Otherwise use context: merchant name = debit, refund/reversal keyword = credit
 - CC bill payments are ALWAYS credits: "CC PAYMENT", "CREDIT CARD PAYMENT", "CARD PAYMENT", or payment rails (NEFT, UPI, IMPS, ACH, SEPA, WIRE, FPS, GIRO, DIRECT DEBIT, BILL PAY, AUTOPAY) combined with card or bill context
 - A merchant purchase is NOT a bill payment just because the description contains "pay" or "payment" (e.g. "PAYPAL *MERCHANT" is a purchase, not a bill payment)
@@ -497,6 +501,13 @@ DO NOT EXTRACT:
 - Marketing text, offers, promotional content
 - Interest calculation explanations
 - Credit Card Bill Payment instructions
+
+RULE 13 — LINE NUMBERS
+- Every line of the input begins with its line number followed by || (for example "7||").
+- The line number identifies the line; it is never a date, an amount, or a description.
+- For each transaction, set sourceLine to the number of the line the transaction starts on.
+- ONE transaction may span SEVERAL lines: when a description wraps, the text continues on the following lines (often without their own date or amount). Lines that continue the row above belong to THAT transaction — do not split a wrapped row into separate transactions, and do not treat a continuation line as its own transaction.
+- If this input shows the transaction table's header row, copy that entire line exactly (including its leading number) into tableHeader. If no header row is visible in this input, set tableHeader to null.
 
 --------------------------------
 END
@@ -713,11 +724,13 @@ Return ONLY valid JSON. No explanation. No extra text. No markdown.
       "reasoning": "brief explanation of why this is debit or credit",
       "type": "debit" | "credit",
       "balance": number | null,
-      "confidence": 0.0 to 1.0 (optional)
+      "confidence": 0.0 to 1.0 (optional),
+      "sourceLine": number (the line number this transaction's line starts with)
     }
   ],
   "openingBalance": number or null,
   "closingBalance": number or null,
+  "tableHeader": "the transaction table's header line copied exactly (including its leading line number), or null if no header row is visible",
   "_debug": {
     "totalCount": number,
     "droppedTransactions": [
@@ -753,7 +766,7 @@ RULE 4 — DATE FORMAT
 - CRITICAL: Do NOT include time, pipe characters, or other separators (e.g., output MUST BE "2025-10-04", AND MUST NOT be "2025-10-04|00:00")
 
 RULE 5 — DEBIT VS CREDIT (IN ORDER OF PRIORITY)
-1. PIPE-DELIMITED COLUMNS: The text uses pipe characters to separate columns. Identify the column headers first. Count pipe positions — if an amount appears in the Debit column position, it is "debit"; if it appears in the Credit column position, it is "credit". An empty Debit column with an amount in the Credit column means type="credit".
+1. PIPE-DELIMITED COLUMNS: The first || on a line separates the line number from the row's content — column counting starts after it. Identify the column headers first, from the table's header row (it may appear at the top of the input even when the rows below it start mid-table). If an amount appears in the Debit column position, it is "debit"; if it appears in the Credit column position, it is "credit". An empty Debit column with an amount in the Credit column means type="credit".
 2. SEPARATE COLUMNS: "Debit" column = "debit", "Credit" column = "credit"
 3. KEYWORDS for DEBIT: DEBIT, DR, WITHDRAWAL, PAID, SENT, OUT, PAYMENT TO, TRANSFER TO
 4. KEYWORDS for CREDIT: CREDIT, CR, DEPOSIT, RECEIVED, IN, REFUND, TRANSFER FROM
@@ -818,6 +831,13 @@ RULE 10 — REASONING (REQUIRED)
 - Example: "Amount in Debit column → debit"
 - Example: "Amount in Credit column with NEFTINW keyword → credit"
 
+RULE 11 — LINE NUMBERS
+- Every line of the input begins with its line number followed by || (for example "7||").
+- The line number identifies the line; it is never a date, an amount, or a description.
+- For each transaction, set sourceLine to the number of the line the transaction starts on.
+- ONE transaction may span SEVERAL lines: when a description wraps, the text continues on the following lines (often without their own date or amount). Lines that continue the row above belong to THAT transaction — do not split a wrapped row into separate transactions, and do not treat a continuation line as its own transaction.
+- If this input shows the transaction table's header row, copy that entire line exactly (including its leading number) into tableHeader. If no header row is visible in this input, set tableHeader to null.
+
 --------------------------------
 END
 --------------------------------`;
@@ -872,6 +892,7 @@ const transactionBase: Record<string, JSONSchema> = {
   reasoning: { type: 'string' },
   type: { type: 'string', enum: ['debit', 'credit'] },
   confidence: { type: 'number' },
+  sourceLine: { type: ['number', 'null'] },
 };
 
 const debugSchema: JSONSchema = {
@@ -909,6 +930,7 @@ export const CC_TRANSACTIONS_SCHEMA: JSONSchema = {
         additionalProperties: true,
       },
     },
+    tableHeader: { type: ['string', 'null'] },
     _debug: debugSchema,
   },
   required: ['transactions'],
@@ -932,6 +954,7 @@ export const BANK_TRANSACTIONS_SCHEMA: JSONSchema = {
     },
     openingBalance: nullableNumber(),
     closingBalance: nullableNumber(),
+    tableHeader: { type: ['string', 'null'] },
     _debug: debugSchema,
   },
   required: ['transactions'],

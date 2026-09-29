@@ -714,3 +714,31 @@ describe('validateTransactions', () => {
     expect(result.data?.closingBalance).toBeNull();
   });
 });
+
+// ─── tableHeader carry-through (row identity) ───────────────────────────────
+
+describe('validateTransactions — tableHeader carry-through', () => {
+  const txns = [{ date: '2024-01-15', description: 'Amazon', amount: 100, type: 'debit' }];
+
+  it('carries a string tableHeader into data', () => {
+    const result = validateTransactions({
+      transactions: txns,
+      tableHeader: '3||Date||Description||Amount',
+    });
+    expect(result.valid).toBe(true);
+    expect(result.data?.tableHeader).toBe('3||Date||Description||Amount');
+  });
+
+  it('maps a missing tableHeader to null', () => {
+    const result = validateTransactions({ transactions: txns });
+    expect(result.data?.tableHeader).toBeNull();
+  });
+
+  it('maps a non-string tableHeader to null', () => {
+    const result = validateTransactions({
+      transactions: txns,
+      tableHeader: 12345,
+    });
+    expect(result.data?.tableHeader).toBeNull();
+  });
+});

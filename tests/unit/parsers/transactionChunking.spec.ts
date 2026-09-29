@@ -5,9 +5,11 @@ import {
   getDroppedTransactionCount,
 } from '@/lib/parsers/transactionChunking';
 import { calculateMaxOutputTokens, estimateTokens, getOutputTokensPerInputLine } from '@/lib/llm/contextWindow';
-import { useSettingsStore } from '@/lib/store/settingsStore';
+import { useSettingsStore, calibrationKey } from '@/lib/store/settingsStore';
 import { EXTRACTION_SYSTEM_PROMPT } from '@/lib/llm/prompts';
 import { buildTransactionsPrompt } from '@/lib/parsers/extractTransactions';
+import { formatCreditCardTransactionInput } from '@/lib/parsers/lineNumbering';
+import type { StatementTableInfo } from '@/lib/parsers/extraction/extractionTypes';
 import type { ExtractedTransaction } from '@/types/extractedTransaction';
 
 const CHUNK_OVERLAP_LINE_COUNT = 12;
@@ -24,6 +26,32 @@ function makeTx(
 }
 
 describe('createTransactionChunkPlan', () => {
+  it('budgets indexed CC cells and an injected indexed header before sending chunks', () => {
+    const headers = [['Date', 'Description', 'Amount'], ['Date', '', 'Description', 'Amount']];
+    const source = [headers[0].join('||'), ...Array.from({ length: 40 }, (_, i) =>
+      `2025-09-12||Merchant ${i} with a longer description||14897.00`),
+    headers[1].join('||'), ...Array.from({ length: 40 }, (_, i) =>
+      `2025-09-12||EMI||Merchant ${i + 40} with a longer description||14897.00`) ].join('\n');
+    const tables: StatementTableInfo[] = headers.map((header, index) => ({
+      headerLineIndex: index * 41,
+      dataRowLineIndexes: Array.from({ length: 40 }, (_, row) => index * 41 + row + 1),
+      columns: header.map(headerText => ({ headerText, type: 'unknown' })),
+    }));
+    const input = formatCreditCardTransactionInput(source, tables);
+    const overhead = `${EXTRACTION_SYSTEM_PROMPT}\n\n${buildTransactionsPrompt('', 'credit_card')}`;
+    const plan = createTransactionChunkPlan(input, 8192, overhead, 80);
+    expect(plan.chunkingUsed).toBe(true);
+    expect(plan.normalizedTextLength).toBe(input.length);
+    expect(input.length).toBeGreaterThan(source.length);
+    const header = input.split('\n')[0];
+    for (const chunk of plan.chunks) {
+      const text = chunk.startLine === 0 ? chunk.text : header + '\n' + chunk.text;
+      const request = `${EXTRACTION_SYSTEM_PROMPT}\n\n${buildTransactionsPrompt(text, 'credit_card')}`;
+      expect(calculateMaxOutputTokens(8192, request)).toBeGreaterThan(0);
+      expect(chunk.text).toContain('[3] "Merchant');
+    }
+  });
+
   it('returns single-shot when below both thresholds', () => {
     const text = makeLines(10);
     const plan = createTransactionChunkPlan(text);
@@ -377,15 +405,16 @@ describe('mergeChunkTransactions', () => {
     expect(mergeChunkTransactions(txns).transactions).toHaveLength(2);
   });
 
-  it('resolves amount conflicts from chunk overlap (same date/type/description, different amount)', () => {
+  it('keeps both transactions when only the amount differs (distinct same-day transactions)', () => {
+    // Two genuinely distinct transactions: same date/type/description, different amount. The old
+    // pass-2 conflict resolution merged these into one (data loss). Exact-signature dedup treats
+    // different amounts as distinct and keeps both.
     const txLow = makeTx({ date: '2024-01-15', description: 'Amazon', amount: 50, type: 'debit', confidence: 0.7 });
     const txHigh = makeTx({ date: '2024-01-15', description: 'Amazon', amount: 75, type: 'debit', confidence: 0.95 });
 
     const result = mergeChunkTransactions([txLow, txHigh]);
 
-    expect(result.transactions).toHaveLength(1);
-    expect(result.transactions[0].amount).toBe(75);
-    expect(result.conflictsResolved).toBe(1);
+    expect(result.transactions).toHaveLength(2);
     expect(result.duplicatesRemoved).toBe(0);
   });
 
@@ -419,27 +448,26 @@ describe('mergeChunkTransactions', () => {
     expect(mergeChunkTransactions([txA, txB]).transactions).toHaveLength(2);
   });
 
-  it('resolves amount conflict when both transactions have same explicit originalCurrency', () => {
+  it('keeps both when amounts differ even with the same explicit originalCurrency', () => {
     const txA = makeTx({ date: '2024-01-15', description: 'Hotel Paris', amount: 150, type: 'debit', originalCurrency: 'USD', originalAmount: 180, confidence: 0.6 });
     const txB = makeTx({ date: '2024-01-15', description: 'Hotel Paris', amount: 175, type: 'debit', originalCurrency: 'USD', originalAmount: 210, confidence: 0.9 });
 
     const result = mergeChunkTransactions([txA, txB]);
-    expect(result.transactions).toHaveLength(1);
-    expect(result.conflictsResolved).toBe(1);
-    expect(result.transactions[0].amount).toBe(175);
-    expect(result.transactions[0].originalCurrency).toBe('USD');
+    expect(result.transactions).toHaveLength(2);
+    expect(result.duplicatesRemoved).toBe(0);
   });
 
-  it('resolves originalAmount:0 vs missing as overlap conflict (same amount, different originalAmount)', () => {
-    // Exact signatures differ (originalAmount: '0' vs ''), but conflict key matches
-    // — the LLM disagreed on originalAmount for the same overlap-zone transaction
+  it('keeps both when exact signatures differ only on originalAmount (0 vs missing)', () => {
+    // Exact signatures differ (originalAmount: '0' vs ''), so exact-signature dedup does NOT
+    // collapse them. They survive as two rows; the verification layer (deduplicateTransactions)
+    // then flags them as a potential duplicate because amount/date/description match — covered in
+    // mergeEngine.spec.ts. Chunk merge itself keeps both.
     const txA = makeTx({ date: '2024-01-15', description: 'Hotel', amount: 150, type: 'debit', originalAmount: 0, confidence: 0.7 });
     const txB = makeTx({ date: '2024-01-15', description: 'Hotel', amount: 150, type: 'debit', confidence: 0.9 });
 
     const result = mergeChunkTransactions([txA, txB]);
-    expect(result.transactions).toHaveLength(1);
-    expect(result.conflictsResolved).toBe(1);
-    expect(result.transactions[0].confidence).toBe(0.9);
+    expect(result.transactions).toHaveLength(2);
+    expect(result.duplicatesRemoved).toBe(0);
   });
 
   it('deduplicates transactions with same originalAmount', () => {
@@ -541,31 +569,6 @@ describe('mergeChunkTransactions', () => {
     expect(result.duplicatesRemoved).toBe(1);
   });
 
-  it('handles transactions with amount conflict but undefined originalCurrency', () => {
-    // Exercises buildConflictKey with undefined originalCurrency
-    const txA: ExtractedTransaction = {
-      date: '2024-01-15',
-      description: 'Test',
-      amount: 50,
-      type: 'debit',
-      originalCurrency: undefined,
-      confidence: 0.6,
-    };
-    const txB: ExtractedTransaction = {
-      date: '2024-01-15',
-      description: 'Test',
-      amount: 75,
-      type: 'debit',
-      originalCurrency: undefined,
-      confidence: 0.9,
-    };
-
-    const result = mergeChunkTransactions([txA, txB]);
-    expect(result.transactions).toHaveLength(1);
-    expect(result.conflictsResolved).toBe(1);
-    expect(result.transactions[0].amount).toBe(75);
-  });
-
   it('preserves insertion order for unique transactions', () => {
     const txns = [
       makeTx({ date: '2024-01-01', description: 'First', amount: 10, type: 'debit' }),
@@ -618,7 +621,7 @@ describe('createTransactionChunkPlan calibrated output budget', () => {
       llmProvider: 'ollama',
       llmModel: 'qwen3-4b',
       calibrationByModel: {
-        'ollama|qwen3-4b': { inputCharsPerToken: 2.3, outputTokensPerInputLine: 98 },
+        [calibrationKey('ollama', 'qwen3-4b')!]: { inputCharsPerToken: 2.3, outputTokensPerInputLine: 98 },
       },
     });
     // Many lines, each short, so chunking actually splits.
@@ -652,5 +655,137 @@ describe('createTransactionChunkPlan calibrated output budget', () => {
     // The old OUTPUT_TOKENS_PER_LINE=5 would allow ~465 lines/chunk; 90 allows far fewer.
     const maxLinesPerChunk = Math.max(...plan.chunks.map(c => c.lineCount));
     expect(maxLinesPerChunk).toBeLessThan(200);
+  });
+
+  it('goes single-shot on a row budget where the per-line reserve would chunk', () => {
+    useSettingsStore.setState({
+      llmProvider: 'ollama',
+      llmModel: 'qwen3-4b',
+      calibrationByModel: {
+        [calibrationKey('ollama', 'qwen3-4b')!]: { inputCharsPerToken: 2.3, outputTokensPerInputLine: 50 },
+      },
+    });
+    // 241 lines × ~45 chars: 39 transaction rows, 201 non-transaction lines.
+    const rows = Array.from({ length: 39 }, (_, i) => `01 MAR MERCHANT ${i} 100.00 DR`);
+    const prose = Array.from({ length: 201 }, (_, i) => `narration line ${i} with summary context text`);
+    const text = ['header line', ...rows, ...prose].join('\n');
+    const overhead = 'X'.repeat(16000); // ~4174 tokens at 2.3 — CC-scale.
+    // Per-line reserve: (45/2.3 × 1.1) + (50 × 1.1) ≈ 76.8/line; budget ≈
+    // (16384 − 4591)/76.8 ≈ 153 lines < 241 → per-line would chunk.
+    // Per-row: 4591 + (241×45/2.3×1.1 ≈ 5185) + (39×50×1.1 = 2145) ≈ 11921 → fits.
+    const plan = createTransactionChunkPlan(text, 16384, overhead, 39);
+    expect(plan.chunkingUsed).toBe(false);
+    expect(plan.chunkTriggerReason).toBe('single_shot');
+  });
+
+  it('still chunks when even the row budget overflows', () => {
+    useSettingsStore.setState({
+      llmProvider: 'ollama',
+      llmModel: 'qwen3-4b',
+      calibrationByModel: {
+        [calibrationKey('ollama', 'qwen3-4b')!]: { inputCharsPerToken: 2.3, outputTokensPerInputLine: 50 },
+      },
+    });
+    const plan = createTransactionChunkPlan(makeLines(241), 16384, 'X'.repeat(16000), 300);
+    expect(plan.chunkingUsed).toBe(true);
+    expect(plan.chunks.length).toBeGreaterThan(1);
+  });
+
+  it('undefined row count keeps the per-line reserve (behavior unchanged)', () => {
+    useSettingsStore.setState({
+      llmProvider: 'ollama',
+      llmModel: 'qwen3-4b',
+      calibrationByModel: {
+        [calibrationKey('ollama', 'qwen3-4b')!]: { inputCharsPerToken: 2.3, outputTokensPerInputLine: 50 },
+      },
+    });
+    const rows = Array.from({ length: 39 }, (_, i) => `01 MAR MERCHANT ${i} 100.00 DR`);
+    const prose = Array.from({ length: 201 }, (_, i) => `narration line ${i} with summary context text`);
+    const text = ['header line', ...rows, ...prose].join('\n');
+    const plan = createTransactionChunkPlan(text, 16384, 'X'.repeat(16000));
+    expect(plan.chunkingUsed).toBe(true); // per-line reserve chunks it
+  });
+});
+
+// ─── Row identity: sourceLine collapse + header reserve ─────────────────────
+
+describe('mergeChunkTransactions — sourceLine collapse', () => {
+  it('collapses two reads of the same sourceLine even when fields disagree', () => {
+    const a = makeTx({ date: '2024-01-15', description: 'AMAZON', amount: 99.99, type: 'debit', originalCurrency: 'USD', originalAmount: 99.99, confidence: 0.9, sourceLine: 40 });
+    const b = makeTx({ date: '2024-01-15', description: 'AMAZON', amount: 99.99, type: 'credit', originalCurrency: 'INR', originalAmount: 8300, confidence: 0.6, sourceLine: 40 });
+    const merged = mergeChunkTransactions([a, b]);
+    expect(merged.transactions).toHaveLength(1);
+    expect(merged.duplicatesRemoved).toBe(1);
+    expect(merged.transactions[0].confidence).toBe(0.9); // higher-confidence read kept
+    expect(merged.transactions[0].type).toBe('debit');
+  });
+
+  it('keeps both rows when identical fields carry different sourceLines (distinct rows)', () => {
+    const a = makeTx({ date: '2024-01-15', description: 'COFFEE', amount: 5, type: 'debit', confidence: 0.9, sourceLine: 10 });
+    const b = makeTx({ date: '2024-01-15', description: 'COFFEE', amount: 5, type: 'debit', confidence: 0.8, sourceLine: 11 });
+    const merged = mergeChunkTransactions([a, b]);
+    expect(merged.transactions).toHaveLength(2);
+    expect(merged.duplicatesRemoved).toBe(0);
+  });
+
+  it('falls back to signature dedup for rows without a sourceLine', () => {
+    const a = makeTx({ date: '2024-01-15', description: 'AMAZON', amount: 99.99, type: 'debit', confidence: 0.9 });
+    const b = makeTx({ date: '2024-01-15', description: 'AMAZON', amount: 99.99, type: 'debit', confidence: 0.7 });
+    const merged = mergeChunkTransactions([a, b]);
+    expect(merged.transactions).toHaveLength(1);
+    expect(merged.duplicatesRemoved).toBe(1);
+  });
+
+  it('does not signature-dedup a numbered row against a numberless row', () => {
+    const a = makeTx({ date: '2024-01-15', description: 'AMAZON', amount: 99.99, type: 'debit', confidence: 0.9, sourceLine: 40 });
+    const b = makeTx({ date: '2024-01-15', description: 'AMAZON', amount: 99.99, type: 'debit', confidence: 0.7 });
+    const merged = mergeChunkTransactions([a, b]);
+    expect(merged.transactions).toHaveLength(2);
+  });
+
+  it('ignores a non-finite sourceLine (treats the row as numberless)', () => {
+    const a = makeTx({ date: '2024-01-15', description: 'AMAZON', amount: 99.99, type: 'debit', confidence: 0.9, sourceLine: Number.NaN });
+    const b = makeTx({ date: '2024-01-15', description: 'AMAZON', amount: 99.99, type: 'debit', confidence: 0.7 });
+    const merged = mergeChunkTransactions([a, b]);
+    expect(merged.transactions).toHaveLength(1); // signature fallback applies
+  });
+
+  it('preserves first-seen order when numbered and numberless rows are mixed', () => {
+    const first = makeTx({ date: '2024-01-01', description: 'First', amount: 10, type: 'debit', sourceLine: 10 });
+    const middle = makeTx({ date: '2024-01-02', description: 'Middle', amount: 20, type: 'debit' });
+    const last = makeTx({ date: '2024-01-03', description: 'Last', amount: 30, type: 'debit', sourceLine: 12 });
+
+    const merged = mergeChunkTransactions([first, middle, last]);
+
+    expect(merged.transactions.map((tx) => tx.description)).toEqual(['First', 'Middle', 'Last']);
+  });
+});
+
+describe('createTransactionChunkPlan — header injection reserve', () => {
+  const longLine =
+    '2026-03-15 AMAZON SELLER SERVICES BANGALORE INR 2,499.00 DR Shopping ##'.padEnd(126, '.');
+  const text = Array.from({ length: 600 }, () => longLine).join('\n');
+  const overhead = (type: 'credit_card' | 'bank') =>
+    `${EXTRACTION_SYSTEM_PROMPT}\n\n${buildTransactionsPrompt('', type, null)}`;
+  const guardBudget = (chunkText: string, type: 'credit_card' | 'bank', ctx: number) =>
+    calculateMaxOutputTokens(ctx, `${EXTRACTION_SYSTEM_PROMPT}\n\n${buildTransactionsPrompt(chunkText, type, null)}`);
+
+  it('every chunk + one injected header line still passes the overflow guard', () => {
+    // The header injected after sizing is the longest line of the statement (worst
+    // case — the injected line always comes from this text). The reserve exists so
+    // that chunk + injected line never trips the pre-flight guard.
+    for (const ctx of [8192, 16384, 32768]) {
+      for (const type of ['credit_card', 'bank'] as const) {
+        const plan = createTransactionChunkPlan(text, ctx, overhead(type));
+        expect(plan.chunkingUsed, `ctx=${ctx}`).toBe(true);
+        for (const chunk of plan.chunks) {
+          const withHeader = `${longLine}\n${chunk.text}`;
+          expect(
+            guardBudget(withHeader, type, ctx),
+            `ctx=${ctx} type=${type} chunk=${chunk.index}`,
+          ).not.toBe(0);
+        }
+      }
+    }
   });
 });
